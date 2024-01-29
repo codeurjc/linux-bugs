@@ -246,4 +246,3 @@ ab14f1802c: F T F
   * B: After reading the mesage; I can conclude that the commit is not fixing a bug; it is refactoring and adding support (feature).
   * R: F
     * Changes are summarized at the begining of the comment. The frist change is changing how logs are logged (change in functionality), the second one adds support for a new device (added functionality). So, I don't see any BFC here.
-    
