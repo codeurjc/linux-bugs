@@ -1,6 +1,7 @@
 import pandas as pd
 import gradio as gr
 import json
+from ReviewsDF import ReviewsDF
 
 URL = "https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?h=v6.7&id="
 
@@ -17,60 +18,11 @@ commits_df = pd.DataFrame([ {
 } for c in commits_json])
 
 # Load definitions
+
 with open('definitions.md') as fd:
     definitions = fd.read()
     
-review_cols = ['hash', "reviewer", "is_bug_fixing_commit","is_obvious_bug","is_safety_related","type_of_safety_related","comment"]
-    
-class ReviewsDF():
-    """Class for storing reviews of annotations (as a dataframe)"""
-
-    def __init__(self, filename):
-        self.filename = filename
-        self.reviewer = ""
-        try:
-            self.df = pd.read_csv(filename)
-        except FileNotFoundError:
-            self.df = pd.DataFrame(columns=review_cols)
-
-    def update(self, data):
-        self.reviewer = data['reviewer']
-        if any(self.df['hash'] == data['hash']):
-            self.df.loc[self.df['hash'] == data['hash'], data.keys()] = data.values()
-        else:
-            self.df.loc[len(self.df)] = data
-
-    def get(self, hash):
-        result_df = self.df[self.df['hash'] == hash]
-        if len(result_df) == 0:
-            results = None
-        else:
-            results = result_df.iloc[0].to_dict()
-        return results
-
-    def get_values(self, hash):
-        review = self.get(hash)
-        if review is None:
-            reviewer=self.reviewer
-            is_bug_fixing_commit= None
-            is_obvious_bug= None
-            is_safety_related= None
-            type_of_safety_related= None
-            comment= ""
-        else:
-            reviewer = review['reviewer']
-            is_bug_fixing_commit = review['is_bug_fixing_commit']
-            is_obvious_bug = review['is_obvious_bug']
-            is_safety_related = review['is_safety_related']
-            type_of_safety_related = review['type_of_safety_related']
-            comment = review['comment']
-        return reviewer, is_bug_fixing_commit, is_obvious_bug, is_safety_related, type_of_safety_related, comment
-
-    def save(self):
-        self.df.to_csv(self.filename, index=False)
-
-review_filename = 'reviews.csv'
-reviews = ReviewsDF(review_filename)
+reviews = ReviewsDF('reviews.csv')
 
 with gr.Blocks() as demo:
     with gr.Row():
@@ -141,9 +93,17 @@ with gr.Blocks() as demo:
             hash = commit['hash']
             link = f"[Link to commit]({URL}{hash})"
             reviewer, is_bug_fixing_commit, is_obvious_bug, is_safety_related, type_of_safety_related, comment = reviews.get_values(hash)
-            # On change commit, load review -> .get_values(hash)
-            return hash,  gr.update(value=link), gr.update(value=commit['message']), gr.update(value=reviewer), gr.update(value=is_bug_fixing_commit), gr.update(value=is_obvious_bug), gr.update(value=is_safety_related), gr.update(value=type_of_safety_related), gr.update(value=comment)
-        
+
+            return (hash,  gr.update(value=link), 
+                           gr.update(value=commit['message']),
+                           gr.update(value=reviewer), 
+                           gr.update(value=is_bug_fixing_commit), 
+                           gr.update(value=is_obvious_bug), 
+                           gr.update(value=is_safety_related), 
+                           gr.update(value=type_of_safety_related), 
+                           gr.update(value=comment)
+            )
+            
         # ON SELECT COMMIT
         @bfcs_df.select(inputs=[bfcs_df], outputs=updated_elements_on_commit_change)
         def select_commit(event: gr.SelectData, bfcs):
@@ -176,9 +136,9 @@ with gr.Blocks() as demo:
                     'hash': hash,
                     'reviewer': reviewer,
                     'is_bug_fixing_commit': is_bfc,
-                    'is_obvious_bug:': is_obvious,
+                    'is_obvious_bug': is_obvious,
                     'is_safety_related': is_safety,
-                    'type_of_safety_related': is_safety,
+                    'type_of_safety_related': type_of_safety_related,
                     'comment': comment
                 })
                 reviews.save()
