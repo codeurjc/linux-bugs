@@ -1,0 +1,1 @@
+docker run -d --network host -e GRANT_SUDO=yes --user root -v $PWD:/home/jovyan/work/ linux-bugs:0.1.0

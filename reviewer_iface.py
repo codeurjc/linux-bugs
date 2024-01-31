@@ -151,7 +151,7 @@ with gr.Blocks() as ui:
         annot_C = get_annotation(results_C, hash)
         text, bfc, understanding = BFCs_R.get_values(hash)
         return (hash,
-                "**A**\n\n" + annot_A, "**B**\n\n" + annot_B, "**C**\n\n" + annot_C,
+                 "**Michel**\n\n" + annot_A, "**Abishek**\n\n" + annot_B, "**David**\n\n" + annot_C,
                 gr.update(interactive=True, value=text),
                 gr.update(interactive=True, value=bfc),
                 gr.update(interactive=True, value=understanding))
