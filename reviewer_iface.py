@@ -74,7 +74,7 @@ def get_annotation(df, hash):
     rows = df.loc[df['commit_hash'].str.startswith(hash)]
     row = rows.iloc[0].to_dict()
     hash_long = row['commit_hash']
-    link = f"https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?h=v6.7&id={hash}"
+    link = f"https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?h=v6.7&id={hash_long}"
     is_bfc = row['is_bug_fixing_commit']
     is_obvious = row['is_obvious_bug']
     is_safety = row['is_safety_related']
@@ -150,13 +150,6 @@ with gr.Blocks() as ui:
         annot_B = get_annotation(results_B, hash)
         annot_C = get_annotation(results_C, hash)
         text, bfc, understanding = BFCs_R.get_values(hash)
-        # review = BFCs_R.get(hash)
-        # if review is None:
-        #     review_text = ""
-        #     review_bfc = None
-        # else:
-        #     review_text = review['comment']
-        #     review_bfc = review['bfc']
         return (hash,
                 "**A**\n\n" + annot_A, "**B**\n\n" + annot_B, "**C**\n\n" + annot_C,
                 gr.update(interactive=True, value=text),
