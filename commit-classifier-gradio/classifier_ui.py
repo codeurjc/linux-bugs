@@ -1,35 +1,31 @@
 import pandas as pd
 import gradio as gr
-import json
+from CommitCollection import CommitCollection
 from ReviewsDF import ReviewsDF
 
 URL = "https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?h=v6.7&id="
 
-# Load 1000 random commits
+# Load reviews (if exists)
+reviews = ReviewsDF('reviews.csv')
 
-with open('../linux-commits-2023-11-12_random-filtered.json') as fd:
-    commits_json = json.load(fd)
-    
-commits_df = pd.DataFrame([ {
-    'hash': c['data']['commit'], 
-    'reviewed': False, 
-    'message': c['data']['message'], 
-    'full_hash': c['data']['commit']
-} for c in commits_json])
+# Load 1000 random commits
+commits = CommitCollection('../linux-commits-2023-11-12_random-filtered.json')
+commits.setReviewed(reviews)
+commits_df = commits.asDataFrame()
 
 # Load definitions
-
 with open('definitions.md') as fd:
     definitions = fd.read()
-    
-reviews = ReviewsDF('reviews.csv')
 
 with gr.Blocks() as demo:
     with gr.Row():
         
         # LIST OF COMMITS
         with gr.Column(scale=1):
-            bfcs_df = gr.Dataframe(value=commits_df)#[['hash']])
+            bfcs_df = gr.Dataframe(value=commits_df, 
+                                   height=600, 
+                                   interactive=False
+            )
             
         # COMMIT INFO
         with gr.Column(scale=4):
@@ -54,15 +50,15 @@ with gr.Blocks() as demo:
                                   interactive=True)
 
             is_obvious_dd = gr.Dropdown(label="Is a BFC of an obvious bug",
-                                  choices=[("True", "True"), ("False","False"), ("I don't know","I don't know")],
+                                  choices=[("True", True), ("False",False), ("I don't know","I don't know")],
                                   interactive=True)
 
             is_safety_dd = gr.Dropdown(label="Is a BFC of a Safety-Related bug",
-                                  choices=[("True", "True"), ("False","False"), ("I don't know","I don't know")],
+                                  choices=[("True", True), ("False",False), ("I don't know","I don't know")],
                                   interactive=True)
             
             type_of_safety_related_dd = gr.Dropdown(label="Which type of Safety-Related commit",
-                                  choices=[("Timing and execution", "True"), 
+                                  choices=[("Timing and execution", "Timing and execution"), 
                                            ("Memory","Memory"), 
                                            ("Exchange of Information","Exchange of Information"), 
                                            ("I don't know","I don't know")],
@@ -107,30 +103,40 @@ with gr.Blocks() as demo:
         # ON SELECT COMMIT
         @bfcs_df.select(inputs=[bfcs_df], outputs=updated_elements_on_commit_change)
         def select_commit(event: gr.SelectData, bfcs):
-            return change_commit(bfcs.iloc[event.index[0]])
+            commit = commits.getCommit(bfcs.iloc[event.index[0]]['hash'])
+            return change_commit(commit)
         
         # ON NEXT COMMIT
         @next_btn.click(inputs=[bfcs_df, current_commit], outputs=updated_elements_on_commit_change)
         def next_commit(bfcs, current_commit_hash):
-            index = bfcs[bfcs["hash"]==current_commit_hash].index.values[0]
-            return change_commit(bfcs.iloc[index+1])
+            next_commit_hash = bfcs.iloc[bfcs[bfcs["hash"]==current_commit_hash[:10]].index.values[0]+1]['hash']
+            if next_commit_hash == "": 
+                next_commit_hash = current_commit_hash
+                gr.Info("You reach last commit")
+            commit = commits.getCommit(next_commit_hash)
+            return change_commit(commit)
         
         # ON PREVIOUS COMMIT
         @previous_btn.click(inputs=[bfcs_df, current_commit], outputs=updated_elements_on_commit_change)
         def previous_commit(bfcs, current_commit_hash):
-            index = bfcs[bfcs["hash"]==current_commit_hash].index.values[0]
-            return change_commit(bfcs.iloc[index-1])
+            prev_commit_hash = bfcs.iloc[bfcs[bfcs["hash"]==current_commit_hash[:10]].index.values[0]-1]['hash']
+            if prev_commit_hash == "": 
+                prev_commit_hash = current_commit_hash
+                gr.Info("No previous commit")
+            commit = commits.getCommit(prev_commit_hash)
+            return change_commit(commit)
         
         # SAVE REVIEW
         @save_btn.click(inputs=[
             current_commit, reviewer_txt, is_bfc_dd, is_obvious_dd, is_safety_dd, type_of_safety_related_dd,comment_txt
-        ],outputs=[save_btn])
-        def update_review(hash, reviewer, is_bfc, is_obvious, is_safety, type_of_safety_related, comment):
-            errors = []
-            if comment == "": errors.append("Comment is empty")
-            if len(errors) > 0:
-                raise gr.Error("\n".join(errors))
-            else:
+        ],outputs=[save_btn, bfcs_df])
+        def update_review(hash, reviewer, is_bfc, is_obvious, is_safety, type_of_safety_related, comment):      
+            if hash == "": gr.Info("Select a commit")
+            if is_bfc == []: gr.Info("Select if it is a BFC")
+            if reviewer == "": gr.Info("The reviewer field cannot be empty")
+            if comment == "": gr.Info("The comment cannot be empty")
+            
+            if hash != "" and is_bfc != [] and reviewer != "" and comment != "": 
                 # Save review
                 reviews.update({
                     'hash': hash,
@@ -142,9 +148,8 @@ with gr.Blocks() as demo:
                     'comment': comment
                 })
                 reviews.save()
+                commits.updateCommitState(hash, True)
                 gr.Info("Classification for commit %s saved!"%hash[:10])
-                return gr.update(interactive=False)
-            
-        #bfcs_df.select(select_commit, inputs=[bfcs_df], outputs=[current_commit, current_commit_message])
+            return gr.update(interactive=True), gr.update(value=commits.asDataFrame())
             
 demo.launch(server_name='localhost')
