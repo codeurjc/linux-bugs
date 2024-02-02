@@ -27,6 +27,19 @@ with gr.Blocks() as demo:
                                    interactive=False
             )
             
+            # Filterin on those what have been reviewed
+            filter_dd = gr.Dropdown(label="Show", choices=["All", "Reviewed", "Not Reviewed"], value="All")
+            
+            @filter_dd.change(inputs=[filter_dd], outputs=[bfcs_df])
+            def filter_commits(choice):
+                if choice == "All":
+                    df = commits.asDataFrame()
+                elif choice == "Reviewed":
+                    df = commits.asDataFrame()[commits.asDataFrame()["reviewed"] == True]
+                elif choice == "Not Reviewed":
+                    df = commits.asDataFrame()[commits.asDataFrame()["reviewed"] == False]
+                return df
+            
         # COMMIT INFO
         with gr.Column(scale=4):
             current_commit = gr.Textbox(label="Selected commit", interactive=False)
