@@ -7,7 +7,10 @@ review_cols = [
     "is_obvious_bug",
     "is_safety_related",
     "type_of_safety_related",
-    "comment"
+    "confidence",
+    "understand",
+    "commitcomment",
+    "comment",
 ]
 
 class ReviewsDF():
@@ -44,6 +47,9 @@ class ReviewsDF():
             is_obvious_bug= None
             is_safety_related= None
             type_of_safety_related= None
+            confidence = None
+            understand = None
+            commitcomment = ""
             comment= ""
         else:
             reviewer = review['reviewer']
@@ -51,8 +57,13 @@ class ReviewsDF():
             is_obvious_bug = review['is_obvious_bug']
             is_safety_related = review['is_safety_related']
             type_of_safety_related = review['type_of_safety_related']
+            confidence = review['confidence']
+            understand = review['understand']
+            commitcomment = review['commitcomment']
             comment = review['comment']
-        return reviewer, is_bug_fixing_commit, is_obvious_bug, is_safety_related, type_of_safety_related, comment
+        return reviewer, is_bug_fixing_commit, is_obvious_bug, is_safety_related, type_of_safety_related, confidence, \
+            understand, commitcomment, comment
+            
 
     def save(self):
         self.df.to_csv(self.filename, index=False)
