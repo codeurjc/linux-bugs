@@ -1,6 +1,25 @@
 # Code and data for the Linux bugs annotation project
 
-## Annotation
+## For annotators
+
+### Installation
+
+For running the annotator, you will need to use a version of Python (it has been tested with Python 3.11, it will likely work with 3.10 and other Python versions). It is recommended to use a virtual environment. You can create it and run it using the `venv` Python module. You can check a [detailed description of how venv works](https://docs.python.org/3/library/venv.html), but in summary, you will have to create it and activate it in your shell before running python scripts:
+
+```python
+python3 -m venv path/to/your/venv/directory
+source path/to/your/venv/directory/bin/activate
+```
+
+Once the virtual environment is created and activated, install dependencies with `pip`:
+
+```python
+pip install -r requirements.txt
+```
+
+Now, you are ready to start your annotation.
+
+### Annotation
 
 Change to the directory commit-annotator, and run the script `annotator_ui.py`. For example:
 
