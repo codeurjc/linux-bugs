@@ -2,6 +2,7 @@ import gradio as gr
 import pandas as pd
 from CommitCollection import CommitCollection
 from annotations import Annotations
+import argparse
 
 URL = "https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?h=v6.7&id="
 
@@ -23,6 +24,11 @@ annots = Annotations()
 # Load 1000 random commits
 commits = CommitCollection('../linux-commits-2023-11-12_random-filtered-130-230.json')
 commits_df = commits.asDataFrame()
+
+# Parse arguments
+parser = argparse.ArgumentParser()
+parser.add_argument('-rb', '--radio', action='store_true', help='Use radio buttons instead of dropdowns')
+args = parser.parse_args()
 
 # Apply styles to hash column
 def color_commits(row):
@@ -54,7 +60,7 @@ with (gr.Blocks() as demo):
         # LIST OF COMMITS
         with gr.Column(scale=1):
             # Filter for commits
-            filter_dd = gr.Dropdown(label="Show",
+            filter_dd = gr.Radio(label="Show",
                                     choices=["All", "Annotated", "Not Annotated"], value="All")
             # Commits
             bfcs_df = gr.Dataframe(value=commits_s,
@@ -89,50 +95,98 @@ with (gr.Blocks() as demo):
         # Annotation form
         with gr.Column(scale=4) as annotation_col:
             # Radio buttons for understanding level
-            understand_dd = gr.Dropdown(choices=[
-                ("I understand it completely", 4),
-                ("Mostly clear to me", 3),
-                ("Partial understanding", 2),
-                ("Struggling with key aspects", 1),
-                ("No understanding at all", 0),
-                ("Undecided", None)],
-                label='How well do you understand the purpose of the commit?',
-                interactive=True)
+            
+            # Radio buttons for understanding level
+            if args.radio:
+                understand_dd = gr.Radio(choices=[
+                    ("I understand it completely", 4),
+                    ("Mostly clear to me", 3),
+                    ("Partial understanding", 2),
+                    ("Struggling with key aspects", 1),
+                    ("No understanding at all", 0),
+                    ("Undecided", None)],
+                    label='How well do you understand the purpose of the commit?',
+                    interactive=True)
+            else:
+            # Dropdown for understanding level
+                understand_dd = gr.Dropdown(choices=[
+                    ("I understand it completely", 4),
+                    ("Mostly clear to me", 3),
+                    ("Partial understanding", 2),
+                    ("Struggling with key aspects", 1),
+                    ("No understanding at all", 0),
+                    ("Undecided", None)],
+                    label='How well do you understand the purpose of the commit?',
+                    interactive=True)
 
             purpose_txt = gr.Textbox(label="Describe the purpose of the commit:",
                                      lines=3, interactive=True)
 
-            bfc_dd = gr.Dropdown(label="Is it a Bug-Fixing Commit (BFC)?",
-                                  choices=sure_not5,
-                                  interactive=True)
-
-            bpc_dd = gr.Dropdown(label="Is it a Bug-Preventing Commit (BPC)?",
-                                    choices=sure_not5,
-                                    interactive=True)
-
-            asc_dd = gr.Dropdown(label="Is it an Auto-Suggested Commit (ASC)?",
-                                    choices=sure_not3,
-                                    interactive=True)
-
-            obvious_dd = gr.Dropdown(label="Is the bug obvious?",
-                                  choices=sure_not3,
-                                  interactive=True)
-
-            safety_dd = gr.Dropdown(label="Is the bug Safety-Related?",
-                                  choices=sure_not5,
-                                  interactive=True)
-            
-            timing_dd = gr.Dropdown(label="Is it a Timing and Execution bug?",
-                                    choices=sure_not3,
-                                    interactive=True)
-
-            memory_dd = gr.Dropdown(label="Is it a Memory bug?",
-                                    choices=sure_not3,
-                                    interactive=True)
-
-            info_dd = gr.Dropdown(label="Is it a Exchange of Information bug?",
-                                    choices=sure_not3,
-                                    interactive=True)
+            # Radio buttons for understanding level
+            if args.radio:
+                bfc_dd = gr.Radio(label="Is it a Bug-Fixing Commit (BFC)?",
+                                      choices=sure_not5,
+                                      interactive=True)
+    
+                bpc_dd = gr.Radio(label="Is it a Bug-Preventing Commit (BPC)?",
+                                        choices=sure_not5,
+                                        interactive=True)
+    
+                asc_dd = gr.Radio(label="Is it an Auto-Suggested Commit (ASC)?",
+                                        choices=sure_not3,
+                                        interactive=True)
+    
+                obvious_dd = gr.Radio(label="Is the bug obvious?",
+                                      choices=sure_not3,
+                                      interactive=True)
+    
+                safety_dd = gr.Radio(label="Is the bug Safety-Related?",
+                                      choices=sure_not5,
+                                      interactive=True)
+                
+                timing_dd = gr.Radio(label="Is it a Timing and Execution bug?",
+                                        choices=sure_not3,
+                                        interactive=True)
+    
+                memory_dd = gr.Radio(label="Is it a Memory bug?",
+                                        choices=sure_not3,
+                                        interactive=True)
+    
+                info_dd = gr.Radio(label="Is it a Exchange of Information bug?",
+                                        choices=sure_not3,
+                                        interactive=True)
+            else:
+                bfc_dd = gr.Dropdown(label="Is it a Bug-Fixing Commit (BFC)?",
+                                     choices=sure_not5,
+                                     interactive=True)
+                
+                bpc_dd = gr.Dropdown(label="Is it a Bug-Preventing Commit (BPC)?",
+                                     choices=sure_not5,
+                                     interactive=True)
+                
+                asc_dd = gr.Dropdown(label="Is it an Auto-Suggested Commit (ASC)?",
+                                     choices=sure_not3,
+                                     interactive=True)
+                
+                obvious_dd = gr.Dropdown(label="Is the bug obvious?",
+                                         choices=sure_not3,
+                                         interactive=True)
+                
+                safety_dd = gr.Dropdown(label="Is the bug Safety-Related?",
+                                        choices=sure_not5,
+                                        interactive=True)
+                
+                timing_dd = gr.Dropdown(label="Is it a Timing and Execution bug?",
+                                        choices=sure_not3,
+                                        interactive=True)
+                
+                memory_dd = gr.Dropdown(label="Is it a Memory bug?",
+                                        choices=sure_not3,
+                                        interactive=True)
+                
+                info_dd = gr.Dropdown(label="Is it a Exchange of Information bug?",
+                                      choices=sure_not3,
+                                      interactive=True)
 
             safety_txt = gr.Textbox(label="Reason for the classification (safety-related and kind)",
                            lines=2, interactive=True)
@@ -241,5 +295,5 @@ with (gr.Blocks() as demo):
             commits_df = commits.asDataFrame()
             commits_s = commits_df[['id', 'hash']].style.apply(color_commits, axis=1)
             return gr.update(interactive=True), gr.update(value=commits_s)
-            
+
 demo.launch(server_name='localhost')
