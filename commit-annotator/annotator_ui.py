@@ -21,7 +21,7 @@ sure_not3 = [("Yes, I'm sure", 4),
 annots = Annotations()
 
 # Load 1000 random commits
-commits = CommitCollection('../linux-commits-2023-11-12_random-filtered.json')
+commits = CommitCollection('../linux-commits-2023-11-12_random-filtered-130-230.json')
 commits_df = commits.asDataFrame()
 
 # Apply styles to hash column
@@ -47,7 +47,7 @@ with (gr.Blocks() as demo):
                                       "Start by filling in the annotator name"
                                       " (for example, 'jesus'),"
                                       " then select a commit and start annotating."))
-        annotator_txt = gr.Textbox(label="Annotator name")
+        annotator_txt = gr.Textbox(label="Annotator name (fill with your name and press Enter to create a new result's file or load and existing one)",)
 
     with gr.Row():
         
