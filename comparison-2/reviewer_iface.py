@@ -108,6 +108,7 @@ with gr.Blocks() as ui:
                                  choices=[("All", "all"),
                                           ("All difference <= 1", "all-dif<=1"),
                                           ("Any difference > 1", "any-dif>1"),
+                                          ("All difference, added > 1", "all-dif-sum>1"),
                                           ("All annotators equal", "all-equal"),
                                           ("Any annotator different", "any-dif"),
                                           ("Annotators A, B different", "ab-dif"),
@@ -160,6 +161,8 @@ with gr.Blocks() as ui:
             df = BFCs.query("(abs(bfcA-bfcB) <= 1) and (abs(bfcB-bfcC) <= 1) and (abs(bfcA-bfcC) <= 1)")
         elif choice == "any-dif>1":
             df = BFCs.query("(abs(bfcA-bfcB) > 1) or (abs(bfcB-bfcC) > 1) or (abs(bfcA-bfcC) > 1)")
+        elif choice == "all-dif-sum>1":
+            df = BFCs.query("abs(bfcA-bfcB) + abs(bfcB-bfcC) + abs(bfcA-bfcC) > 1")
         elif choice == "any-dif":
             df = BFCs.query("(bfcA != bfcB) or (bfcB != bfcC)")
         elif choice == "ab-dif":
