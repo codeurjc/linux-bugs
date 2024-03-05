@@ -1,5 +1,6 @@
 import pandas as pd
 import json
+import re
 
 class CommitCollection():
     """Class for storing current commits"""
@@ -14,7 +15,7 @@ class CommitCollection():
                     'lhash': c['data']['commit'],
                     'hash': c['data']['commit'][:10],
                     'annotated': False,
-                    'message': c['data']['message']
+                    'message': re.sub(r'^Fixes:.*\n', '', c['data']['message'], flags=re.M)
                 }
                 self.commits_list.append(commit)
         self.df = pd.DataFrame(self.commits_list)
