@@ -21,12 +21,13 @@ class CommitCollection():
                 # Replace newlines with <br>
                 message = message.replace('\n', '<br>')
                 # Wrap in HTML tags
-                message = f'<div style="border: 2px solid var(--block-border-color); background: var(--block-background-fill); padding: 10px;"><p>{message}</p></div>'
+                message = f'<div style="border: 2px solid var(--block-border-color); background: var(--block-background-fill); padding: 10px; border-radius: var(--block-radius);"><p>{message}</p></div>'
                 commit = {
                     'lhash': c['data']['commit'],
                     'hash': c['data']['commit'][:10],
                     'annotated': False,
-                    'message': message
+                    'message': message,
+                    'message_raw': c['data']['message']
                 }
                 self.commits_list.append(commit)
         self.df = pd.DataFrame(self.commits_list)

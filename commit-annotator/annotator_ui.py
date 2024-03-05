@@ -3,8 +3,10 @@ import pandas as pd
 from CommitCollection import CommitCollection
 from annotations import Annotations
 import argparse
+import urllib.parse
 
 URL = "https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?h=v6.7&id="
+URL_LORE = "https://lore.kernel.org/all/?q="
 
 # Options sure - not sure
 sure_not5 = [("Yes, I'm sure", 4),
@@ -207,7 +209,9 @@ with (gr.Blocks() as demo):
         # Event functions
         def change_commit(hash):
             """Return all elements that should be updated when a new commit is loaded"""
-            link = f"[Link to commit]({URL}{hash})"
+            message_raw = commits.getCommit(hash)['message_raw']
+            first_line = message_raw.split('\n')[0]
+            link = f"[Link to commit]({URL}{hash}) \n\n [Search the commit title in the kernel.lore mailing list]({URL_LORE}{urllib.parse.quote(first_line)})"
             message = commits.getCommit(hash)['message']
             updated_vals = [link, message] + annots.get_values(hash)[1:]
             updated_els = [gr.update(value=item) for item in updated_vals]
