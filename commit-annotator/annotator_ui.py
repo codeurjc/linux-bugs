@@ -83,7 +83,7 @@ with (gr.Blocks() as demo):
         with gr.Column(scale=6):
             hash_txt = gr.Textbox(label="Selected commit", interactive=False)
             see_commit_link = gr.Markdown()
-            message_txt = gr.Code()
+            message_txt = gr.HTML()
             
             with gr.Row():
                 previous_btn =  gr.Button("Previous", scale=1, interactive=False)

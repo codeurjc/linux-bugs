@@ -1,6 +1,7 @@
 import pandas as pd
 import json
 import re
+import html
 
 class CommitCollection():
     """Class for storing current commits"""
@@ -11,11 +12,21 @@ class CommitCollection():
         self.commit_map = {}
         with open(filename) as fd:
             for c in json.load(fd):
+                # Remove the "Fixes: " line from the commit message
+                message = re.sub(r'^Fixes:.*\n', '', c['data']['message'], flags=re.M)
+                # Make links clickable
+                message = html.escape(message)
+                message = re.sub(r'(https?://\S+)', r'<a href="\1">\1</a>', message)
+                # message = re.sub(r'(\S+@\S+)', r'<a href="mailto:\1">\1</a>', message)
+                # Replace newlines with <br>
+                message = message.replace('\n', '<br>')
+                # Wrap in HTML tags
+                message = f'<div style="border: 2px solid var(--block-border-color); background: var(--block-background-fill); padding: 10px;"><p>{message}</p></div>'
                 commit = {
                     'lhash': c['data']['commit'],
                     'hash': c['data']['commit'][:10],
                     'annotated': False,
-                    'message': re.sub(r'^Fixes:.*\n', '', c['data']['message'], flags=re.M)
+                    'message': message
                 }
                 self.commits_list.append(commit)
         self.df = pd.DataFrame(self.commits_list)
