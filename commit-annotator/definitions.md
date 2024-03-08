@@ -54,3 +54,14 @@ With respect to memory, the effects of faults such as those listed below can be 
 ### Exchange of Information
 
 With respect to the exchange of information, the causes for faults or effects of faults such as those listed below can be considered for each sender or each receiver: repetition of information, loss of information, delay of information, insertion of information, masquerade or incorrect addressing of information, incorrect sequence of information, corruption of information, asymmetric information sent from a sender to multiple receivers, information from a sender received by only a subset of the receivers or blocking access to a communication channel.
+
+## In case it is a commit that belongs to a part of PATCH (commit train)
+
+
+Some commits may belong to a larger series of commits called a "patch series" or "commit train". These can be identified by:
+- A link in the commit message to the lore.kernel mailing list thread where the series was posted. The first commit in the series (with ID 0/00/000) is the "parent" commit.
+- A "Search the commit title in the kernel.lore mailing list" link at the top of the commit message. This allows searching for the commit title to find the mailing list thread and parent commit. However, some commits may not appear in the search results.
+- Checking if the commit ID contains a "patch series number" like 3/12 indicating it is part of a larger series.
+- Looking at the diff content and commit message for any references to a patch series or other commits that are part of the same changes.
+- 
+By finding the parent commit and series, it can be determined if the commit belongs to a larger patch set. The context of the series and discussions on the mailing list may provide additional information.
