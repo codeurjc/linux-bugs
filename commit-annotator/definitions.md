@@ -18,6 +18,14 @@ Any commit that fixes a bug present in the source code, defined as a software fa
 
 Any commit that prevents a bug that could cause a failure in the future. This kind of commits doesn't fix known bugs, but possible, still undiscovered bugs, that could happen in the future. For example, they could improve the values returned by a function, in a way that is likely to prevent failures in code calling that function.
 
+### Perfective Commit (PRC)
+
+Any commit that improves the quality of the code. This includes refactoring, optimizations, code style improvements, adding comments, etc. The key aspect is that perfective commits do not fix bugs or add new features.
+
+### New Feature Commit (NFC)
+
+Any commit that adds new functionality or capabilities to the codebase. This includes adding support for new hardware, implementing new APIs, exposing new configuration options, etc. The key aspect is that new feature commits add new code to enable new behaviors not previously possible.
+
 ### Auto-Suggested Commit (ASC)
 
 A commit made to follow the advice of a tool (for example, a static analysis tool), in order to improve the quality of the software, in terms of fixing bugs, preventing future bugs, and in general, reducing the likeness of failures. A commit may be an ASC, and also be (or not) a BFC or a BPC.

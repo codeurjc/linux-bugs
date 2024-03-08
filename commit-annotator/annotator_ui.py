@@ -133,6 +133,18 @@ with (gr.Blocks() as demo):
                 bpc_dd = gr.Radio(label="Is it a Bug-Preventing Commit (BPC)?",
                                         choices=sure_not5,
                                         interactive=True)
+
+                prc_dd = gr.Radio(label="Is it a Perfective Commit (PRC)?",
+                                  choices=sure_not5,
+                                  interactive=True)
+
+                nfc_dd = gr.Radio(label="Is it a New Feature Commit (NFC)?",
+                                  choices=sure_not5,
+                                  interactive=True)
+
+                specification_dd = gr.Radio(label="Is it a Commit related to a specification change?",
+                                  choices=sure_not3,
+                                  interactive=True)
     
                 asc_dd = gr.Radio(label="Is it an Auto-Suggested Commit (ASC)?",
                                         choices=sure_not3,
@@ -165,6 +177,18 @@ with (gr.Blocks() as demo):
                 bpc_dd = gr.Dropdown(label="Is it a Bug-Preventing Commit (BPC)?",
                                      choices=sure_not5,
                                      interactive=True)
+
+                prc_dd = gr.Dropdown(label="Is it a Perfective Commit (PRC)?",
+                                  choices=sure_not5,
+                                  interactive=True)
+
+                nfc_dd = gr.Dropdown(label="Is it a New Feature Commit (NFC)?",
+                                  choices=sure_not5,
+                                  interactive=True)
+
+                specification_dd = gr.Dropdown(label="Is it a Commit related to a specification change?",
+                                            choices=sure_not3,
+                                            interactive=True)
                 
                 asc_dd = gr.Dropdown(label="Is it an Auto-Suggested Commit (ASC)?",
                                      choices=sure_not3,
@@ -201,7 +225,7 @@ with (gr.Blocks() as demo):
         data_els = [hash_txt, see_commit_link, message_txt]
         annotation_els = [annotator_txt,
                           understand_dd, purpose_txt,
-                          bfc_dd, bpc_dd, asc_dd, obvious_dd,
+                          bfc_dd, bpc_dd, prc_dd, nfc_dd, specification_dd, asc_dd, obvious_dd,
                           safety_dd, timing_dd, memory_dd, info_dd, safety_txt
                           ]
         updated_els_on_commit_change = data_els + annotation_els
@@ -261,8 +285,8 @@ with (gr.Blocks() as demo):
         # Save annotation
         @save_btn.click(inputs=[hash_txt] + annotation_els,
                         outputs=[save_btn, bfcs_df])
-        def update_annotation(hash, annotator, understand, purpose, bfc, bpc, asc, obvious,
-                  safety, timing, memory, info, safety_exp):
+        def update_annotation(hash, annotator, understand, purpose, bfc, bpc, prc, nfc, specification,
+                              asc, obvious, safety, timing, memory, info, safety_exp):
             message = ""
             if annotator == "": message += "Fill in an annotator. "
             if hash == "": message += "Select a commit. "
@@ -270,6 +294,9 @@ with (gr.Blocks() as demo):
             if purpose == "": message += "Explain the purpose of the commit. "
             if bfc == None: message += "Select if it is a Bug Fixing Commit. "
             if bpc == None: message += "Select if it is a Bug Preventing Commit. "
+            if prc == None: message += "Select if it is a Perfective Commit. "
+            if nfc == None: message += "Select if it is a New Feature Commit. "
+            if specification == None: message += "Select if it is a Commit related to some specification change. "
             if asc == None: message += "Select if it is a Auto-Suggested Commit. "
             if obvious == None: message += "Select if it is an obvious bug. "
 
@@ -282,6 +309,9 @@ with (gr.Blocks() as demo):
                     'purpose': purpose,
                     'bfc': bfc,
                     'bpc': bpc,
+                    'prc': prc,
+                    'nfc': nfc,
+                    'specification': specification,
                     'asc': asc,
                     'obvious': obvious,
                     'safety': safety,
