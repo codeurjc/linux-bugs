@@ -4,6 +4,7 @@ from CommitCollection import CommitCollection
 from annotations import Annotations
 import argparse
 import urllib.parse
+import time
 
 URL = "https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?h=v6.7&id="
 URL_LORE = "https://lore.kernel.org/all/?q="
@@ -19,6 +20,9 @@ sure_not3 = [("Yes, I'm sure", 4),
              ("I don't know", 2),
              ("No, I'm sure", 0),
              ("Undecided", None)]
+
+# Time measurements
+start_time = time.time()
 
 # Load annotations (if file exists)
 annots = Annotations()
@@ -232,6 +236,8 @@ with (gr.Blocks() as demo):
 
         # Event functions
         def change_commit(hash):
+            global start_time
+            start_time = time.time()
             """Return all elements that should be updated when a new commit is loaded"""
             message_raw = commits.getCommit(hash)['message_raw']
             first_line = message_raw.split('\n')[0]
@@ -302,6 +308,8 @@ with (gr.Blocks() as demo):
 
             if message == "":
                 # Save annotation
+                # Save time
+                end_time = time.time()
                 annots.update({
                     'hash': hash,
                     'annotator': annotator,
@@ -318,8 +326,11 @@ with (gr.Blocks() as demo):
                     'timing': timing,
                     'memory': memory,
                     'info': info,
-                    'safety_exp': safety_exp
+                    'safety_exp': safety_exp,
+                    'time': end_time - start_time
                 })
+                
+                
                 annots.save()
                 commits.updateCommitState(hash, True)
                 gr.Info("Classification for commit %s saved!" % hash[:10])

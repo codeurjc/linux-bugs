@@ -10,9 +10,9 @@ class Annotations():
         self.annotator = annotator
         self.fields = ['hash', 'annotator',
                        'understand', 'purpose', 'bfc', 'bpc', 'prc', 'nfc', 'specification',
-                       'asc', 'obvious', 'safety', 'timing', 'memory', 'info', 'safety_exp']
+                       'asc', 'obvious', 'safety', 'timing', 'memory', 'info', 'safety_exp', 'time']
         self.fields_defaults = ['', self.annotator, None, "", None, None, None, None, None,
-                                None, None, None, None, None, None, ""]
+                                None, None, None, None, None, None, "", 0]
         if annotator is None:
             self.filename = None
             self.df = pd.DataFrame(columns=self.fields)
