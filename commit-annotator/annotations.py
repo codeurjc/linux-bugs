@@ -46,7 +46,7 @@ class Annotations():
         if annotation is None:
             values = self.fields_defaults
         else:
-            values = [annotation[key] for key in self.fields]
+            values = [annotation[key] for key in self.fields if key != 'time']
         return values
 
     def save(self):
