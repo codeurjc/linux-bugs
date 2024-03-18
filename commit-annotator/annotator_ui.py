@@ -24,7 +24,7 @@ sure_not3 = [("Yes, I'm sure", 4),
 annots = Annotations()
 
 # Load 1000 random commits
-commits = CommitCollection('../linux-commits-2023-11-12_random-filtered-130-230.json')
+commits = CommitCollection('../linux-commits-2023-11-12_new_random-filtered.json')
 commits_df = commits.asDataFrame()
 
 # Parse arguments

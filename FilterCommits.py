@@ -1,8 +1,17 @@
 import json
 
-with open('linux-commits-2023-11-12_random-filtered.json') as fd:
-    commits_json = json.load(fd)
+with open('linux-commits-2023-11-12.json') as f:
+    all_commits = f.readlines()
+    
+with open('commits-2022-123-1000.lst') as f:
+    random_commits = list(map(lambda c: c.strip(), f.readlines()))
 
-with open('linux-commits-2023-11-12_random-filtered-130-230.json', 'w') as f:
-    json.dump(commits_json[130:230], f)
+filtered_commits = []
+for commit in all_commits:
+    commit_json = json.loads(commit)
+    if commit_json['data']['commit'] in random_commits:
+        filtered_commits.append(commit_json)
+
+with open('linux-commits-2023-11-12_new_random-filtered.json', 'w') as f:
+  json.dump(filtered_commits, f)
 
