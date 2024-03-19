@@ -28,7 +28,7 @@ start_time = time.time()
 annots = Annotations()
 
 # Load 1000 random commits
-commits = CommitCollection('../linux-commits-2023-11-12_new_random-filtered.json')
+commits = CommitCollection('../linux-commits-2023-11-12_random-filtered-1.json')
 commits_df = commits.asDataFrame()
 
 # Parse arguments
