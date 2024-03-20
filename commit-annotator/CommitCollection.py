@@ -12,6 +12,10 @@ class CommitCollection():
         self.commit_map = {}
         with open(filename) as fd:
             for c in json.load(fd):
+                # avoid Merge commits
+                if 'Merge' in c['data']:
+                    continue
+
                 # Remove the "Fixes: " line from the commit message
                 message = re.sub(r'^Fixes:.*\n', '', c['data']['message'], flags=re.M)
                 # Make links clickable
