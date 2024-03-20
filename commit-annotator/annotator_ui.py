@@ -113,7 +113,7 @@ with (gr.Blocks() as demo):
                     ("No understanding at all", 0),
                     ("Undecided", None)],
                     label='How well do you understand the purpose of the commit?',
-                    interactive=True)
+                    interactive=False)
             else:
             # Dropdown for understanding level
                 understand_dd = gr.Dropdown(choices=[
@@ -124,101 +124,101 @@ with (gr.Blocks() as demo):
                     ("No understanding at all", 0),
                     ("Undecided", None)],
                     label='How well do you understand the purpose of the commit?',
-                    interactive=True)
+                    interactive=False)
 
             purpose_txt = gr.Textbox(label="Describe the purpose of the commit:",
-                                     lines=3, interactive=True)
+                                     lines=3, interactive=False)
 
 
             # Radio buttons for understanding level
             if args.radio:
                 bfc_dd = gr.Radio(label="Is it a Bug-Fixing Commit (BFC)?",
                                       choices=sure_not5,
-                                      interactive=True)
+                                      interactive=False)
     
                 bpc_dd = gr.Radio(label="Is it a Bug-Preventing Commit (BPC)?",
                                         choices=sure_not5,
-                                        interactive=True)
+                                        interactive=False)
 
                 prc_dd = gr.Radio(label="Is it a Perfective Commit (PRC)?",
                                   choices=sure_not5,
-                                  interactive=True)
+                                  interactive=False)
 
                 nfc_dd = gr.Radio(label="Is it a New Feature Commit (NFC)?",
                                   choices=sure_not5,
-                                  interactive=True)
+                                  interactive=False)
 
                 specification_dd = gr.Radio(label="Is it a Commit related to a specification change?",
                                   choices=sure_not3,
-                                  interactive=True)
+                                  interactive=False)
     
                 asc_dd = gr.Radio(label="Is it an Auto-Suggested Commit (ASC)?",
                                         choices=sure_not3,
-                                        interactive=True)
+                                        interactive=False)
     
                 obvious_dd = gr.Radio(label="Is the bug obvious?",
                                       choices=sure_not3,
-                                      interactive=True)
+                                      interactive=False)
     
                 safety_dd = gr.Radio(label="Is the bug Safety-Related?",
                                       choices=sure_not5,
-                                      interactive=True)
+                                      interactive=False)
                 
                 timing_dd = gr.Radio(label="Is it a Timing and Execution bug?",
                                         choices=sure_not3,
-                                        interactive=True)
+                                        interactive=False)
     
                 memory_dd = gr.Radio(label="Is it a Memory bug?",
                                         choices=sure_not3,
-                                        interactive=True)
+                                        interactive=False)
     
                 info_dd = gr.Radio(label="Is it a Exchange of Information bug?",
                                         choices=sure_not3,
-                                        interactive=True)
+                                        interactive=False)
             else:
                 bfc_dd = gr.Dropdown(label="Is it a Bug-Fixing Commit (BFC)?",
                                      choices=sure_not5,
-                                     interactive=True)
+                                     interactive=False)
                 
                 bpc_dd = gr.Dropdown(label="Is it a Bug-Preventing Commit (BPC)?",
                                      choices=sure_not5,
-                                     interactive=True)
+                                     interactive=False)
 
                 prc_dd = gr.Dropdown(label="Is it a Perfective Commit (PRC)?",
                                   choices=sure_not5,
-                                  interactive=True)
+                                  interactive=False)
 
                 nfc_dd = gr.Dropdown(label="Is it a New Feature Commit (NFC)?",
                                   choices=sure_not5,
-                                  interactive=True)
+                                  interactive=False)
 
                 specification_dd = gr.Dropdown(label="Is it a Commit related to a specification change?",
                                             choices=sure_not3,
-                                            interactive=True)
+                                            interactive=False)
                 
                 asc_dd = gr.Dropdown(label="Is it an Auto-Suggested Commit (ASC)?",
                                      choices=sure_not3,
-                                     interactive=True)
+                                     interactive=False)
                 
                 obvious_dd = gr.Dropdown(label="Is the bug obvious?",
                                          choices=sure_not3,
-                                         interactive=True)
+                                         interactive=False)
                 
                 safety_dd = gr.Dropdown(label="Is the bug Safety-Related?",
                                         choices=sure_not5,
-                                        interactive=True)
+                                        interactive=False)
                 
                 timing_dd = gr.Dropdown(label="Is it a Timing and Execution bug?",
                                         choices=sure_not3,
-                                        interactive=True)
+                                        interactive=False)
                 
                 memory_dd = gr.Dropdown(label="Is it a Memory bug?",
                                         choices=sure_not3,
-                                        interactive=True)
+                                        interactive=False)
                 
                 info_dd = gr.Dropdown(label="Is it a Exchange of Information bug?",
                                       choices=sure_not3,
-                                      interactive=True)
+                                      interactive=False)
 
             safety_txt = gr.Textbox(label="Reason for the classification (safety-related and kind)",
                            lines=2, interactive=True)
@@ -250,16 +250,18 @@ with (gr.Blocks() as demo):
             return tuple([hash] + updated_els)
 
         @annotator_txt.submit(inputs=[annotator_txt, hash_txt],
-                              outputs=[annotator_txt, bfcs_df])
+                              outputs=[annotator_txt, understand_dd, purpose_txt,
+                          bfc_dd, bpc_dd, prc_dd, nfc_dd, specification_dd, asc_dd, obvious_dd,
+                          safety_dd, timing_dd, memory_dd, info_dd, bfcs_df])
         def set_annotator(annotator, current):
             global annots, commits_s
             try:
                 annots = Annotations(annotator)
                 commits_s = commits_df[['id', 'hash']].style.apply(color_commits, axis=1)
-                return (gr.update(interactive=False), gr.update(value=commits_s))
+                return (gr.update(interactive=False), gr.update(interactive=True), gr.update(interactive=True), gr.update(interactive=True), gr.update(interactive=True), gr.update(interactive=True), gr.update(interactive=True), gr.update(interactive=True), gr.update(interactive=True), gr.update(interactive=True), gr.update(interactive=True), gr.update(interactive=True), gr.update(interactive=True), gr.update(interactive=True), gr.update(value=commits_s))
             except Annotations.AnnotatorError:
                 gr.Info(f"Error loading annotations: some row has a different annotator than {annotator}")
-                return (gr.update(interactive=True), gr.update())
+                return (gr.update(interactive=True), gr.update(interactive=False), gr.update(interactive=False), gr.update(interactive=False), gr.update(interactive=False), gr.update(interactive=False), gr.update(interactive=False), gr.update(interactive=False), gr.update(interactive=False), gr.update(interactive=False), gr.update(interactive=False), gr.update(interactive=False), gr.update(interactive=False), gr.update(interactive=False), gr.update())
 
         # When a commit is selected
         @bfcs_df.select(inputs=[bfcs_df, annotator_txt],
