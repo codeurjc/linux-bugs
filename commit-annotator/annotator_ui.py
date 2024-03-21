@@ -24,6 +24,9 @@ sure_not3 = [("Yes, I'm sure", 4),
 # Time measurements
 start_time = time.time()
 
+# Current active commit
+current_commit = None
+
 # Load annotations (if file exists)
 annots = Annotations()
 
@@ -238,13 +241,14 @@ with (gr.Blocks() as demo):
 
         # Event functions
         def change_commit(hash):
-            global start_time
+            global start_time, current_commit
             start_time = time.time()
             """Return all elements that should be updated when a new commit is loaded"""
             message_raw = commits.getCommit(hash)['message_raw']
             first_line = message_raw.split('\n')[0]
             link = f"[Link to commit]({URL}{hash}) \n\n [Search the commit title in the kernel.lore mailing list]({URL_LORE}{urllib.parse.quote(first_line)})"
-            message = commits.getCommit(hash)['message']
+            current_commit = commits.getCommit(hash)
+            message = current_commit['message']
             updated_vals = [link, message] + annots.get_values(hash)[1:]
             updated_els = [gr.update(value=item) for item in updated_vals]
             return tuple([hash] + updated_els)
@@ -297,6 +301,7 @@ with (gr.Blocks() as demo):
                         outputs=[save_btn, bfcs_df])
         def update_annotation(hash, annotator, understand, purpose, bfc, bpc, prc, nfc, specification,
                               asc, obvious, safety, timing, memory, info, safety_exp, lorecheck):
+            global current_commit
             message = ""
             if annotator == "": message += "Fill in an annotator. "
             if hash == "": message += "Select a commit. "
@@ -332,7 +337,8 @@ with (gr.Blocks() as demo):
                     'info': info,
                     'safety_exp': safety_exp,
                     'time': end_time - start_time,
-                    'lorecheck': lorecheck
+                    'lorecheck': lorecheck,
+                    'is_merge_commit': current_commit['is_merge']
                 })
                 
                 

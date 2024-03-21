@@ -13,8 +13,9 @@ class CommitCollection():
         with open(filename) as fd:
             for c in json.load(fd):
                 # avoid Merge commits
+                is_merge = False
                 if 'Merge' in c['data']:
-                    continue
+                    is_merge = True
 
                 # Remove the "Fixes: " line from the commit message
                 message = re.sub(r'^Fixes:.*\n', '', c['data']['message'], flags=re.M)
@@ -26,12 +27,15 @@ class CommitCollection():
                 message = message.replace('\n', '<br>')
                 # Wrap in HTML tags
                 message = f'<div style="border: 2px solid var(--block-border-color); background: var(--block-background-fill); padding: 10px; border-radius: var(--block-radius);"><p>{message}</p></div>'
+                if is_merge:
+                    message = '<div style="border: 4px solid var(--block-border-color); background: var(--block-background-fill); padding: 10px; border-radius: var(--block-radius);"><b>IMPORTANT: This is a MERGE COMMIT!</b></div><br>' + message
                 commit = {
                     'lhash': c['data']['commit'],
                     'hash': c['data']['commit'][:10],
                     'annotated': False,
                     'message': message,
-                    'message_raw': c['data']['message']
+                    'message_raw': c['data']['message'],
+                    'is_merge': is_merge,
                 }
                 self.commits_list.append(commit)
         self.df = pd.DataFrame(self.commits_list)
