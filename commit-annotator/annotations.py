@@ -11,7 +11,7 @@ class Annotations():
         self.fields = ['hash', 'annotator',
                        'understand', 'purpose', 'bfc', 'bpc', 'prc', 'nfc', 'specification',
                        'asc', 'obvious', 'safety', 'timing', 'memory', 'info', 'safety_exp', 'time', 'lorecheck',
-                       'is_merge_commit']
+                       'is_merge_commit', 'is_part_patchset']
         self.fields_defaults = ['', self.annotator, None, "", None, None, None, None, None,
                                 None, None, None, None, None, None, "", 0, False]
         if annotator is None:

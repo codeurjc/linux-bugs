@@ -93,6 +93,7 @@ with (gr.Blocks() as demo):
             hash_txt = gr.Textbox(label="Selected commit", interactive=False)
             see_commit_link = gr.Markdown()
             lorecheck_dd = gr.Checkbox(label="I looked for the commit and I found it in kernel.lore")
+            is_part_patchset_dd = gr.Checkbox(label="The commit is part of a PATCHSET")
             message_txt = gr.HTML()
             
             with gr.Row():
@@ -235,7 +236,7 @@ with (gr.Blocks() as demo):
         annotation_els = [annotator_txt,
                           understand_dd, purpose_txt,
                           bfc_dd, bpc_dd, prc_dd, nfc_dd, specification_dd, asc_dd, obvious_dd,
-                          safety_dd, timing_dd, memory_dd, info_dd, safety_txt, lorecheck_dd
+                          safety_dd, timing_dd, memory_dd, info_dd, safety_txt, lorecheck_dd, is_part_patchset_dd
                           ]
         updated_els_on_commit_change = data_els + annotation_els
 
@@ -300,7 +301,7 @@ with (gr.Blocks() as demo):
         @save_btn.click(inputs=[hash_txt] + annotation_els,
                         outputs=[save_btn, bfcs_df])
         def update_annotation(hash, annotator, understand, purpose, bfc, bpc, prc, nfc, specification,
-                              asc, obvious, safety, timing, memory, info, safety_exp, lorecheck):
+                              asc, obvious, safety, timing, memory, info, safety_exp, lorecheck, is_part_patchset):
             global current_commit
             message = ""
             if annotator == "": message += "Fill in an annotator. "
@@ -338,7 +339,8 @@ with (gr.Blocks() as demo):
                     'safety_exp': safety_exp,
                     'time': end_time - start_time,
                     'lorecheck': lorecheck,
-                    'is_merge_commit': current_commit['is_merge']
+                    'is_merge_commit': current_commit['is_merge'],
+                    'is_part_patchset': is_part_patchset,
                 })
                 
                 
