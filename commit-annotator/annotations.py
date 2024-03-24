@@ -9,11 +9,20 @@ class Annotations():
     def __init__(self, annotator=None):
         self.annotator = annotator
         self.fields = ['hash', 'annotator',
-                       'understand', 'purpose', 'bfc', 'bpc', 'prc', 'nfc', 'specification',
-                       'asc', 'obvious', 'safety', 'timing', 'memory', 'info', 'safety_exp', 'time', 'lorecheck',
+                       'understand', 'purpose', 
+                       'bfc', 'bpc', 'prc', 'nfc', 'specification', 'asc', 'obvious', 
+                       'safety', 'timing', 'memory', 'info', 'safety_exp', 'time', 
+                       'see_commit_clicked', 'lore_clicked', 'lore_founded',
                        'is_merge_commit', 'is_part_patchset']
-        self.fields_defaults = ['', self.annotator, None, "", None, None, None, None, None,
-                                None, None, None, None, None, None, "", 0, False]
+        
+        # These are the default values for the fields, but only that have an input in the form
+        self.fields_defaults = ['', self.annotator, 
+                                None, "", 
+                                None, None, None, None, None, None, None,
+                                None, None, None, None, "",
+                                False, False, False,
+                                False
+                                ]
         if annotator is None:
             self.filename = None
             self.df = pd.DataFrame(columns=self.fields)
@@ -47,7 +56,7 @@ class Annotations():
         if annotation is None:
             values = self.fields_defaults
         else:
-            values = [annotation[key] for key in self.fields if key != 'time']
+            values = [annotation[key] for key in self.fields if key not in ['time', 'is_merge_commit']]
         return values
 
     def save(self):

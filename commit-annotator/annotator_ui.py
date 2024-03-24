@@ -8,6 +8,9 @@ import time
 
 URL = "https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?h=v6.7&id="
 URL_LORE = "https://lore.kernel.org/all/?q="
+def open_link_js(url):
+    # If arg is a url itself, its not necessary to pass the and url parameter
+    return "(arg) => { window.open('"+url+"' + arg, '_blank'); return arg; }"
 
 # Options sure - not sure
 sure_not5 = [("Yes, I'm sure", 4),
@@ -91,10 +94,15 @@ with (gr.Blocks() as demo):
         # Commit info
         with gr.Column(scale=6):
             hash_txt = gr.Textbox(label="Selected commit", interactive=False)
-            see_commit_link = gr.Markdown()
-            lorecheck_dd = gr.Checkbox(label="I looked for the commit and I found it in kernel.lore")
+            see_commit_link_btn = gr.Button("See commit")
+            see_commit_clicked_cb = gr.Checkbox(label="I clicked on the commit link", visible=False)
+            search_commit_lore_btn = gr.Button("Search commit in lore")
+            lore_clicked_cb = gr.Checkbox(label="I looked for the commit in lore.kernel.org")
+            lore_founded_cb = gr.Checkbox(label="I found it in kernel.lore")
             is_part_patchset_dd = gr.Checkbox(label="The commit is part of a PATCHSET")
             message_txt = gr.HTML()
+            # The following text is just to store the commit message
+            link_to_lore_no_visible = gr.Textbox(label="", interactive=False, visible=False)
             
             with gr.Row():
                 previous_btn =  gr.Button("Previous", scale=1, interactive=False)
@@ -237,11 +245,13 @@ with (gr.Blocks() as demo):
                                  variant="primary")
 
         # Lists of elements
-        data_els = [hash_txt, see_commit_link, message_txt]
+        data_els = [hash_txt, see_commit_link_btn, search_commit_lore_btn, message_txt, link_to_lore_no_visible]
         annotation_els = [annotator_txt,
                           understand_dd, purpose_txt,
                           bfc_dd, bpc_dd, prc_dd, nfc_dd, specification_dd, asc_dd, obvious_dd,
-                          safety_dd, timing_dd, memory_dd, info_dd, safety_txt, lorecheck_dd, is_part_patchset_dd
+                          safety_dd, timing_dd, memory_dd, info_dd, safety_txt, 
+                          see_commit_clicked_cb, lore_clicked_cb, lore_founded_cb,
+                          is_part_patchset_dd
                           ]
         updated_els_on_commit_change = data_els + annotation_els
 
@@ -252,13 +262,36 @@ with (gr.Blocks() as demo):
             """Return all elements that should be updated when a new commit is loaded"""
             message_raw = commits.getCommit(hash)['message_raw']
             first_line = message_raw.split('\n')[0]
-            link = f"[Link to commit]({URL}{hash}) \n\n [Search the commit title in the kernel.lore mailing list]({URL_LORE}{urllib.parse.quote(first_line)})"
+            link_to_commit = f"{URL}{hash}" 
+            link_to_lore = f"{URL_LORE}{urllib.parse.quote(first_line)}"
             current_commit = commits.getCommit(hash)
             message = current_commit['message']
-            updated_vals = [link, message] + annots.get_values(hash)[1:]
-            updated_els = [gr.update(value=item) for item in updated_vals]
-            return tuple([hash] + updated_els)
-
+            updated_vals = annots.get_values(hash)[1:]
+            updated_els = [
+                # For hash
+                gr.update(value=hash),
+                # For link to commit button
+                gr.update(),
+                # For link to lore button
+                gr.update(),
+                # For commit message 
+                gr.update(value=message),
+                # For link to lore (aux)
+                gr.update(value=link_to_lore)
+            # For annotation values
+            ] + [gr.update(value=item) for item in updated_vals]
+            return tuple(updated_els)
+        
+        # When see commit button is clicked
+        @see_commit_link_btn.click(inputs=[hash_txt], outputs=[see_commit_clicked_cb], js=open_link_js(URL))
+        def see_commit(_):
+            return gr.update(value=True)
+        
+        # When see commit in lore button is clicked
+        @search_commit_lore_btn.click(inputs=[link_to_lore_no_visible], outputs=[lore_clicked_cb], js=open_link_js(''))
+        def see_commit_lore(_):
+            return gr.update(value=True)
+        
         # DROPDOWN'S CHANGE LISTENER
         
         @bfc_dd.change(inputs=[bfc_dd], outputs=[obvious_dd, safety_dd])
@@ -275,7 +308,7 @@ with (gr.Blocks() as demo):
             else:
                 return gr.update(visible=False), gr.update(visible=False), gr.update(visible=False), gr.update(visible=False)
         
-        # SAVE LISTENER
+        # SET ANNOTATOR LISTENER
         
         @annotator_txt.submit(inputs=[annotator_txt, hash_txt],
                               outputs=[annotator_txt, understand_dd, purpose_txt,
@@ -324,7 +357,9 @@ with (gr.Blocks() as demo):
         @save_btn.click(inputs=[hash_txt] + annotation_els,
                         outputs=[save_btn, bfcs_df])
         def update_annotation(hash, annotator, understand, purpose, bfc, bpc, prc, nfc, specification,
-                              asc, obvious, safety, timing, memory, info, safety_exp, lorecheck, is_part_patchset):
+                              asc, obvious, safety, timing, memory, info, safety_exp, 
+                              see_commit_clicked, lore_clicked, lore_founded,
+                              is_part_patchset):
             global current_commit
             message = ""
             if annotator == "": message += "Fill in an annotator. "
@@ -361,7 +396,9 @@ with (gr.Blocks() as demo):
                     'info': info,
                     'safety_exp': safety_exp,
                     'time': end_time - start_time,
-                    'lorecheck': lorecheck,
+                    'see_commit_clicked': see_commit_clicked,
+                    'lore_clicked': lore_clicked,
+                    'lore_founded': lore_founded,
                     'is_merge_commit': current_commit['is_merge'],
                     'is_part_patchset': is_part_patchset,
                 })
