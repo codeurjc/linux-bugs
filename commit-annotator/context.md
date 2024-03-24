@@ -30,7 +30,7 @@ Some other features of the commit that may allow us to better understand them:
   * Merge commits are usually just a mechanism for merging a patch set (a set of commits) into the kernel codebase. Therefore, usually they don't alter the code of the system by themselves, and therefore for now we can ignore them.
 
 * Commit in a patchset (set of commits).
-  * Patchsets are usually found in the LORE as threads, with the subject of each message starting with `[PATCH vx m/n]` (for example `[PATCH v4 31/32]`) and then the first line of the commit message. If they are not in a patchset, the subject is usually just `[PATCH]`
+  * Patchsets are usually found in the kernel lore as threads, with the subject of each message starting with `[PATCH vx m/n]` (for example `[PATCH v4 31/32]`) and then the first line of the commit message. If they are not in a patchset, the subject is usually just `[PATCH]`
     * `vx` means this is the x version of the patchset
     * `m/n` means this message refers to the m commit in a set of n commits
     * `0/n` is the message describing the patchset
@@ -39,11 +39,11 @@ Some other features of the commit that may allow us to better understand them:
   * For example, a commit may change an API (say, by adding a new parameter to a function), and then some other commits adapt code in the kernel calling that API, by adding the new parameter.
     * In this case, the "other" commits may seem, if isolated, as BFC, since they are adding "fixing" the missing parameter.
     * But when looked together, that was never a bug, since all commits entered the codebase at the same time, and the bug never materialized (the "bug" and its "patch" were merged together).
-  * Therefore, for all commits we must check the LORE, to see if the commit is a part of a patchset. If the commit is a part of a patchset, we should at least check the main commit in the patchset (usually the one labeled as "0/n").
+  * Therefore, for all commits we must check the kernel lore, to see if the commit is a part of a patchset. If the commit is a part of a patchset, we should at least check the main commit in the patchset (usually the one labeled as "0/n").
 
 * Commit related to a specification change.
   * Specification changes may cause NFCs when new functionality in the new specification is implemented, but they may also convert into a bug something that was not a bug, but specified behavior (for example).
-  * Capturing specifications in the kernel is not always easy, because in many cases they are not documented anywhere. But have in mind that the comment in the commit, or the discussion in LORE maybe lead us to understand that the "collective mind" of the project is changing specifications.
+  * Capturing specifications in the kernel is not always easy, because in many cases they are not documented anywhere. But have in mind that the comment in the commit, or the discussion in the kernel lore maybe lead us to understand that the "collective mind" of the project is changing specifications.
     * For example, it may happen that a commit is for supporting some device that was previously not supported: that would mean that the previous "informal specification" didn't include the device, but the new one does.
     * Another example would be if some specific feature of some already supported hardware is now considered, such as a device that was supported, but only in read-only mode, and the commit adds support for read-write more. In this case, the commit record may show that the "informal specification" was to support it as read-only, but now it "specifies" it is read-write (and this would be that change of specification).
     * Of course, this is different from a case when the device was supposed to be supported read-write, but somebody reports that it works read-only, and the commit fixes that (in that case, we would consider it as a BFC, with no change in specifications). In general, changes to specifications are likely to be relatively rare, but we won't know until we have more evidence.

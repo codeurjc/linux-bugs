@@ -2,13 +2,13 @@
 
 ## For all commits
 
-### Found in LORE
+### Found in the kernel lore
 
-The message corresponding to the presentation of the commit was found in the kernel LORE.
+The message corresponding to the presentation of the commit was found in the kernel lore.
 
 ### Part of a patchset
 
-The commit is a part of a patchset. See details in `context.md` about how to identify this in the kernel LORE.
+The commit is a part of a patchset. See details in `context.md` about how to identify this in the kernel lore.
 
 ### Purpose of the commit
 

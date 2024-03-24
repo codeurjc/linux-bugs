@@ -97,9 +97,9 @@ with (gr.Blocks() as demo):
             see_commit_link_btn = gr.Button("See commit")
             see_commit_clicked_cb = gr.Checkbox(label="I clicked on the commit link", visible=False)
             search_commit_lore_btn = gr.Button("Search commit in lore")
-            lore_clicked_cb = gr.Checkbox(label="I looked for the commit in lore.kernel.org")
-            lore_founded_cb = gr.Checkbox(label="I found it in kernel.lore")
-            is_part_patchset_dd = gr.Checkbox(label="The commit is part of a PATCHSET")
+            lore_clicked_cb = gr.Checkbox(label="I looked for the commit in lore")
+            lore_found_cb = gr.Checkbox(label="I found the commit in lore")
+            is_part_patchset_dd = gr.Checkbox(label="The commit is in a PATCHSET")
             message_txt = gr.HTML()
             # The following text is just to store the commit message
             link_to_lore_no_visible = gr.Textbox(label="", interactive=False, visible=False)
@@ -250,7 +250,7 @@ with (gr.Blocks() as demo):
                           understand_dd, purpose_txt,
                           bfc_dd, bpc_dd, prc_dd, nfc_dd, specification_dd, asc_dd, obvious_dd,
                           safety_dd, timing_dd, memory_dd, info_dd, safety_txt,
-                          see_commit_clicked_cb, lore_clicked_cb, lore_founded_cb,
+                          see_commit_clicked_cb, lore_clicked_cb, lore_found_cb,
                           is_part_patchset_dd
                           ]
         updated_els_on_commit_change = data_els + annotation_els
@@ -358,7 +358,7 @@ with (gr.Blocks() as demo):
                         outputs=[save_btn, bfcs_df])
         def update_annotation(hash, annotator, understand, purpose, bfc, bpc, prc, nfc, specification,
                               asc, obvious, safety, timing, memory, info, safety_exp,
-                              see_commit_clicked, lore_clicked, lore_founded,
+                              see_commit_clicked, lore_clicked, lore_found,
                               is_part_patchset):
             global current_commit
             message = ""
@@ -398,7 +398,7 @@ with (gr.Blocks() as demo):
                     'time': end_time - start_time,
                     'see_commit_clicked': see_commit_clicked,
                     'lore_clicked': lore_clicked,
-                    'lore_founded': lore_founded,
+                    'lore_found': lore_found,
                     'is_merge_commit': current_commit['is_merge'],
                     'is_part_patchset': is_part_patchset,
                 })

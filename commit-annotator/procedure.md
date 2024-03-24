@@ -23,11 +23,11 @@ If this is the first time you start the tool to annotate, read "Start annotating
 
 First of all, fill in your annotator name. It should be a character string, with no spaces (to be on the safe side, use only letters and numbers). Your annotation file will use that string as a suffix. All your annotations will be saved to that file (but only when the "Save annotation" button is clicked, see below).
 
-Start with the first commit in the commit list you see on the left column, by clicking on it. Move to the next commit once you are done with the annoation of the first commit, and so on. You can do that by clikcing on it, or by clicking the "Next" button at the bottom of the middle column (preferible). If possible, don't come back to an already annotated commit, but do so if there are some errors or something you need to fix in your annotation.
+Start with the first commit in the commit list you see on the left column, by clicking on it. Move to the next commit once you are done with the annotation of the first commit, and so on. You can do that by clicking on it, or by clicking the "Next" button at the bottom of the middle column (preferible). If possible, don't come back to an already annotated commit, but do so if there are some errors or something you need to fix in your annotation.
 
-Once the data for commit to annotate is loaded, you'll find that data in the middle column: the hash at the top, the commit comment at the bottom. There are also two links, to the actual commit in the kernel GitHub repository, which gives access to the changes to the source code and some more context, and to a search in lore based on the first line of the commit record. Important: if the commit is a merge commit, a message informing of that will also appear.
+Once the data for commit to annotate is loaded, you'll find that data in the middle column: the hash at the top, the commit comment at the bottom. There are also two buttons, to see the commit information in the kernel GitHub repository, which gives access to the changes to the source code and some more context, and to a search in the kernel lore based on the first line of the commit record. Important: if the commit is a merge commit, a message informing of that will also appear.
 
-In the middle column there are also two checks to annotate (if the commit was found in LORE, and if it is a part of a patchset). On the right column there is the rest of the information to provide as annotation.
+In the middle column there are also three checks to annotate: if the commit was found in the lore, which will be selected automatically when the corresponding button is pressed; if the commit was found in the lore; and if it is a part of a patchset). On the right column there is the rest of the information to provide as annotation.
 
 Now, we're ready to annotate the first commit, and follow on with the next ones.
 
@@ -35,7 +35,7 @@ Now, we're ready to annotate the first commit, and follow on with the next ones.
 
 * Check if the commit is a merge commit. If it is, just move to the next commit.
 
-* Search for the commit in the LORE. Mark that you searched for it, and if found it is a part of a patchset, mark that too. In this case, read the message describing the patchset, and have that information as context.
+* Search for the commit in the kernel lore. Mark that you searched for it, and if found it is a part of a patchset, mark that too. In this case, read the message describing the patchset, and have that information as context.
 
 * Read carefully the text of the commit (in the middle column). Only click on the link to see the commit in GitHub if you really need it. Now, briefly describe the purpose of the commit. This is not exactly a summary of the commit, but a description that should inform your decisions. Usually it will be very short description of your understanding of it, and if you feel that's convenient, the reasons for your annotation (specially if they are not too obvious). For example, "Has into account a condition that was missing, fixing a bug with that. The bug could cause a hang when an interrupt is triggered." Remember that this information is mainly for people who may review your annotation. Fill in also how well you think you understand the commit.
 
