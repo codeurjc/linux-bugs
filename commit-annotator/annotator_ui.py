@@ -206,26 +206,31 @@ with (gr.Blocks() as demo):
                 
                 obvious_dd = gr.Dropdown(label="Is the bug obvious?",
                                          choices=sure_not3,
-                                         interactive=False)
+                                         interactive=False,
+                                         visible=False)
                 
                 safety_dd = gr.Dropdown(label="Is the bug Safety-Related?",
                                         choices=sure_not5,
-                                        interactive=False)
+                                        interactive=False,
+                                        visible=False)
                 
                 timing_dd = gr.Dropdown(label="Is it a Timing and Execution bug?",
                                         choices=sure_not3,
-                                        interactive=False)
+                                        interactive=False,
+                                        visible=False)
                 
                 memory_dd = gr.Dropdown(label="Is it a Memory bug?",
                                         choices=sure_not3,
-                                        interactive=False)
+                                        interactive=False,
+                                        visible=False)
                 
                 info_dd = gr.Dropdown(label="Is it a Exchange of Information bug?",
                                       choices=sure_not3,
-                                      interactive=False)
+                                      interactive=False,
+                                      visible=False)
 
             safety_txt = gr.Textbox(label="Reason for the classification (safety-related and kind)",
-                           lines=2, interactive=True)
+                           lines=2, interactive=True, visible=False)
             
             save_btn = gr.Button("Save annotation",
                                  interactive=True,
@@ -254,6 +259,24 @@ with (gr.Blocks() as demo):
             updated_els = [gr.update(value=item) for item in updated_vals]
             return tuple([hash] + updated_els)
 
+        # DROPDOWN'S CHANGE LISTENER
+        
+        @bfc_dd.change(inputs=[bfc_dd], outputs=[obvious_dd, safety_dd])
+        def change_bfc(value):
+            if value != None and value > 0:
+                return gr.update(visible=True), gr.update(visible=True)
+            else:
+                return gr.update(visible=False), gr.update(visible=False)
+            
+        @safety_dd.change(inputs=[safety_dd], outputs=[timing_dd, memory_dd, info_dd, safety_txt])
+        def change_safety(value):
+            if value != None and value > 0:
+                return gr.update(visible=True), gr.update(visible=True), gr.update(visible=True), gr.update(visible=True)
+            else:
+                return gr.update(visible=False), gr.update(visible=False), gr.update(visible=False), gr.update(visible=False)
+        
+        # SAVE LISTENER
+        
         @annotator_txt.submit(inputs=[annotator_txt, hash_txt],
                               outputs=[annotator_txt, understand_dd, purpose_txt,
                           bfc_dd, bpc_dd, prc_dd, nfc_dd, specification_dd, asc_dd, obvious_dd,
@@ -314,7 +337,7 @@ with (gr.Blocks() as demo):
             if nfc == None: message += "Select if it is a New Feature Commit. "
             if specification == None: message += "Select if it is a Commit related to some specification change. "
             if asc == None: message += "Select if it is a Auto-Suggested Commit. "
-            if obvious == None: message += "Select if it is an obvious bug. "
+            # if obvious == None: message += "Select if it is an obvious bug. "
 
             if message == "":
                 # Save annotation
