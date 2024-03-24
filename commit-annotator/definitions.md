@@ -2,15 +2,27 @@
 
 ## For all commits
 
+### Found in LORE
+
+The message corresponding to the presentation of the commit was found in the kernel LORE.
+
+### Part of a patchset
+
+The commit is a part of a patchset. See details in `context.md` about how to identify this in the kernel LORE.
+
 ### Purpose of the commit
 
 The purpose of the commit is the intention with which the code change (commit) was done. It will usually be a short text, which to some extent may be a summary of the commit message. But in the end, it is what the annotator understands as the purpose or intention of the code change.
 
 The annotator will not always fully understand that purpose, because of technical complexities, unfamiliarity with the details mentioned, deficiencies in the commit message and associated information, or anything else.
 
-## For commits dealing with known or potential failures
+### Definition of failure, bug and fault.
 
 Failures are defined as erroneous behaviour of the software system, when the system deviates from its expected behavior, resulting in an inability to perform its intended functions or deliver the expected outputs. If the failure is caused by a software fault (a bug), it can be fixed only by some change to the software. Therefore, a commit that doesn't change the source code (including its default configuration or other assets that may influence in the behaviour of the system) cannot fix or prevent a bug.
+
+Therefore, we will use "bug" and "fault" as synonyms, which will cause failures. If no failure was found, no bug was found either, so any change could maybe be preventive of bugs, but for sure it will not fix a bug. Also, if a commit does not change the behaviour of the system, it cannot fix a bug (because behaviour before and after the commit is the same). Therefore, changes which only touch comments, or which are only refactoring, cannot fix a bug.
+
+We will also consider changes to the default configuration as changes that could change the behaviour of the system, and therefore could introduce and fix bugs.
 
 ### Bug-fixing commit (BFC)
 
@@ -18,15 +30,19 @@ Any commit that fixes a bug present in the source code, defined as a software fa
 
 ### Bug-Preventing Commit (BPC)
 
-Any commit that prevents a bug that could cause a failure in the future. This kind of commits doesn't fix known bugs, but possible, still undiscovered bugs, that could happen in the future. For example, they could improve the values returned by a function, in a way that is likely to prevent failures in code calling that function.
+Any commit that prevents a bug that could cause a failure in the future. This kind of commit doesn't fix known bugs, but possible, still undiscovered bugs, that could happen in the future. For example, they could improve the values returned by a function, in a way that is likely to prevent failures in code calling that function.
 
 ### Perfective Commit (PRC)
 
-Any commit that improves the quality of the code. This includes refactoring, optimizations, code style improvements, adding comments, etc. The key aspect is that perfective commits do not fix bugs or add new features.
+Any commit that improves the quality of the code (understandability, composability, performance, etc). This includes refactoring, optimizations, code style improvements, adding comments, etc. The key aspect is that perfective commits do not fix bugs or add new features.
 
 ### New Feature Commit (NFC)
 
 Any commit that adds new functionality or capabilities to the codebase. This includes adding support for new hardware, implementing new APIs, exposing new configuration options, etc. The key aspect is that new feature commits add new code to enable new behaviors not previously possible.
+
+### Commit related to a specification change
+
+If the comment of the commit itself, or the discussion of it, leads to think that there was change in specifications since the moment the code the commit is touching was produced. That maybe because the change in specifications is done at the same time the commit is produced, or earlier.
 
 ### Auto-Suggested Commit (ASC)
 
@@ -40,8 +56,7 @@ An obvious bug is a bug which is clearly detectable by usual testing, that is, w
 
 ### Safety-related bug
 
-Any commit that fixes a safety-related bug.
-A safety-related bug is any bug with potential to affect safety-relevant behaviors, as indicated by the categorizations described below, even when it may not be detected by typical testing because occurrence is intermittent and/or rare.
+Any commit that fixes a safety-related bug. A safety-related bug is any bug with potential to affect safety-relevant behaviors, as indicated by the categorizations described below, even when it may not be detected by typical testing because occurrence is intermittent and/or rare.
 
 ## In case it is a safety-related bug
 
@@ -56,14 +71,3 @@ With respect to memory, the effects of faults such as those listed below can be 
 ### Exchange of Information
 
 With respect to the exchange of information, the causes for faults or effects of faults such as those listed below can be considered for each sender or each receiver: repetition of information, loss of information, delay of information, insertion of information, masquerade or incorrect addressing of information, incorrect sequence of information, corruption of information, asymmetric information sent from a sender to multiple receivers, information from a sender received by only a subset of the receivers or blocking access to a communication channel.
-
-## In case it is a commit that belongs to a part of PATCH (commit train)
-
-
-Some commits may belong to a larger series of commits called a "patch series" or "commit train". These can be identified by:
-- A link in the commit message to the lore.kernel mailing list thread where the series was posted. The first commit in the series (with ID 0/00/000) is the "parent" commit.
-- A "Search the commit title in the kernel.lore mailing list" link at the top of the commit message. This allows searching for the commit title to find the mailing list thread and parent commit. However, some commits may not appear in the search results.
-- Checking if the commit ID contains a "patch series number" like 3/12 indicating it is part of a larger series.
-- Looking at the diff content and commit message for any references to a patch series or other commits that are part of the same changes.
-- 
-By finding the parent commit and series, it can be determined if the commit belongs to a larger patch set. The context of the series and discussions on the mailing list may provide additional information.

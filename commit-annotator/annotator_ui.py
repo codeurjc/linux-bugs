@@ -103,7 +103,7 @@ with (gr.Blocks() as demo):
             message_txt = gr.HTML()
             # The following text is just to store the commit message
             link_to_lore_no_visible = gr.Textbox(label="", interactive=False, visible=False)
-            
+
             with gr.Row():
                 previous_btn =  gr.Button("Previous", scale=1, interactive=False)
                 next_btn = gr.Button("Next", scale=1, interactive=False)
@@ -160,7 +160,7 @@ with (gr.Blocks() as demo):
                                   choices=sure_not5,
                                   interactive=False)
 
-                specification_dd = gr.Radio(label="Is it a Commit related to a specification change?",
+                specification_dd = gr.Radio(label="Is it related to a specification change?",
                                   choices=sure_not3,
                                   interactive=False)
     
@@ -249,7 +249,7 @@ with (gr.Blocks() as demo):
         annotation_els = [annotator_txt,
                           understand_dd, purpose_txt,
                           bfc_dd, bpc_dd, prc_dd, nfc_dd, specification_dd, asc_dd, obvious_dd,
-                          safety_dd, timing_dd, memory_dd, info_dd, safety_txt, 
+                          safety_dd, timing_dd, memory_dd, info_dd, safety_txt,
                           see_commit_clicked_cb, lore_clicked_cb, lore_founded_cb,
                           is_part_patchset_dd
                           ]
@@ -262,7 +262,7 @@ with (gr.Blocks() as demo):
             """Return all elements that should be updated when a new commit is loaded"""
             message_raw = commits.getCommit(hash)['message_raw']
             first_line = message_raw.split('\n')[0]
-            link_to_commit = f"{URL}{hash}" 
+            link_to_commit = f"{URL}{hash}"
             link_to_lore = f"{URL_LORE}{urllib.parse.quote(first_line)}"
             current_commit = commits.getCommit(hash)
             message = current_commit['message']
@@ -274,42 +274,42 @@ with (gr.Blocks() as demo):
                 gr.update(),
                 # For link to lore button
                 gr.update(),
-                # For commit message 
+                # For commit message
                 gr.update(value=message),
                 # For link to lore (aux)
                 gr.update(value=link_to_lore)
             # For annotation values
             ] + [gr.update(value=item) for item in updated_vals]
             return tuple(updated_els)
-        
+
         # When see commit button is clicked
         @see_commit_link_btn.click(inputs=[hash_txt], outputs=[see_commit_clicked_cb], js=open_link_js(URL))
         def see_commit(_):
             return gr.update(value=True)
-        
+
         # When see commit in lore button is clicked
         @search_commit_lore_btn.click(inputs=[link_to_lore_no_visible], outputs=[lore_clicked_cb], js=open_link_js(''))
         def see_commit_lore(_):
             return gr.update(value=True)
-        
+
         # DROPDOWN'S CHANGE LISTENER
-        
+
         @bfc_dd.change(inputs=[bfc_dd], outputs=[obvious_dd, safety_dd])
         def change_bfc(value):
             if value != None and value > 0:
                 return gr.update(visible=True), gr.update(visible=True)
             else:
                 return gr.update(visible=False), gr.update(visible=False)
-            
+
         @safety_dd.change(inputs=[safety_dd], outputs=[timing_dd, memory_dd, info_dd, safety_txt])
         def change_safety(value):
             if value != None and value > 0:
                 return gr.update(visible=True), gr.update(visible=True), gr.update(visible=True), gr.update(visible=True)
             else:
                 return gr.update(visible=False), gr.update(visible=False), gr.update(visible=False), gr.update(visible=False)
-        
+
         # SET ANNOTATOR LISTENER
-        
+
         @annotator_txt.submit(inputs=[annotator_txt, hash_txt],
                               outputs=[annotator_txt, understand_dd, purpose_txt,
                           bfc_dd, bpc_dd, prc_dd, nfc_dd, specification_dd, asc_dd, obvious_dd,
@@ -357,7 +357,7 @@ with (gr.Blocks() as demo):
         @save_btn.click(inputs=[hash_txt] + annotation_els,
                         outputs=[save_btn, bfcs_df])
         def update_annotation(hash, annotator, understand, purpose, bfc, bpc, prc, nfc, specification,
-                              asc, obvious, safety, timing, memory, info, safety_exp, 
+                              asc, obvious, safety, timing, memory, info, safety_exp,
                               see_commit_clicked, lore_clicked, lore_founded,
                               is_part_patchset):
             global current_commit
