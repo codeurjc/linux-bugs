@@ -4,3 +4,6 @@
 - [COMMIT 61 - e3d5ea2c01] An infinite loop can result in a deadlock in execution and is therefore a safety related bug of the type "Timming and Execution".
 - [COMMIT 64 - 32f1b53fe8] A hang in the application applies to a safety related error "Timming and Execution".
 - [COMMIT 80 - c95aa2bab9] Build errors can be fixed, but never reach production (not really a functionality error)
+
+More notes:
+- Some goes wrong with the random commits. I feel that many commits are consecutive when annotated them. Examples: 352,353,354 ..
