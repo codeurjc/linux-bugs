@@ -2,6 +2,8 @@ import pandas as pd
 import numpy as np
 import gradio as gr
 
+URL_LORE = "https://lore.kernel.org/all/?q="
+
 def get_BFCs(results_df):
     df = results_df[['hash', 'bfc']]
     return df
@@ -155,8 +157,10 @@ with (gr.Blocks() as ui):
         B_md = gr.Markdown()
         C_md = gr.Markdown()
     with gr.Row():
-        R_txt = gr.Textbox(label="Comment by reviewer",
-                           lines=5, interactive=False)
+        with gr.Column():
+            R_txt = gr.Textbox(label="Comment by reviewer",
+                               lines=5, interactive=False)
+            R_lore = gr.Markdown(value=f"[Link to LORE]({URL_LORE})")
         with gr.Column():
             hash_txt = gr.Textbox(label="Selected hash", interactive=False)
             review_dds = [gr.Dropdown(**cfg) for cfg in review_dds_cfg.values()]
