@@ -70,6 +70,13 @@ review_dds_cfg = {
 }
 review_cols = ['hash', 'reviewer', *review_dds_cfg.keys(), 'comment']
 
+def filter_field(df, field):
+    """Filter dataframe, to show only hash and field for all annotators
+
+    For example, if field is bfc, filter for including
+    hash, bfcA, bfcB, bfcC"""
+    return df[['hash', f'{field}A', f'{field}B', f'{field}C']]
+
 class ReviewsDF():
     """Class for storing reviews of annotations (as a dataframe)"""
 
@@ -143,13 +150,13 @@ def get_annotation(df, hash):
               f"* **safety_exp:** {safety_exp}\n")
     return result
 
-
+# Layout and widgets of the user interface
 with (gr.Blocks() as ui):
     with gr.Row():
-        filter_field_ddw = gr.Dropdown(label="Field for selection",
-                                 choices=[("BFC", "bfc"),
-                                          ("BPC", "bpc")],
-                                 value="bfc")
+        filter_field_ddw = gr.Dropdown(
+            label="Field for selection",
+            choices=[(field.upper(), field) for field in results_fields],
+            value=results_fields[0])
         filter_ddw = gr.Dropdown(label="Select commits",
                                  choices=[("All", "all"),
                                           ("All difference <= 1", "all-dif<=1"),
@@ -157,13 +164,14 @@ with (gr.Blocks() as ui):
                                           ("All difference, added > 1", "all-dif-sum>1"),
                                           ("All annotators equal", "all-equal"),
                                           ("Any annotator different", "any-dif"),
-                                          ("Annotators A, B different", "ab-dif"),
-                                          ("Annotators B, C different", "bc-dif"),
-                                          ("Annotators A, C different", "ac-dif")],
+                                          ("Annotators A, B different", "a!=b"),
+                                          ("Annotators B, C different", "b!=c"),
+                                          ("Annotators A, C different", "a!=c")],
                                  value="all")
         search_txt = gr.Textbox(label="Search commit")
         count_md = gr.Markdown(f"Commits: {len(results.index)}")
-    results_df = gr.Dataframe(value=results, height=300)
+    results_df = gr.Dataframe(value=filter_field(results, results_fields[0]),
+                              height=300)
     with gr.Row():
         A_md = gr.Markdown()
         B_md = gr.Markdown()
@@ -179,9 +187,8 @@ with (gr.Blocks() as ui):
             R_btn = gr.Button("Save review", interactive=False)
 
 
-    @filter_ddw.change(inputs=[filter_field_ddw, filter_ddw],
-                       outputs=[results_df, count_md])
     def filter_records(field, choice):
+        """Filter records to show, depending on selected field and choice"""
         if choice == "all":
             df = results
         elif choice == "all-equal":
@@ -209,8 +216,17 @@ with (gr.Blocks() as ui):
         else:
             raise ValueError("Choice not recognized")
         count = len(df.index)
+        df = filter_field(df, field)
         return df, f"Commits: {count}"
 
+
+    # Configure changes in shown records when field or choice changed
+    filter_field_ddw.change(filter_records,
+                      inputs=[filter_field_ddw, filter_ddw],
+                      outputs=[results_df, count_md])
+    filter_ddw.change(filter_records,
+                      inputs=[filter_field_ddw, filter_ddw],
+                      outputs=[results_df, count_md])
 
     @search_txt.change(inputs=[search_txt], outputs=[results_df, count_md])
     def find_record(hash):
