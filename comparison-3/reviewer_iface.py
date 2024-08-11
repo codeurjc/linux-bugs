@@ -2,29 +2,37 @@ import pandas as pd
 import numpy as np
 import gradio as gr
 
+# Reviewer id
+reviewer_id = 'jesus'
+# Reviewer file
+review_filename = f'review_{reviewer_id}.csv'
+
+# Link to LORE API search
 URL_LORE = "https://lore.kernel.org/all/?q="
 
-def get_BFCs(results_df):
-    df = results_df[['hash', 'bfc']]
+# Fields of interest for querying results
+results_fields = ['bfc', 'bpc']
+def get_results(results_df):
+    df = results_df[['hash', *results_fields]]
     return df
 
-results_A = pd.read_csv('annotations_Michel.csv')
-results_B = pd.read_csv('annotations_Abhishek.csv')
-results_C = pd.read_csv('annotations_David.csv')
+# Read all annotations from the files created by annotators
+annotations_A = pd.read_csv('annotations_Michel.csv')
+annotations_B = pd.read_csv('annotations_Abhishek.csv')
+annotations_C = pd.read_csv('annotations_David.csv')
 
-BFCs_A = get_BFCs(results_A)
-BFCs_B = get_BFCs(results_B)
-BFCs_C = get_BFCs(results_C)
+# Produce results, a dataframe with the fields to search results,
+# for all annotators
+results_A = get_results(annotations_A)
+results_B = get_results(annotations_B)
+results_C = get_results(annotations_C)
 
-BFCs = pd.merge(BFCs_A, BFCs_B, on='hash', how='inner', suffixes=('A', 'B'))
+results = pd.merge(results_A, results_B, on='hash', how='inner', suffixes=('A', 'B'))
+results = pd.merge(results, results_C, on='hash', how='inner')
+results_renaming = {name: name + 'C' for name in results_fields}
+results = results.rename(columns=results_renaming)
 
-BFCs = pd.merge(BFCs, BFCs_C, on='hash', how='inner', suffixes=('', 'C'))
-BFCs = BFCs[['hash', 'bfcA', 'bfcB', 'bfc']]
-BFCs = BFCs.rename(columns={'bfc': 'bfcC'})
-
-# Reviewer file
-review_filename = 'review.csv'
-
+# Configuration for the fields to fill in by the reviewer
 review_dds_cfg = {
     "iunderstd": {'label': "I understand the commit",
                   'choices': [0, 1, 2, 3, 4],
@@ -61,6 +69,13 @@ review_dds_cfg = {
                  'interactive': False}
 }
 review_cols = ['hash', 'reviewer', *review_dds_cfg.keys(), 'comment']
+
+def filter_field(df, field):
+    """Filter dataframe, to show only hash and field for all annotators
+
+    For example, if field is bfc, filter for including
+    hash, bfcA, bfcB, bfcC"""
+    return df[['hash', f'{field}A', f'{field}B', f'{field}C']]
 
 class ReviewsDF():
     """Class for storing reviews of annotations (as a dataframe)"""
@@ -100,7 +115,7 @@ class ReviewsDF():
         self.df.to_csv(filename, index=False)
 
 
-BFCs_R = ReviewsDF(review_filename)
+results_R = ReviewsDF(review_filename)
 
 def get_annotation(df, hash):
     """Produce markdown for the annotation of a given short hash
@@ -135,9 +150,13 @@ def get_annotation(df, hash):
               f"* **safety_exp:** {safety_exp}\n")
     return result
 
-
+# Layout and widgets of the user interface
 with (gr.Blocks() as ui):
     with gr.Row():
+        filter_field_ddw = gr.Dropdown(
+            label="Field for selection",
+            choices=[(field.upper(), field) for field in results_fields],
+            value=results_fields[0])
         filter_ddw = gr.Dropdown(label="Select commits",
                                  choices=[("All", "all"),
                                           ("All difference <= 1", "all-dif<=1"),
@@ -145,13 +164,14 @@ with (gr.Blocks() as ui):
                                           ("All difference, added > 1", "all-dif-sum>1"),
                                           ("All annotators equal", "all-equal"),
                                           ("Any annotator different", "any-dif"),
-                                          ("Annotators A, B different", "ab-dif"),
-                                          ("Annotators B, C different", "bc-dif"),
-                                          ("Annotators A, C different", "ac-dif")],
+                                          ("Annotators A, B different", "a!=b"),
+                                          ("Annotators B, C different", "b!=c"),
+                                          ("Annotators A, C different", "a!=c")],
                                  value="all")
         search_txt = gr.Textbox(label="Search commit")
-        count_md = gr.Markdown(f"Commits: {len(BFCs.index)}")
-    bfcs_df = gr.Dataframe(value=BFCs, height=300)
+        count_md = gr.Markdown(f"Commits: {len(results.index)}")
+    results_df = gr.Dataframe(value=filter_field(results, results_fields[0]),
+                              height=300)
     with gr.Row():
         A_md = gr.Markdown()
         B_md = gr.Markdown()
@@ -167,52 +187,69 @@ with (gr.Blocks() as ui):
             R_btn = gr.Button("Save review", interactive=False)
 
 
-    @filter_ddw.change(inputs=[filter_ddw], outputs=[bfcs_df, count_md])
-    def filter_records(choice):
+    def filter_records(field, choice):
+        """Filter records to show, depending on selected field and choice"""
         if choice == "all":
-            df = BFCs
+            df = results
         elif choice == "all-equal":
-            df = BFCs.query("(bfcA == bfcB) and (bfcB == bfcC)")
+            df = results.query(f"({field}A == {field}B) and ({field}B == {field}C)")
         elif choice == "all-dif<=1":
-            df = BFCs.query("(abs(bfcA-bfcB) <= 1) and (abs(bfcB-bfcC) <= 1) and (abs(bfcA-bfcC) <= 1)")
+            df = results.query(f"(abs({field}A-{field}B) <= 1) "
+                               f"and (abs({field}B-{field}C) <= 1) "
+                               f"and (abs({field}A-{field}C) <= 1)")
         elif choice == "any-dif>1":
-            df = BFCs.query("(abs(bfcA-bfcB) > 1) or (abs(bfcB-bfcC) > 1) or (abs(bfcA-bfcC) > 1)")
+            df = results.query(f"(abs({field}A-{field}B) > 1) "
+                               f"or (abs({field}B-{field}C) > 1) "
+                               f"or (abs({field}A-{field}C) > 1)")
         elif choice == "all-dif-sum>1":
-            df = BFCs.query("abs(bfcA-bfcB) + abs(bfcB-bfcC) + abs(bfcA-bfcC) > 1")
+            df = results.query(f"abs({field}A-{field}B) "
+                               f"+ abs({field}B-{field}C) "
+                               f"+ abs({field}A-{field}C) > 1")
         elif choice == "any-dif":
-            df = BFCs.query("(bfcA != bfcB) or (bfcB != bfcC)")
-        elif choice == "ab-dif":
-            df = BFCs.query("bfcA != bfcB")
-        elif choice == "bc-dif":
-            df = BFCs.query("bfcB != bfcC")
-        elif choice == "ac-dif":
-            df = BFCs.query("bfcA != bfcC")
+            df = results.query(f"({field}A != {field}B) or ({field}B != {field}C)")
+        elif choice == "a!=b":
+            df = results.query(f"{field}A != {field}B")
+        elif choice == "b!=c":
+            df = results.query(f"{field}B != {field}C")
+        elif choice == "a!=c":
+            df = results.query(f"{field}A != {field}C")
+        else:
+            raise ValueError("Choice not recognized")
         count = len(df.index)
+        df = filter_field(df, field)
         return df, f"Commits: {count}"
 
 
-    @search_txt.change(inputs=[search_txt], outputs=[bfcs_df, count_md])
+    # Configure changes in shown records when field or choice changed
+    filter_field_ddw.change(filter_records,
+                      inputs=[filter_field_ddw, filter_ddw],
+                      outputs=[results_df, count_md])
+    filter_ddw.change(filter_records,
+                      inputs=[filter_field_ddw, filter_ddw],
+                      outputs=[results_df, count_md])
+
+    @search_txt.change(inputs=[search_txt], outputs=[results_df, count_md])
     def find_record(hash):
-        df = BFCs[BFCs['hash'].str.startswith(hash)]
+        df = results[results['hash'].str.startswith(hash)]
         count = len(df.index)
         return df, f"Commits: {count}"
 
 
-    def select_commit(event: gr.SelectData, bfcs):
+    def select_commit(event: gr.SelectData, results):
         # print(event.index, event.target, event.value, bfcs)
-        row = bfcs.iloc[event.index[0]]
+        row = results.iloc[event.index[0]]
         hash = row['hash']
-        annot_A = get_annotation(results_A, hash)
-        annot_B = get_annotation(results_B, hash)
-        annot_C = get_annotation(results_C, hash)
-        values = BFCs_R.get_values(hash)
+        annot_A = get_annotation(annotations_A, hash)
+        annot_B = get_annotation(annotations_B, hash)
+        annot_C = get_annotation(annotations_C, hash)
+        values = results_R.get_values(hash)
         updates = [gr.update(interactive=True, value=value) for value in values]
         return (hash,
                 "**Michel**\n\n" + annot_A, "**Abishek**\n\n" + annot_B, "**David**\n\n" + annot_C,
                 *updates
                 )
 
-    bfcs_df.select(select_commit, inputs=[bfcs_df],
+    results_df.select(select_commit, inputs=[results_df],
                    outputs=[hash_txt, A_md, B_md, C_md,
                             *review_dds, R_txt])
 
@@ -221,12 +258,12 @@ with (gr.Blocks() as ui):
     def update_review(hash, comment, *review_dds):
         """Save review to file"""
         widgets = {'hash': hash,
-                   'reviewer': 'jesus'}
+                   'reviewer': reviewer_id}
         for widget, label in zip(review_dds, review_dds_cfg.keys()):
             widgets[label] = widget
         widgets['comment'] = comment
-        BFCs_R.update(widgets)
-        BFCs_R.save(review_filename)
+        results_R.update(widgets)
+        results_R.save(review_filename)
         return gr.update(interactive=False)
 
     def review_changed():
