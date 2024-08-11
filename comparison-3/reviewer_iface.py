@@ -2,8 +2,10 @@ import pandas as pd
 import numpy as np
 import gradio as gr
 
+# Reviewer id
+reviewer_id = 'jesus'
 # Reviewer file
-review_filename = 'review.csv'
+review_filename = f'review_{reviewer_id}.csv'
 
 # Link to LORE API search
 URL_LORE = "https://lore.kernel.org/all/?q="
@@ -240,7 +242,7 @@ with (gr.Blocks() as ui):
     def update_review(hash, comment, *review_dds):
         """Save review to file"""
         widgets = {'hash': hash,
-                   'reviewer': 'jesus'}
+                   'reviewer': reviewer_id}
         for widget, label in zip(review_dds, review_dds_cfg.keys()):
             widgets[label] = widget
         widgets['comment'] = comment
