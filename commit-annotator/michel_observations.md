@@ -9,3 +9,4 @@
 More notes:
 - Some goes wrong with the random commits. I feel that many commits are consecutive when annotated them. Examples: 352,353,354 ..
 - Maybe "Perfective Commit" could have sub-classes. Change maintainers/doc its not the same as code refactor
+- Commits 949, 951, and 975 are the same???
