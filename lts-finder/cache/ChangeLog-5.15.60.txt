@@ -1,0 +1,1119 @@
+commit 7217df81279835a7aee62a07aabb7b8fb8c766f2
+Author: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+Date:   Thu Aug 11 13:07:54 2022 +0200
+
+    Linux 5.15.60
+    
+    Link: https://lore.kernel.org/r/20220809175514.276643253@linuxfoundation.org
+    Tested-by: Florian Fainelli <f.fainelli@gmail.com>
+    Tested-by: Bagas Sanjaya <bagasdotme@gmail.com>
+    Tested-by: Linux Kernel Functional Testing <lkft@linaro.org>
+    Tested-by: Sudip Mukherjee <sudip.mukherjee@codethink.co.uk>
+    Tested-by: Guenter Roeck <linux@roeck-us.net>
+    Tested-by: Jon Hunter <jonathanh@nvidia.com>
+    Tested-by: Shuah Khan <skhan@linuxfoundation.org>
+    Tested-by: Ron Economos <re@w6rz.net>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 5c5c77746ce1108833d1fda005598a749eaef2cb
+Author: Pawan Gupta <pawan.kumar.gupta@linux.intel.com>
+Date:   Tue Aug 2 15:47:02 2022 -0700
+
+    x86/speculation: Add LFENCE to RSB fill sequence
+    
+    commit ba6e31af2be96c4d0536f2152ed6f7b6c11bca47 upstream.
+    
+    RSB fill sequence does not have any protection for miss-prediction of
+    conditional branch at the end of the sequence. CPU can speculatively
+    execute code immediately after the sequence, while RSB filling hasn't
+    completed yet.
+    
+      #define __FILL_RETURN_BUFFER(reg, nr, sp)       \
+              mov     $(nr/2), reg;                   \
+      771:                                            \
+              ANNOTATE_INTRA_FUNCTION_CALL;           \
+              call    772f;                           \
+      773:    /* speculation trap */                  \
+              UNWIND_HINT_EMPTY;                      \
+              pause;                                  \
+              lfence;                                 \
+              jmp     773b;                           \
+      772:                                            \
+              ANNOTATE_INTRA_FUNCTION_CALL;           \
+              call    774f;                           \
+      775:    /* speculation trap */                  \
+              UNWIND_HINT_EMPTY;                      \
+              pause;                                  \
+              lfence;                                 \
+              jmp     775b;                           \
+      774:                                            \
+              add     $(BITS_PER_LONG/8) * 2, sp;     \
+              dec     reg;                            \
+              jnz     771b;        <----- CPU can miss-predict here.
+    
+    Before RSB is filled, RETs that come in program order after this macro
+    can be executed speculatively, making them vulnerable to RSB-based
+    attacks.
+    
+    Mitigate it by adding an LFENCE after the conditional branch to prevent
+    speculation while RSB is being filled.
+    
+    Suggested-by: Andrew Cooper <andrew.cooper3@citrix.com>
+    Signed-off-by: Pawan Gupta <pawan.kumar.gupta@linux.intel.com>
+    Signed-off-by: Borislav Petkov <bp@suse.de>
+    Signed-off-by: Daniel Sneddon <daniel.sneddon@linux.intel.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 7fcd99e889c0634f8275ae7a6b06aec4a22c8715
+Author: Daniel Sneddon <daniel.sneddon@linux.intel.com>
+Date:   Tue Aug 2 15:47:01 2022 -0700
+
+    x86/speculation: Add RSB VM Exit protections
+    
+    commit 2b1299322016731d56807aa49254a5ea3080b6b3 upstream.
+    
+    tl;dr: The Enhanced IBRS mitigation for Spectre v2 does not work as
+    documented for RET instructions after VM exits. Mitigate it with a new
+    one-entry RSB stuffing mechanism and a new LFENCE.
+    
+    == Background ==
+    
+    Indirect Branch Restricted Speculation (IBRS) was designed to help
+    mitigate Branch Target Injection and Speculative Store Bypass, i.e.
+    Spectre, attacks. IBRS prevents software run in less privileged modes
+    from affecting branch prediction in more privileged modes. IBRS requires
+    the MSR to be written on every privilege level change.
+    
+    To overcome some of the performance issues of IBRS, Enhanced IBRS was
+    introduced.  eIBRS is an "always on" IBRS, in other words, just turn
+    it on once instead of writing the MSR on every privilege level change.
+    When eIBRS is enabled, more privileged modes should be protected from
+    less privileged modes, including protecting VMMs from guests.
+    
+    == Problem ==
+    
+    Here's a simplification of how guests are run on Linux' KVM:
+    
+    void run_kvm_guest(void)
+    {
+            // Prepare to run guest
+            VMRESUME();
+            // Clean up after guest runs
+    }
+    
+    The execution flow for that would look something like this to the
+    processor:
+    
+    1. Host-side: call run_kvm_guest()
+    2. Host-side: VMRESUME
+    3. Guest runs, does "CALL guest_function"
+    4. VM exit, host runs again
+    5. Host might make some "cleanup" function calls
+    6. Host-side: RET from run_kvm_guest()
+    
+    Now, when back on the host, there are a couple of possible scenarios of
+    post-guest activity the host needs to do before executing host code:
+    
+    * on pre-eIBRS hardware (legacy IBRS, or nothing at all), the RSB is not
+    touched and Linux has to do a 32-entry stuffing.
+    
+    * on eIBRS hardware, VM exit with IBRS enabled, or restoring the host
+    IBRS=1 shortly after VM exit, has a documented side effect of flushing
+    the RSB except in this PBRSB situation where the software needs to stuff
+    the last RSB entry "by hand".
+    
+    IOW, with eIBRS supported, host RET instructions should no longer be
+    influenced by guest behavior after the host retires a single CALL
+    instruction.
+    
+    However, if the RET instructions are "unbalanced" with CALLs after a VM
+    exit as is the RET in #6, it might speculatively use the address for the
+    instruction after the CALL in #3 as an RSB prediction. This is a problem
+    since the (untrusted) guest controls this address.
+    
+    Balanced CALL/RET instruction pairs such as in step #5 are not affected.
+    
+    == Solution ==
+    
+    The PBRSB issue affects a wide variety of Intel processors which
+    support eIBRS. But not all of them need mitigation. Today,
+    X86_FEATURE_RSB_VMEXIT triggers an RSB filling sequence that mitigates
+    PBRSB. Systems setting RSB_VMEXIT need no further mitigation - i.e.,
+    eIBRS systems which enable legacy IBRS explicitly.
+    
+    However, such systems (X86_FEATURE_IBRS_ENHANCED) do not set RSB_VMEXIT
+    and most of them need a new mitigation.
+    
+    Therefore, introduce a new feature flag X86_FEATURE_RSB_VMEXIT_LITE
+    which triggers a lighter-weight PBRSB mitigation versus RSB_VMEXIT.
+    
+    The lighter-weight mitigation performs a CALL instruction which is
+    immediately followed by a speculative execution barrier (INT3). This
+    steers speculative execution to the barrier -- just like a retpoline
+    -- which ensures that speculation can never reach an unbalanced RET.
+    Then, ensure this CALL is retired before continuing execution with an
+    LFENCE.
+    
+    In other words, the window of exposure is opened at VM exit where RET
+    behavior is troublesome. While the window is open, force RSB predictions
+    sampling for RET targets to a dead end at the INT3. Close the window
+    with the LFENCE.
+    
+    There is a subset of eIBRS systems which are not vulnerable to PBRSB.
+    Add these systems to the cpu_vuln_whitelist[] as NO_EIBRS_PBRSB.
+    Future systems that aren't vulnerable will set ARCH_CAP_PBRSB_NO.
+    
+      [ bp: Massage, incorporate review comments from Andy Cooper. ]
+    
+    Signed-off-by: Daniel Sneddon <daniel.sneddon@linux.intel.com>
+    Co-developed-by: Pawan Gupta <pawan.kumar.gupta@linux.intel.com>
+    Signed-off-by: Pawan Gupta <pawan.kumar.gupta@linux.intel.com>
+    Signed-off-by: Borislav Petkov <bp@suse.de>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit c81d1bb58c88ab831e02539a26ad47860e8d6f0c
+Author: Ning Qiang <sohu0106@126.com>
+Date:   Wed Jul 13 23:37:34 2022 +0800
+
+    macintosh/adb: fix oob read in do_adb_query() function
+    
+    commit fd97e4ad6d3b0c9fce3bca8ea8e6969d9ce7423b upstream.
+    
+    In do_adb_query() function of drivers/macintosh/adb.c, req->data is copied
+    form userland. The parameter "req->data[2]" is missing check, the array
+    size of adb_handler[] is 16, so adb_handler[req->data[2]].original_address and
+    adb_handler[req->data[2]].handler_id will lead to oob read.
+    
+    Cc: stable <stable@kernel.org>
+    Signed-off-by: Ning Qiang <sohu0106@126.com>
+    Reviewed-by: Kees Cook <keescook@chromium.org>
+    Reviewed-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+    Acked-by: Benjamin Herrenschmidt <benh@kernel.crashing.org>
+    Signed-off-by: Michael Ellerman <mpe@ellerman.id.au>
+    Link: https://lore.kernel.org/r/20220713153734.2248-1-sohu0106@126.com
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit d98cf2b40c2059eefa757fb1ab2607e5483caa05
+Author: Hilda Wu <hildawu@realtek.com>
+Date:   Thu Jul 14 19:25:23 2022 +0800
+
+    Bluetooth: btusb: Add Realtek RTL8852C support ID 0x13D3:0x3586
+    
+    commit 6ad353dfc8ee3230a5e123c21da50f1b64cc4b39 upstream.
+    
+    Add the support ID(0x13D3, 0x3586) to usb_device_id table for
+    Realtek RTL8852C.
+    
+    The device info from /sys/kernel/debug/usb/devices as below.
+    
+    T:  Bus=03 Lev=01 Prnt=01 Port=02 Cnt=01 Dev#=  2 Spd=12   MxCh= 0
+    D:  Ver= 1.00 Cls=e0(wlcon) Sub=01 Prot=01 MxPS=64 #Cfgs=  1
+    P:  Vendor=13d3 ProdID=3586 Rev= 0.00
+    S:  Manufacturer=Realtek
+    S:  Product=Bluetooth Radio
+    S:  SerialNumber=00e04c000001
+    C:* #Ifs= 2 Cfg#= 1 Atr=e0 MxPwr=500mA
+    I:* If#= 0 Alt= 0 #EPs= 3 Cls=e0(wlcon) Sub=01 Prot=01 Driver=btusb
+    E:  Ad=81(I) Atr=03(Int.) MxPS=  16 Ivl=1ms
+    E:  Ad=02(O) Atr=02(Bulk) MxPS=  64 Ivl=0ms
+    E:  Ad=82(I) Atr=02(Bulk) MxPS=  64 Ivl=0ms
+    I:* If#= 1 Alt= 0 #EPs= 2 Cls=e0(wlcon) Sub=01 Prot=01 Driver=btusb
+    E:  Ad=03(O) Atr=01(Isoc) MxPS=   0 Ivl=1ms
+    E:  Ad=83(I) Atr=01(Isoc) MxPS=   0 Ivl=1ms
+    I:  If#= 1 Alt= 1 #EPs= 2 Cls=e0(wlcon) Sub=01 Prot=01 Driver=btusb
+    E:  Ad=03(O) Atr=01(Isoc) MxPS=   9 Ivl=1ms
+    E:  Ad=83(I) Atr=01(Isoc) MxPS=   9 Ivl=1ms
+    I:  If#= 1 Alt= 2 #EPs= 2 Cls=e0(wlcon) Sub=01 Prot=01 Driver=btusb
+    E:  Ad=03(O) Atr=01(Isoc) MxPS=  17 Ivl=1ms
+    E:  Ad=83(I) Atr=01(Isoc) MxPS=  17 Ivl=1ms
+    I:  If#= 1 Alt= 3 #EPs= 2 Cls=e0(wlcon) Sub=01 Prot=01 Driver=btusb
+    E:  Ad=03(O) Atr=01(Isoc) MxPS=  25 Ivl=1ms
+    E:  Ad=83(I) Atr=01(Isoc) MxPS=  25 Ivl=1ms
+    I:  If#= 1 Alt= 4 #EPs= 2 Cls=e0(wlcon) Sub=01 Prot=01 Driver=btusb
+    E:  Ad=03(O) Atr=01(Isoc) MxPS=  33 Ivl=1ms
+    E:  Ad=83(I) Atr=01(Isoc) MxPS=  33 Ivl=1ms
+    I:  If#= 1 Alt= 5 #EPs= 2 Cls=e0(wlcon) Sub=01 Prot=01 Driver=btusb
+    E:  Ad=03(O) Atr=01(Isoc) MxPS=  49 Ivl=1ms
+    E:  Ad=83(I) Atr=01(Isoc) MxPS=  49 Ivl=1ms
+    
+    Signed-off-by: Hilda Wu <hildawu@realtek.com>
+    Signed-off-by: Luiz Augusto von Dentz <luiz.von.dentz@intel.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit ee421ad8973b5abb8f3948b4bfab1810b420717f
+Author: Hilda Wu <hildawu@realtek.com>
+Date:   Thu Jul 14 19:25:22 2022 +0800
+
+    Bluetooth: btusb: Add Realtek RTL8852C support ID 0x13D3:0x3587
+    
+    commit 8f0054dd29373cd877db87751c143610561d549d upstream.
+    
+    Add the support ID(0x13D3, 0x3587) to usb_device_id table for
+    Realtek RTL8852C.
+    
+    The device info from /sys/kernel/debug/usb/devices as below.
+    
+    T:  Bus=03 Lev=01 Prnt=01 Port=02 Cnt=01 Dev#=  2 Spd=12   MxCh= 0
+    D:  Ver= 1.00 Cls=e0(wlcon) Sub=01 Prot=01 MxPS=64 #Cfgs=  1
+    P:  Vendor=13d3 ProdID=3587 Rev= 0.00
+    S:  Manufacturer=Realtek
+    S:  Product=Bluetooth Radio
+    S:  SerialNumber=00e04c000001
+    C:* #Ifs= 2 Cfg#= 1 Atr=e0 MxPwr=500mA
+    I:* If#= 0 Alt= 0 #EPs= 3 Cls=e0(wlcon) Sub=01 Prot=01 Driver=btusb
+    E:  Ad=81(I) Atr=03(Int.) MxPS=  16 Ivl=1ms
+    E:  Ad=02(O) Atr=02(Bulk) MxPS=  64 Ivl=0ms
+    E:  Ad=82(I) Atr=02(Bulk) MxPS=  64 Ivl=0ms
+    I:* If#= 1 Alt= 0 #EPs= 2 Cls=e0(wlcon) Sub=01 Prot=01 Driver=btusb
+    E:  Ad=03(O) Atr=01(Isoc) MxPS=   0 Ivl=1ms
+    E:  Ad=83(I) Atr=01(Isoc) MxPS=   0 Ivl=1ms
+    I:  If#= 1 Alt= 1 #EPs= 2 Cls=e0(wlcon) Sub=01 Prot=01 Driver=btusb
+    E:  Ad=03(O) Atr=01(Isoc) MxPS=   9 Ivl=1ms
+    E:  Ad=83(I) Atr=01(Isoc) MxPS=   9 Ivl=1ms
+    I:  If#= 1 Alt= 2 #EPs= 2 Cls=e0(wlcon) Sub=01 Prot=01 Driver=btusb
+    E:  Ad=03(O) Atr=01(Isoc) MxPS=  17 Ivl=1ms
+    E:  Ad=83(I) Atr=01(Isoc) MxPS=  17 Ivl=1ms
+    I:  If#= 1 Alt= 3 #EPs= 2 Cls=e0(wlcon) Sub=01 Prot=01 Driver=btusb
+    E:  Ad=03(O) Atr=01(Isoc) MxPS=  25 Ivl=1ms
+    E:  Ad=83(I) Atr=01(Isoc) MxPS=  25 Ivl=1ms
+    I:  If#= 1 Alt= 4 #EPs= 2 Cls=e0(wlcon) Sub=01 Prot=01 Driver=btusb
+    E:  Ad=03(O) Atr=01(Isoc) MxPS=  33 Ivl=1ms
+    E:  Ad=83(I) Atr=01(Isoc) MxPS=  33 Ivl=1ms
+    I:  If#= 1 Alt= 5 #EPs= 2 Cls=e0(wlcon) Sub=01 Prot=01 Driver=btusb
+    E:  Ad=03(O) Atr=01(Isoc) MxPS=  49 Ivl=1ms
+    E:  Ad=83(I) Atr=01(Isoc) MxPS=  49 Ivl=1ms
+    
+    Signed-off-by: Hilda Wu <hildawu@realtek.com>
+    Signed-off-by: Luiz Augusto von Dentz <luiz.von.dentz@intel.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 59689a843bc9bbc42046084998da7efe1fbc331f
+Author: Hilda Wu <hildawu@realtek.com>
+Date:   Thu Jul 14 19:25:21 2022 +0800
+
+    Bluetooth: btusb: Add Realtek RTL8852C support ID 0x0CB8:0xC558
+    
+    commit 5b75ee37ebb73f58468d4cca172434324af203f1 upstream.
+    
+    Add the support ID(0x0CB8, 0xC558) to usb_device_id table for
+    Realtek RTL8852C.
+    
+    The device info from /sys/kernel/debug/usb/devices as below.
+    
+    T:  Bus=03 Lev=01 Prnt=01 Port=02 Cnt=01 Dev#=  2 Spd=12   MxCh= 0
+    D:  Ver= 1.00 Cls=e0(wlcon) Sub=01 Prot=01 MxPS=64 #Cfgs=  1
+    P:  Vendor=0cb8 ProdID=c558 Rev= 0.00
+    S:  Manufacturer=Realtek
+    S:  Product=Bluetooth Radio
+    S:  SerialNumber=00e04c000001
+    C:* #Ifs= 2 Cfg#= 1 Atr=e0 MxPwr=500mA
+    I:* If#= 0 Alt= 0 #EPs= 3 Cls=e0(wlcon) Sub=01 Prot=01 Driver=btusb
+    E:  Ad=81(I) Atr=03(Int.) MxPS=  16 Ivl=1ms
+    E:  Ad=02(O) Atr=02(Bulk) MxPS=  64 Ivl=0ms
+    E:  Ad=82(I) Atr=02(Bulk) MxPS=  64 Ivl=0ms
+    I:* If#= 1 Alt= 0 #EPs= 2 Cls=e0(wlcon) Sub=01 Prot=01 Driver=btusb
+    E:  Ad=03(O) Atr=01(Isoc) MxPS=   0 Ivl=1ms
+    E:  Ad=83(I) Atr=01(Isoc) MxPS=   0 Ivl=1ms
+    I:  If#= 1 Alt= 1 #EPs= 2 Cls=e0(wlcon) Sub=01 Prot=01 Driver=btusb
+    E:  Ad=03(O) Atr=01(Isoc) MxPS=   9 Ivl=1ms
+    E:  Ad=83(I) Atr=01(Isoc) MxPS=   9 Ivl=1ms
+    I:  If#= 1 Alt= 2 #EPs= 2 Cls=e0(wlcon) Sub=01 Prot=01 Driver=btusb
+    E:  Ad=03(O) Atr=01(Isoc) MxPS=  17 Ivl=1ms
+    E:  Ad=83(I) Atr=01(Isoc) MxPS=  17 Ivl=1ms
+    I:  If#= 1 Alt= 3 #EPs= 2 Cls=e0(wlcon) Sub=01 Prot=01 Driver=btusb
+    E:  Ad=03(O) Atr=01(Isoc) MxPS=  25 Ivl=1ms
+    E:  Ad=83(I) Atr=01(Isoc) MxPS=  25 Ivl=1ms
+    I:  If#= 1 Alt= 4 #EPs= 2 Cls=e0(wlcon) Sub=01 Prot=01 Driver=btusb
+    E:  Ad=03(O) Atr=01(Isoc) MxPS=  33 Ivl=1ms
+    E:  Ad=83(I) Atr=01(Isoc) MxPS=  33 Ivl=1ms
+    I:  If#= 1 Alt= 5 #EPs= 2 Cls=e0(wlcon) Sub=01 Prot=01 Driver=btusb
+    E:  Ad=03(O) Atr=01(Isoc) MxPS=  49 Ivl=1ms
+    E:  Ad=83(I) Atr=01(Isoc) MxPS=  49 Ivl=1ms
+    
+    Signed-off-by: Hilda Wu <hildawu@realtek.com>
+    Signed-off-by: Luiz Augusto von Dentz <luiz.von.dentz@intel.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit b653eeaa8cf8d909a52410069a9ccdcb545bc9bb
+Author: Hilda Wu <hildawu@realtek.com>
+Date:   Thu Jul 14 19:25:20 2022 +0800
+
+    Bluetooth: btusb: Add Realtek RTL8852C support ID 0x04C5:0x1675
+    
+    commit 893fa8bc9952a36fb682ee12f0a994b5817a36d2 upstream.
+    
+    Add the support ID(0x04c5, 0x1675) to usb_device_id table for
+    Realtek RTL8852C.
+    
+    The device info from /sys/kernel/debug/usb/devices as below.
+    
+    T:  Bus=03 Lev=01 Prnt=01 Port=02 Cnt=01 Dev#=  2 Spd=12   MxCh= 0
+    D:  Ver= 1.00 Cls=e0(wlcon) Sub=01 Prot=01 MxPS=64 #Cfgs=  1
+    P:  Vendor=04c5 ProdID=1675 Rev= 0.00
+    S:  Manufacturer=Realtek
+    S:  Product=Bluetooth Radio
+    S:  SerialNumber=00e04c000001
+    C:* #Ifs= 2 Cfg#= 1 Atr=e0 MxPwr=500mA
+    I:* If#= 0 Alt= 0 #EPs= 3 Cls=e0(wlcon) Sub=01 Prot=01 Driver=btusb
+    E:  Ad=81(I) Atr=03(Int.) MxPS=  16 Ivl=1ms
+    E:  Ad=02(O) Atr=02(Bulk) MxPS=  64 Ivl=0ms
+    E:  Ad=82(I) Atr=02(Bulk) MxPS=  64 Ivl=0ms
+    I:* If#= 1 Alt= 0 #EPs= 2 Cls=e0(wlcon) Sub=01 Prot=01 Driver=btusb
+    E:  Ad=03(O) Atr=01(Isoc) MxPS=   0 Ivl=1ms
+    E:  Ad=83(I) Atr=01(Isoc) MxPS=   0 Ivl=1ms
+    I:  If#= 1 Alt= 1 #EPs= 2 Cls=e0(wlcon) Sub=01 Prot=01 Driver=btusb
+    E:  Ad=03(O) Atr=01(Isoc) MxPS=   9 Ivl=1ms
+    E:  Ad=83(I) Atr=01(Isoc) MxPS=   9 Ivl=1ms
+    I:  If#= 1 Alt= 2 #EPs= 2 Cls=e0(wlcon) Sub=01 Prot=01 Driver=btusb
+    E:  Ad=03(O) Atr=01(Isoc) MxPS=  17 Ivl=1ms
+    E:  Ad=83(I) Atr=01(Isoc) MxPS=  17 Ivl=1ms
+    I:  If#= 1 Alt= 3 #EPs= 2 Cls=e0(wlcon) Sub=01 Prot=01 Driver=btusb
+    E:  Ad=03(O) Atr=01(Isoc) MxPS=  25 Ivl=1ms
+    E:  Ad=83(I) Atr=01(Isoc) MxPS=  25 Ivl=1ms
+    I:  If#= 1 Alt= 4 #EPs= 2 Cls=e0(wlcon) Sub=01 Prot=01 Driver=btusb
+    E:  Ad=03(O) Atr=01(Isoc) MxPS=  33 Ivl=1ms
+    E:  Ad=83(I) Atr=01(Isoc) MxPS=  33 Ivl=1ms
+    I:  If#= 1 Alt= 5 #EPs= 2 Cls=e0(wlcon) Sub=01 Prot=01 Driver=btusb
+    E:  Ad=03(O) Atr=01(Isoc) MxPS=  49 Ivl=1ms
+    E:  Ad=83(I) Atr=01(Isoc) MxPS=  49 Ivl=1ms
+    
+    Signed-off-by: Hilda Wu <hildawu@realtek.com>
+    Signed-off-by: Luiz Augusto von Dentz <luiz.von.dentz@intel.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit d4f921efb4bf6b75375ed459be785b0c6415daec
+Author: Hilda Wu <hildawu@realtek.com>
+Date:   Thu Jul 14 19:25:19 2022 +0800
+
+    Bluetooth: btusb: Add Realtek RTL8852C support ID 0x04CA:0x4007
+    
+    commit c379c96cc221767af9688a5d4758a78eea30883a upstream.
+    
+    Add the support ID(0x04CA, 0x4007) to usb_device_id table for
+    Realtek RTL8852C.
+    
+    The device info from /sys/kernel/debug/usb/devices as below.
+    
+    T:  Bus=03 Lev=01 Prnt=01 Port=02 Cnt=01 Dev#=  2 Spd=12   MxCh= 0
+    D:  Ver= 1.00 Cls=e0(wlcon) Sub=01 Prot=01 MxPS=64 #Cfgs=  1
+    P:  Vendor=04ca ProdID=4007 Rev= 0.00
+    S:  Manufacturer=Realtek
+    S:  Product=Bluetooth Radio
+    S:  SerialNumber=00e04c000001
+    C:* #Ifs= 2 Cfg#= 1 Atr=e0 MxPwr=500mA
+    I:* If#= 0 Alt= 0 #EPs= 3 Cls=e0(wlcon) Sub=01 Prot=01 Driver=btusb
+    E:  Ad=81(I) Atr=03(Int.) MxPS=  16 Ivl=1ms
+    E:  Ad=02(O) Atr=02(Bulk) MxPS=  64 Ivl=0ms
+    E:  Ad=82(I) Atr=02(Bulk) MxPS=  64 Ivl=0ms
+    I:* If#= 1 Alt= 0 #EPs= 2 Cls=e0(wlcon) Sub=01 Prot=01 Driver=btusb
+    E:  Ad=03(O) Atr=01(Isoc) MxPS=   0 Ivl=1ms
+    E:  Ad=83(I) Atr=01(Isoc) MxPS=   0 Ivl=1ms
+    I:  If#= 1 Alt= 1 #EPs= 2 Cls=e0(wlcon) Sub=01 Prot=01 Driver=btusb
+    E:  Ad=03(O) Atr=01(Isoc) MxPS=   9 Ivl=1ms
+    E:  Ad=83(I) Atr=01(Isoc) MxPS=   9 Ivl=1ms
+    I:  If#= 1 Alt= 2 #EPs= 2 Cls=e0(wlcon) Sub=01 Prot=01 Driver=btusb
+    E:  Ad=03(O) Atr=01(Isoc) MxPS=  17 Ivl=1ms
+    E:  Ad=83(I) Atr=01(Isoc) MxPS=  17 Ivl=1ms
+    I:  If#= 1 Alt= 3 #EPs= 2 Cls=e0(wlcon) Sub=01 Prot=01 Driver=btusb
+    E:  Ad=03(O) Atr=01(Isoc) MxPS=  25 Ivl=1ms
+    E:  Ad=83(I) Atr=01(Isoc) MxPS=  25 Ivl=1ms
+    I:  If#= 1 Alt= 4 #EPs= 2 Cls=e0(wlcon) Sub=01 Prot=01 Driver=btusb
+    E:  Ad=03(O) Atr=01(Isoc) MxPS=  33 Ivl=1ms
+    E:  Ad=83(I) Atr=01(Isoc) MxPS=  33 Ivl=1ms
+    I:  If#= 1 Alt= 5 #EPs= 2 Cls=e0(wlcon) Sub=01 Prot=01 Driver=btusb
+    E:  Ad=03(O) Atr=01(Isoc) MxPS=  49 Ivl=1ms
+    E:  Ad=83(I) Atr=01(Isoc) MxPS=  49 Ivl=1ms
+    
+    Signed-off-by: Hilda Wu <hildawu@realtek.com>
+    Signed-off-by: Luiz Augusto von Dentz <luiz.von.dentz@intel.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 04e3388eeb4709a8f079f92a48e8e034cc7e5e50
+Author: Aaron Ma <aaron.ma@canonical.com>
+Date:   Thu Jun 2 17:28:22 2022 +0800
+
+    Bluetooth: btusb: Add support of IMC Networks PID 0x3568
+    
+    commit c69ecb0ea4c96b8b191cbaa0b420222a37867655 upstream.
+    
+    It is 13d3:3568 for MediaTek MT7922 USB Bluetooth chip.
+    
+    T:  Bus=03 Lev=01 Prnt=01 Port=02 Cnt=01 Dev#=  2 Spd=480 MxCh= 0
+    D:  Ver= 2.10 Cls=ef(misc ) Sub=02 Prot=01 MxPS=64 #Cfgs=  1
+    P:  Vendor=13d3 ProdID=3568 Rev=01.00
+    S:  Manufacturer=MediaTek Inc.
+    S:  Product=Wireless_Device
+    S:  SerialNumber=...
+    C:  #Ifs= 3 Cfg#= 1 Atr=e0 MxPwr=100mA
+    I:  If#= 0 Alt= 0 #EPs= 3 Cls=e0(wlcon) Sub=01 Prot=01 Driver=btusb
+    E:  Ad=02(O) Atr=02(Bulk) MxPS= 512 Ivl=0ms
+    E:  Ad=81(I) Atr=03(Int.) MxPS=  16 Ivl=125us
+    E:  Ad=82(I) Atr=02(Bulk) MxPS= 512 Ivl=0ms
+    I:  If#= 1 Alt= 0 #EPs= 2 Cls=e0(wlcon) Sub=01 Prot=01 Driver=btusb
+    E:  Ad=03(O) Atr=01(Isoc) MxPS=   0 Ivl=1ms
+    E:  Ad=83(I) Atr=01(Isoc) MxPS=   0 Ivl=1ms
+    I:  If#= 2 Alt= 0 #EPs= 2 Cls=e0(wlcon) Sub=01 Prot=01 Driver=(none)
+    E:  Ad=0a(O) Atr=03(Int.) MxPS=  64 Ivl=125us
+    E:  Ad=8a(I) Atr=03(Int.) MxPS=  64 Ivl=125us
+    
+    Signed-off-by: Aaron Ma <aaron.ma@canonical.com>
+    Signed-off-by: Marcel Holtmann <marcel@holtmann.org>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 6a5ec48fb7528aea20805534a867d0cc631994f8
+Author: Ahmad Fatoum <a.fatoum@pengutronix.de>
+Date:   Tue May 24 07:56:40 2022 +0200
+
+    dt-bindings: bluetooth: broadcom: Add BCM4349B1 DT binding
+    
+    commit 88b65887aa1b76cd8649a97824fb9904c1d79254 upstream.
+    
+    The BCM4349B1, aka CYW/BCM89359, is a WiFi+BT chip and its Bluetooth
+    portion can be controlled over serial.
+    Extend the binding with its DT compatible.
+    
+    Acked-by: Krzysztof Kozlowski <krzysztof.kozlowski@linaro.org>
+    Reviewed-by: Linus Walleij <linus.walleij@linaro.org>
+    Signed-off-by: Ahmad Fatoum <a.fatoum@pengutronix.de>
+    Signed-off-by: Marcel Holtmann <marcel@holtmann.org>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 88e088e29487913c302b7480b866266f8971427f
+Author: Hakan Jansson <hakan.jansson@infineon.com>
+Date:   Thu Jun 30 14:45:22 2022 +0200
+
+    Bluetooth: hci_bcm: Add DT compatible for CYW55572
+    
+    commit f8cad62002a7699fd05a23b558b980b5a77defe0 upstream.
+    
+    CYW55572 is a Wi-Fi + Bluetooth combo device from Infineon.
+    
+    Signed-off-by: Hakan Jansson <hakan.jansson@infineon.com>
+    Reviewed-by: Linus Walleij <linus.walleij@linaro.org>
+    Signed-off-by: Luiz Augusto von Dentz <luiz.von.dentz@intel.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 2aa38f0af306230ae4fb15b73b4c18f9209758cb
+Author: Ahmad Fatoum <a.fatoum@pengutronix.de>
+Date:   Tue May 24 07:56:41 2022 +0200
+
+    Bluetooth: hci_bcm: Add BCM4349B1 variant
+    
+    commit 4f17c2b6694d0c4098f33b07ee3a696976940aa5 upstream.
+    
+    The BCM4349B1, aka CYW/BCM89359, is a WiFi+BT chip and its Bluetooth
+    portion can be controlled over serial.
+    
+    Two subversions are added for the chip, because ROM firmware reports
+    002.002.013 (at least for the chips I have here), while depending on
+    patchram firmware revision, either 002.002.013 or 002.002.014 is
+    reported.
+    
+    Signed-off-by: Ahmad Fatoum <a.fatoum@pengutronix.de>
+    Reviewed-by: Linus Walleij <linus.walleij@linaro.org>
+    Signed-off-by: Marcel Holtmann <marcel@holtmann.org>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 37b385c78cd57edcc9c2350a37763012c28982cd
+Author: Naohiro Aota <naohiro.aota@wdc.com>
+Date:   Tue Jun 7 16:08:30 2022 +0900
+
+    btrfs: zoned: fix critical section of relocation inode writeback
+    
+    commit 19ab78ca86981e0e1e73036fb73a508731a7c078 upstream.
+    
+    We use btrfs_zoned_data_reloc_{lock,unlock} to allow only one process to
+    write out to the relocation inode. That critical section must include all
+    the IO submission for the inode. However, flush_write_bio() in
+    extent_writepages() is out of the critical section, causing an IO
+    submission outside of the lock. This leads to an out of the order IO
+    submission and fail the relocation process.
+    
+    Fix it by extending the critical section.
+    
+    Fixes: 35156d852762 ("btrfs: zoned: only allow one process to add pages to a relocation inode")
+    CC: stable@vger.kernel.org # 5.16+
+    Reviewed-by: Johannes Thumshirn <johannes.thumshirn@wdc.com>
+    Signed-off-by: Naohiro Aota <naohiro.aota@wdc.com>
+    Signed-off-by: David Sterba <dsterba@suse.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 5e04c8bf42d810986b609b989955347c2913b1be
+Author: Naohiro Aota <naohiro.aota@wdc.com>
+Date:   Tue Jun 7 16:08:29 2022 +0900
+
+    btrfs: zoned: prevent allocation from previous data relocation BG
+    
+    commit 343d8a30851c48a4ef0f5ef61d5e9fbd847a6883 upstream.
+    
+    After commit 5f0addf7b890 ("btrfs: zoned: use dedicated lock for data
+    relocation"), we observe IO errors on e.g, btrfs/232 like below.
+    
+      [09.0][T4038707] WARNING: CPU: 3 PID: 4038707 at fs/btrfs/extent-tree.c:2381 btrfs_cross_ref_exist+0xfc/0x120 [btrfs]
+      <snip>
+      [09.9][T4038707] Call Trace:
+      [09.5][T4038707]  <TASK>
+      [09.3][T4038707]  run_delalloc_nocow+0x7f1/0x11a0 [btrfs]
+      [09.6][T4038707]  ? test_range_bit+0x174/0x320 [btrfs]
+      [09.2][T4038707]  ? fallback_to_cow+0x980/0x980 [btrfs]
+      [09.3][T4038707]  ? find_lock_delalloc_range+0x33e/0x3e0 [btrfs]
+      [09.5][T4038707]  btrfs_run_delalloc_range+0x445/0x1320 [btrfs]
+      [09.2][T4038707]  ? test_range_bit+0x320/0x320 [btrfs]
+      [09.4][T4038707]  ? lock_downgrade+0x6a0/0x6a0
+      [09.2][T4038707]  ? orc_find.part.0+0x1ed/0x300
+      [09.5][T4038707]  ? __module_address.part.0+0x25/0x300
+      [09.0][T4038707]  writepage_delalloc+0x159/0x310 [btrfs]
+      <snip>
+      [09.4][    C3] sd 10:0:1:0: [sde] tag#2620 FAILED Result: hostbyte=DID_OK driverbyte=DRIVER_OK cmd_age=0s
+      [09.5][    C3] sd 10:0:1:0: [sde] tag#2620 Sense Key : Illegal Request [current]
+      [09.9][    C3] sd 10:0:1:0: [sde] tag#2620 Add. Sense: Unaligned write command
+      [09.5][    C3] sd 10:0:1:0: [sde] tag#2620 CDB: Write(16) 8a 00 00 00 00 00 02 f3 63 87 00 00 00 2c 00 00
+      [09.4][    C3] critical target error, dev sde, sector 396041272 op 0x1:(WRITE) flags 0x800 phys_seg 3 prio class 0
+      [09.9][    C3] BTRFS error (device dm-1): bdev /dev/mapper/dml_102_2 errs: wr 1, rd 0, flush 0, corrupt 0, gen 0
+    
+    The IO errors occur when we allocate a regular extent in previous data
+    relocation block group.
+    
+    On zoned btrfs, we use a dedicated block group to relocate a data
+    extent. Thus, we allocate relocating data extents (pre-alloc) only from
+    the dedicated block group and vice versa. Once the free space in the
+    dedicated block group gets tight, a relocating extent may not fit into
+    the block group. In that case, we need to switch the dedicated block
+    group to the next one. Then, the previous one is now freed up for
+    allocating a regular extent. The BG is already not enough to allocate
+    the relocating extent, but there is still room to allocate a smaller
+    extent. Now the problem happens. By allocating a regular extent while
+    nocow IOs for the relocation is still on-going, we will issue WRITE IOs
+    (for relocation) and ZONE APPEND IOs (for the regular writes) at the
+    same time. That mixed IOs confuses the write pointer and arises the
+    unaligned write errors.
+    
+    This commit introduces a new bit 'zoned_data_reloc_ongoing' to the
+    btrfs_block_group. We set this bit before releasing the dedicated block
+    group, and no extent are allocated from a block group having this bit
+    set. This bit is similar to setting block_group->ro, but is different from
+    it by allowing nocow writes to start.
+    
+    Once all the nocow IO for relocation is done (hooked from
+    btrfs_finish_ordered_io), we reset the bit to release the block group for
+    further allocation.
+    
+    Fixes: c2707a255623 ("btrfs: zoned: add a dedicated data relocation block group")
+    CC: stable@vger.kernel.org # 5.16+
+    Signed-off-by: Naohiro Aota <naohiro.aota@wdc.com>
+    Reviewed-by: David Sterba <dsterba@suse.com>
+    Signed-off-by: David Sterba <dsterba@suse.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 775871d4be0d75e219cca937af843a4a1b60489a
+Author: Peter Collingbourne <pcc@google.com>
+Date:   Mon Aug 8 13:53:21 2022 +0100
+
+    arm64: set UXN on swapper page tables
+    
+    [ This issue was fixed upstream by accident in c3cee924bd85 ("arm64:
+      head: cover entire kernel image in initial ID map") as part of a
+      large refactoring of the arm64 boot flow. This simple fix is therefore
+      preferred for -stable backporting ]
+    
+    On a system that implements FEAT_EPAN, read/write access to the idmap
+    is denied because UXN is not set on the swapper PTEs. As a result,
+    idmap_kpti_install_ng_mappings panics the kernel when accessing
+    __idmap_kpti_flag. Fix it by setting UXN on these PTEs.
+    
+    Fixes: 18107f8a2df6 ("arm64: Support execute-only permissions with Enhanced PAN")
+    Cc: <stable@vger.kernel.org> # 5.15
+    Link: https://linux-review.googlesource.com/id/Ic452fa4b4f74753e54f71e61027e7222a0fae1b1
+    Signed-off-by: Peter Collingbourne <pcc@google.com>
+    Acked-by: Will Deacon <will@kernel.org>
+    Cc: Ard Biesheuvel <ardb@kernel.org>
+    Cc: Catalin Marinas <catalin.marinas@arm.com>
+    Link: https://lore.kernel.org/r/20220719234909.1398992-1-pcc@google.com
+    Signed-off-by: Will Deacon <will@kernel.org>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit a619a03120991b679cd6a41355f6c9199f63fd8b
+Author: Mingwei Zhang <mizhang@google.com>
+Date:   Thu Jun 23 17:18:58 2022 +0000
+
+    KVM: x86/svm: add __GFP_ACCOUNT to __sev_dbg_{en,de}crypt_user()
+    
+    [ Upstream commit ebdec859faa8cfbfef9f6c1f83d79dd6c8f4ab8c ]
+    
+    Adding the accounting flag when allocating pages within the SEV function,
+    since these memory pages should belong to individual VM.
+    
+    No functional change intended.
+    
+    Signed-off-by: Mingwei Zhang <mizhang@google.com>
+    Message-Id: <20220623171858.2083637-1-mizhang@google.com>
+    Signed-off-by: Paolo Bonzini <pbonzini@redhat.com>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit e423893fe3209604236874e412dd3a9386578cff
+Author: Raghavendra Rao Ananta <rananta@google.com>
+Date:   Wed Jun 15 18:57:06 2022 +0000
+
+    selftests: KVM: Handle compiler optimizations in ucall
+    
+    [ Upstream commit 9e2f6498efbbc880d7caa7935839e682b64fe5a6 ]
+    
+    The selftests, when built with newer versions of clang, is found
+    to have over optimized guests' ucall() function, and eliminating
+    the stores for uc.cmd (perhaps due to no immediate readers). This
+    resulted in the userspace side always reading a value of '0', and
+    causing multiple test failures.
+    
+    As a result, prevent the compiler from optimizing the stores in
+    ucall() with WRITE_ONCE().
+    
+    Suggested-by: Ricardo Koller <ricarkol@google.com>
+    Suggested-by: Reiji Watanabe <reijiw@google.com>
+    Signed-off-by: Raghavendra Rao Ananta <rananta@google.com>
+    Message-Id: <20220615185706.1099208-1-rananta@google.com>
+    Reviewed-by: Andrew Jones <drjones@redhat.com>
+    Signed-off-by: Paolo Bonzini <pbonzini@redhat.com>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit bc2cee443c7401a15227bb7f9e7e0a967563cfd2
+Author: Dmitry Klochkov <kdmitry556@gmail.com>
+Date:   Tue Jun 14 15:11:41 2022 +0300
+
+    tools/kvm_stat: fix display of error when multiple processes are found
+    
+    [ Upstream commit 933b5f9f98da29af646b51b36a0753692908ef64 ]
+    
+    Instead of printing an error message, kvm_stat script fails when we
+    restrict statistics to a guest by its name and there are multiple guests
+    with such name:
+    
+      # kvm_stat -g my_vm
+      Traceback (most recent call last):
+        File "/usr/bin/kvm_stat", line 1819, in <module>
+          main()
+        File "/usr/bin/kvm_stat", line 1779, in main
+          options = get_options()
+        File "/usr/bin/kvm_stat", line 1718, in get_options
+          options = argparser.parse_args()
+        File "/usr/lib64/python3.10/argparse.py", line 1825, in parse_args
+          args, argv = self.parse_known_args(args, namespace)
+        File "/usr/lib64/python3.10/argparse.py", line 1858, in parse_known_args
+          namespace, args = self._parse_known_args(args, namespace)
+        File "/usr/lib64/python3.10/argparse.py", line 2067, in _parse_known_args
+          start_index = consume_optional(start_index)
+        File "/usr/lib64/python3.10/argparse.py", line 2007, in consume_optional
+          take_action(action, args, option_string)
+        File "/usr/lib64/python3.10/argparse.py", line 1935, in take_action
+          action(self, namespace, argument_values, option_string)
+        File "/usr/bin/kvm_stat", line 1649, in __call__
+          ' to specify the desired pid'.format(" ".join(pids)))
+      TypeError: sequence item 0: expected str instance, int found
+    
+    To avoid this, it's needed to convert pids int values to strings before
+    pass them to join().
+    
+    Signed-off-by: Dmitry Klochkov <kdmitry556@gmail.com>
+    Message-Id: <20220614121141.160689-1-kdmitry556@gmail.com>
+    Signed-off-by: Paolo Bonzini <pbonzini@redhat.com>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 9acd899d2febb4dd88565514d263fcdf0514ec26
+Author: Vitaly Kuznetsov <vkuznets@redhat.com>
+Date:   Wed Jun 1 16:43:22 2022 +0200
+
+    KVM: selftests: Make hyperv_clock selftest more stable
+    
+    [ Upstream commit eae260be3a0111a28fe95923e117a55dddec0384 ]
+    
+    hyperv_clock doesn't always give a stable test result, especially with
+    AMD CPUs. The test compares Hyper-V MSR clocksource (acquired either
+    with rdmsr() from within the guest or KVM_GET_MSRS from the host)
+    against rdtsc(). To increase the accuracy, increase the measured delay
+    (done with nop loop) by two orders of magnitude and take the mean rdtsc()
+    value before and after rdmsr()/KVM_GET_MSRS.
+    
+    Reported-by: Maxim Levitsky <mlevitsk@redhat.com>
+    Signed-off-by: Vitaly Kuznetsov <vkuznets@redhat.com>
+    Reviewed-by: Maxim Levitsky <mlevitsk@redhat.com>
+    Tested-by: Maxim Levitsky <mlevitsk@redhat.com>
+    Message-Id: <20220601144322.1968742-1-vkuznets@redhat.com>
+    Signed-off-by: Paolo Bonzini <pbonzini@redhat.com>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit ad6fd99d5febfd63465ef327240c78b6d803d48d
+Author: Paolo Bonzini <pbonzini@redhat.com>
+Date:   Tue Jun 7 10:07:11 2022 -0400
+
+    KVM: x86: do not set st->preempted when going back to user space
+    
+    [ Upstream commit 54aa83c90198e68eee8b0850c749bc70efb548da ]
+    
+    Similar to the Xen path, only change the vCPU's reported state if the vCPU
+    was actually preempted.  The reason for KVM's behavior is that for example
+    optimistic spinning might not be a good idea if the guest is doing repeated
+    exits to userspace; however, it is confusing and unlikely to make a difference,
+    because well-tuned guests will hardly ever exit KVM_RUN in the first place.
+    
+    Suggested-by: Sean Christopherson <seanjc@google.com>
+    Signed-off-by: Paolo Bonzini <pbonzini@redhat.com>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 92343314d34e04da0923cefd3be67521d706fa35
+Author: Paolo Bonzini <pbonzini@redhat.com>
+Date:   Tue Jun 7 10:09:03 2022 -0400
+
+    KVM: x86: do not report a vCPU as preempted outside instruction boundaries
+    
+    [ Upstream commit 6cd88243c7e03845a450795e134b488fc2afb736 ]
+    
+    If a vCPU is outside guest mode and is scheduled out, it might be in the
+    process of making a memory access.  A problem occurs if another vCPU uses
+    the PV TLB flush feature during the period when the vCPU is scheduled
+    out, and a virtual address has already been translated but has not yet
+    been accessed, because this is equivalent to using a stale TLB entry.
+    
+    To avoid this, only report a vCPU as preempted if sure that the guest
+    is at an instruction boundary.  A rescheduling request will be delivered
+    to the host physical CPU as an external interrupt, so for simplicity
+    consider any vmexit *not* instruction boundary except for external
+    interrupts.
+    
+    It would in principle be okay to report the vCPU as preempted also
+    if it is sleeping in kvm_vcpu_block(): a TLB flush IPI will incur the
+    vmentry/vmexit overhead unnecessarily, and optimistic spinning is
+    also unlikely to succeed.  However, leave it for later because right
+    now kvm_vcpu_check_block() is doing memory accesses.  Even
+    though the TLB flush issue only applies to virtual memory address,
+    it's very much preferrable to be conservative.
+    
+    Reported-by: Jann Horn <jannh@google.com>
+    Signed-off-by: Paolo Bonzini <pbonzini@redhat.com>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 3d4c28475ee352c440b83484b72b1320ff76364a
+Author: GUO Zihua <guozihua@huawei.com>
+Date:   Fri Jul 22 14:31:57 2022 +0800
+
+    crypto: arm64/poly1305 - fix a read out-of-bound
+    
+    commit 7ae19d422c7da84b5f13bc08b98bd737a08d3a53 upstream.
+    
+    A kasan error was reported during fuzzing:
+    
+    BUG: KASAN: slab-out-of-bounds in neon_poly1305_blocks.constprop.0+0x1b4/0x250 [poly1305_neon]
+    Read of size 4 at addr ffff0010e293f010 by task syz-executor.5/1646715
+    CPU: 4 PID: 1646715 Comm: syz-executor.5 Kdump: loaded Not tainted 5.10.0.aarch64 #1
+    Hardware name: Huawei TaiShan 2280 /BC11SPCD, BIOS 1.59 01/31/2019
+    Call trace:
+     dump_backtrace+0x0/0x394
+     show_stack+0x34/0x4c arch/arm64/kernel/stacktrace.c:196
+     __dump_stack lib/dump_stack.c:77 [inline]
+     dump_stack+0x158/0x1e4 lib/dump_stack.c:118
+     print_address_description.constprop.0+0x68/0x204 mm/kasan/report.c:387
+     __kasan_report+0xe0/0x140 mm/kasan/report.c:547
+     kasan_report+0x44/0xe0 mm/kasan/report.c:564
+     check_memory_region_inline mm/kasan/generic.c:187 [inline]
+     __asan_load4+0x94/0xd0 mm/kasan/generic.c:252
+     neon_poly1305_blocks.constprop.0+0x1b4/0x250 [poly1305_neon]
+     neon_poly1305_do_update+0x6c/0x15c [poly1305_neon]
+     neon_poly1305_update+0x9c/0x1c4 [poly1305_neon]
+     crypto_shash_update crypto/shash.c:131 [inline]
+     shash_finup_unaligned+0x84/0x15c crypto/shash.c:179
+     crypto_shash_finup+0x8c/0x140 crypto/shash.c:193
+     shash_digest_unaligned+0xb8/0xe4 crypto/shash.c:201
+     crypto_shash_digest+0xa4/0xfc crypto/shash.c:217
+     crypto_shash_tfm_digest+0xb4/0x150 crypto/shash.c:229
+     essiv_skcipher_setkey+0x164/0x200 [essiv]
+     crypto_skcipher_setkey+0xb0/0x160 crypto/skcipher.c:612
+     skcipher_setkey+0x3c/0x50 crypto/algif_skcipher.c:305
+     alg_setkey+0x114/0x2a0 crypto/af_alg.c:220
+     alg_setsockopt+0x19c/0x210 crypto/af_alg.c:253
+     __sys_setsockopt+0x190/0x2e0 net/socket.c:2123
+     __do_sys_setsockopt net/socket.c:2134 [inline]
+     __se_sys_setsockopt net/socket.c:2131 [inline]
+     __arm64_sys_setsockopt+0x78/0x94 net/socket.c:2131
+     __invoke_syscall arch/arm64/kernel/syscall.c:36 [inline]
+     invoke_syscall+0x64/0x100 arch/arm64/kernel/syscall.c:48
+     el0_svc_common.constprop.0+0x220/0x230 arch/arm64/kernel/syscall.c:155
+     do_el0_svc+0xb4/0xd4 arch/arm64/kernel/syscall.c:217
+     el0_svc+0x24/0x3c arch/arm64/kernel/entry-common.c:353
+     el0_sync_handler+0x160/0x164 arch/arm64/kernel/entry-common.c:369
+     el0_sync+0x160/0x180 arch/arm64/kernel/entry.S:683
+    
+    This error can be reproduced by the following code compiled as ko on a
+    system with kasan enabled:
+    
+    #include <linux/module.h>
+    #include <linux/crypto.h>
+    #include <crypto/hash.h>
+    #include <crypto/poly1305.h>
+    
+    char test_data[] = "\x00\x01\x02\x03\x04\x05\x06\x07"
+                       "\x08\x09\x0a\x0b\x0c\x0d\x0e\x0f"
+                       "\x10\x11\x12\x13\x14\x15\x16\x17"
+                       "\x18\x19\x1a\x1b\x1c\x1d\x1e";
+    
+    int init(void)
+    {
+            struct crypto_shash *tfm = NULL;
+            char *data = NULL, *out = NULL;
+    
+            tfm = crypto_alloc_shash("poly1305", 0, 0);
+            data = kmalloc(POLY1305_KEY_SIZE - 1, GFP_KERNEL);
+            out = kmalloc(POLY1305_DIGEST_SIZE, GFP_KERNEL);
+            memcpy(data, test_data, POLY1305_KEY_SIZE - 1);
+            crypto_shash_tfm_digest(tfm, data, POLY1305_KEY_SIZE - 1, out);
+    
+            kfree(data);
+            kfree(out);
+            return 0;
+    }
+    
+    void deinit(void)
+    {
+    }
+    
+    module_init(init)
+    module_exit(deinit)
+    MODULE_LICENSE("GPL");
+    
+    The root cause of the bug sits in neon_poly1305_blocks. The logic
+    neon_poly1305_blocks() performed is that if it was called with both s[]
+    and r[] uninitialized, it will first try to initialize them with the
+    data from the first "block" that it believed to be 32 bytes in length.
+    First 16 bytes are used as the key and the next 16 bytes for s[]. This
+    would lead to the aforementioned read out-of-bound. However, after
+    calling poly1305_init_arch(), only 16 bytes were deducted from the input
+    and s[] is initialized yet again with the following 16 bytes. The second
+    initialization of s[] is certainly redundent which indicates that the
+    first initialization should be for r[] only.
+    
+    This patch fixes the issue by calling poly1305_init_arm64() instead of
+    poly1305_init_arch(). This is also the implementation for the same
+    algorithm on arm platform.
+    
+    Fixes: f569ca164751 ("crypto: arm64/poly1305 - incorporate OpenSSL/CRYPTOGAMS NEON implementation")
+    Cc: stable@vger.kernel.org
+    Signed-off-by: GUO Zihua <guozihua@huawei.com>
+    Reviewed-by: Eric Biggers <ebiggers@google.com>
+    Acked-by: Will Deacon <will@kernel.org>
+    Signed-off-by: Herbert Xu <herbert@gondor.apana.org.au>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 397c2116cbe26a9f09e825ad394e802804bc182a
+Author: Tony Luck <tony.luck@intel.com>
+Date:   Wed Jun 22 10:09:06 2022 -0700
+
+    ACPI: APEI: Better fix to avoid spamming the console with old error logs
+    
+    commit c3481b6b75b4797657838f44028fd28226ab48e0 upstream.
+    
+    The fix in commit 3f8dec116210 ("ACPI/APEI: Limit printable size of BERT
+    table data") does not work as intended on systems where the BIOS has a
+    fixed size block of memory for the BERT table, relying on s/w to quit
+    when it finds a record with estatus->block_status == 0. On these systems
+    all errors are suppressed because the check:
+    
+            if (region_len < ACPI_BERT_PRINT_MAX_LEN)
+    
+    always fails.
+    
+    New scheme skips individual CPER records that are too large, and also
+    limits the total number of records that will be printed to 5.
+    
+    Fixes: 3f8dec116210 ("ACPI/APEI: Limit printable size of BERT table data")
+    Cc: All applicable <stable@vger.kernel.org>
+    Signed-off-by: Tony Luck <tony.luck@intel.com>
+    Signed-off-by: Rafael J. Wysocki <rafael.j.wysocki@intel.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit e7170bcda6137ed682c59da713c0af44d8f706e5
+Author: Werner Sembach <wse@tuxedocomputers.com>
+Date:   Thu Jul 7 20:09:53 2022 +0200
+
+    ACPI: video: Shortening quirk list by identifying Clevo by board_name only
+    
+    commit f0341e67b3782603737f7788e71bd3530012a4f4 upstream.
+    
+    Taking a recent change in the i8042 quirklist to this one: Clevo
+    board_names are somewhat unique, and if not: The generic Board_-/Sys_Vendor
+    string "Notebook" doesn't help much anyway. So identifying the devices just
+    by the board_name helps keeping the list significantly shorter and might
+    even hit more devices requiring the fix.
+    
+    Signed-off-by: Werner Sembach <wse@tuxedocomputers.com>
+    Fixes: c844d22fe0c0 ("ACPI: video: Force backlight native for Clevo NL5xRU and NL5xNU")
+    Cc: All applicable <stable@vger.kernel.org>
+    Reviewed-by: Hans de Goede <hdegoede@redhat.com>
+    Signed-off-by: Rafael J. Wysocki <rafael.j.wysocki@intel.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 3a5fab5c45056a8d8c33880b113ae40cf23500e8
+Author: Werner Sembach <wse@tuxedocomputers.com>
+Date:   Thu Jul 7 20:09:52 2022 +0200
+
+    ACPI: video: Force backlight native for some TongFang devices
+    
+    commit c752089f7cf5b5800c6ace4cdd1a8351ee78a598 upstream.
+    
+    The TongFang PF5PU1G, PF4NU1F, PF5NU1G, and PF5LUXG/TUXEDO BA15 Gen10,
+    Pulse 14/15 Gen1, and Pulse 15 Gen2 have the same problem as the Clevo
+    NL5xRU and NL5xNU/TUXEDO Aura 15 Gen1 and Gen2:
+    They have a working native and video interface. However the default
+    detection mechanism first registers the video interface before
+    unregistering it again and switching to the native interface during boot.
+    This results in a dangling SBIOS request for backlight change for some
+    reason, causing the backlight to switch to ~2% once per boot on the first
+    power cord connect or disconnect event. Setting the native interface
+    explicitly circumvents this buggy behaviour by avoiding the unregistering
+    process.
+    
+    Signed-off-by: Werner Sembach <wse@tuxedocomputers.com>
+    Cc: All applicable <stable@vger.kernel.org>
+    Reviewed-by: Hans de Goede <hdegoede@redhat.com>
+    Signed-off-by: Rafael J. Wysocki <rafael.j.wysocki@intel.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 9894717519cc144827bf8a46b543363533e8c0fe
+Author: Stéphane Graber <stgraber@ubuntu.com>
+Date:   Thu Jun 23 16:45:52 2022 -0500
+
+    tools/vm/slabinfo: Handle files in debugfs
+    
+    commit 0c7e0d699ef1430d7f4cf12b4b1d097af58b5515 upstream.
+    
+    Commit 64dd68497be76 relocated and renamed the alloc_calls and
+    free_calls files from /sys/kernel/slab/NAME/*_calls over to
+    /sys/kernel/debug/slab/NAME/*_calls but didn't update the slabinfo tool
+    with the new location.
+    
+    This change will now have slabinfo look at the new location (and filenames)
+    with a fallback to the prior files.
+    
+    Fixes: 64dd68497be76 ("mm: slub: move sysfs slab alloc/free interfaces to debugfs")
+    Cc: stable@vger.kernel.org
+    Signed-off-by: Stéphane Graber <stgraber@ubuntu.com>
+    Tested-by: Stéphane Graber <stgraber@ubuntu.com>
+    Signed-off-by: Vlastimil Babka <vbabka@suse.cz>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 7ad47f414b4095fa104daaf08c8c942308f5a5c4
+Author: Jan Kara <jack@suse.cz>
+Date:   Thu Jun 23 09:48:26 2022 +0200
+
+    block: fix default IO priority handling again
+    
+    commit e589f46445960c274cc813a1cc8e2fc73b2a1849 upstream.
+    
+    Commit e70344c05995 ("block: fix default IO priority handling")
+    introduced an inconsistency in get_current_ioprio() that tasks without
+    IO context return IOPRIO_DEFAULT priority while tasks with freshly
+    allocated IO context will return 0 (IOPRIO_CLASS_NONE/0) IO priority.
+    Tasks without IO context used to be rare before 5a9d041ba2f6 ("block:
+    move io_context creation into where it's needed") but after this commit
+    they became common because now only BFQ IO scheduler setups task's IO
+    context. Similar inconsistency is there for get_task_ioprio() so this
+    inconsistency is now exposed to userspace and userspace will see
+    different IO priority for tasks operating on devices with BFQ compared
+    to devices without BFQ. Furthemore the changes done by commit
+    e70344c05995 change the behavior when no IO priority is set for BFQ IO
+    scheduler which is also documented in ioprio_set(2) manpage:
+    
+    "If no I/O scheduler has been set for a thread, then by default the I/O
+    priority will follow the CPU nice value (setpriority(2)).  In Linux
+    kernels before version 2.6.24, once an I/O priority had been set using
+    ioprio_set(), there was no way to reset the I/O scheduling behavior to
+    the default. Since Linux 2.6.24, specifying ioprio as 0 can be used to
+    reset to the default I/O scheduling behavior."
+    
+    So make sure we default to IOPRIO_CLASS_NONE as used to be the case
+    before commit e70344c05995. Also cleanup alloc_io_context() to
+    explicitely set this IO priority for the allocated IO context to avoid
+    future surprises. Note that we tweak ioprio_best() to maintain
+    ioprio_get(2) behavior and make this commit easily backportable.
+    
+    CC: stable@vger.kernel.org
+    Fixes: e70344c05995 ("block: fix default IO priority handling")
+    Reviewed-by: Damien Le Moal <damien.lemoal@opensource.wdc.com>
+    Tested-by: Damien Le Moal <damien.lemoal@opensource.wdc.com>
+    Signed-off-by: Jan Kara <jack@suse.cz>
+    Reviewed-by: Christoph Hellwig <hch@lst.de>
+    Link: https://lore.kernel.org/r/20220623074840.5960-1-jack@suse.cz
+    Signed-off-by: Jens Axboe <axboe@kernel.dk>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit e889a4c440eb64296857b50a1fc2c9e57cc9c0d8
+Author: Jakub Sitnicki <jakub@cloudflare.com>
+Date:   Mon Aug 1 17:48:51 2022 +0300
+
+    selftests/bpf: Check dst_port only on the client socket
+    
+    commit 2d2202ba858c112b03f84d546e260c61425831a1 upstream.
+    
+    cgroup_skb/egress programs which sock_fields test installs process packets
+    flying in both directions, from the client to the server, and in reverse
+    direction.
+    
+    Recently added dst_port check relies on the fact that destination
+    port (remote peer port) of the socket which sends the packet is known ahead
+    of time. This holds true only for the client socket, which connects to the
+    known server port.
+    
+    Filter out any traffic that is not egressing from the client socket in the
+    BPF program that tests reading the dst_port.
+    
+    Fixes: 8f50f16ff39d ("selftests/bpf: Extend verifier and bpf_sock tests for dst_port loads")
+    Signed-off-by: Jakub Sitnicki <jakub@cloudflare.com>
+    Signed-off-by: Daniel Borkmann <daniel@iogearbox.net>
+    Acked-by: Martin KaFai Lau <kafai@fb.com>
+    Link: https://lore.kernel.org/bpf/20220317113920.1068535-3-jakub@cloudflare.com
+    Signed-off-by: Ovidiu Panait <ovidiu.panait@windriver.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 119debdb9f25b1b24f6c52aa9b8a4aa4b51e2465
+Author: Jakub Sitnicki <jakub@cloudflare.com>
+Date:   Mon Aug 1 17:48:50 2022 +0300
+
+    selftests/bpf: Extend verifier and bpf_sock tests for dst_port loads
+    
+    commit 8f50f16ff39dd4e2d43d1548ca66925652f8aff7 upstream.
+    
+    Add coverage to the verifier tests and tests for reading bpf_sock fields to
+    ensure that 32-bit, 16-bit, and 8-bit loads from dst_port field are allowed
+    only at intended offsets and produce expected values.
+    
+    While 16-bit and 8-bit access to dst_port field is straight-forward, 32-bit
+    wide loads need be allowed and produce a zero-padded 16-bit value for
+    backward compatibility.
+    
+    Signed-off-by: Jakub Sitnicki <jakub@cloudflare.com>
+    Link: https://lore.kernel.org/r/20220130115518.213259-3-jakub@cloudflare.com
+    Signed-off-by: Alexei Starovoitov <ast@kernel.org>
+    Signed-off-by: Ovidiu Panait <ovidiu.panait@windriver.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit df9692b8a31902d8f0ae9e3f81cb4465431e22cc
+Author: Ben Hutchings <ben@decadent.org.uk>
+Date:   Sat Jul 23 17:22:47 2022 +0200
+
+    x86/speculation: Make all RETbleed mitigations 64-bit only
+    
+    commit b648ab487f31bc4c38941bc770ea97fe394304bb upstream.
+    
+    The mitigations for RETBleed are currently ineffective on x86_32 since
+    entry_32.S does not use the required macros.  However, for an x86_32
+    target, the kconfig symbols for them are still enabled by default and
+    /sys/devices/system/cpu/vulnerabilities/retbleed will wrongly report
+    that mitigations are in place.
+    
+    Make all of these symbols depend on X86_64, and only enable RETHUNK by
+    default on X86_64.
+    
+    Fixes: f43b9876e857 ("x86/retbleed: Add fine grained Kconfig knobs")
+    Signed-off-by: Ben Hutchings <ben@decadent.org.uk>
+    Signed-off-by: Borislav Petkov <bp@suse.de>
+    Cc: <stable@vger.kernel.org>
+    Link: https://lore.kernel.org/r/YtwSR3NNsWp1ohfV@decadent.org.uk
+    [bwh: Backported to 5.10/5.15/5.18: adjust context]
+    Signed-off-by: Ben Hutchings <ben@decadent.org.uk>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>

@@ -1,0 +1,1625 @@
+commit 7d54cb2c26dad1264ecca85992bfe8984df4b7b5
+Author: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+Date:   Sat Feb 25 11:25:43 2023 +0100
+
+    Linux 6.1.14
+    
+    Link: https://lore.kernel.org/r/20230223130431.553657459@linuxfoundation.org
+    Link: https://lore.kernel.org/r/20230223141545.280864003@linuxfoundation.org
+    Tested-by: Salvatore Bonaccorso <carnil@debian.org>
+    Tested-by: Justin M. Forbes <jforbes@fedoraproject.org>
+    Tested-by: Florian Fainelli <f.fainelli@gmail.com>
+    Tested-by: Conor Dooley <conor.dooley@microchip.com>
+    Tested-by: Shuah Khan <skhan@linuxfoundation.org>
+    Tested-by: Bagas Sanjaya <bagasdotme@gmail.com>
+    Tested-by: Guenter Roeck <linux@roeck-us.net>
+    Tested-by: Linux Kernel Functional Testing <lkft@linaro.org>
+    Tested-by: Sudip Mukherjee <sudip.mukherjee@codethink.co.uk>
+    Tested-by: Slade Watkins <srw@sladewatkins.net>
+    Tested-by: Ron Economos <re@w6rz.net>
+    Tested-by: Allen Pais <apais@linux.microsoft.com>
+    Tested-by: Kelsey Steele <kelseysteele@linux.microsoft.com>
+    Tested-by: Rudi Heitbaum <rudi@heitbaum.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit de41a146f98e16a9cc8d8db40405d071baeba332
+Author: Linus Torvalds <torvalds@linux-foundation.org>
+Date:   Wed Feb 22 09:52:32 2023 -0800
+
+    bpf: add missing header file include
+    
+    commit f3dd0c53370e70c0f9b7e931bbec12916f3bb8cc upstream.
+    
+    Commit 74e19ef0ff80 ("uaccess: Add speculation barrier to
+    copy_from_user()") built fine on x86-64 and arm64, and that's the extent
+    of my local build testing.
+    
+    It turns out those got the <linux/nospec.h> include incidentally through
+    other header files (<linux/kvm_host.h> in particular), but that was not
+    true of other architectures, resulting in build errors
+    
+      kernel/bpf/core.c: In function ‘___bpf_prog_run’:
+      kernel/bpf/core.c:1913:3: error: implicit declaration of function ‘barrier_nospec’
+    
+    so just make sure to explicitly include the proper <linux/nospec.h>
+    header file to make everybody see it.
+    
+    Fixes: 74e19ef0ff80 ("uaccess: Add speculation barrier to copy_from_user()")
+    Reported-by: kernel test robot <lkp@intel.com>
+    Reported-by: Viresh Kumar <viresh.kumar@linaro.org>
+    Reported-by: Huacai Chen <chenhuacai@loongson.cn>
+    Tested-by: Geert Uytterhoeven <geert@linux-m68k.org>
+    Tested-by: Dave Hansen <dave.hansen@linux.intel.com>
+    Acked-by: Alexei Starovoitov <alexei.starovoitov@gmail.com>
+    Signed-off-by: Linus Torvalds <torvalds@linux-foundation.org>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit a1bc22d04dcf5ff5fbdd537c4a6d12cdd6533ff7
+Author: Eric Biggers <ebiggers@google.com>
+Date:   Tue Feb 7 22:51:33 2023 -0800
+
+    randstruct: disable Clang 15 support
+    
+    commit 78f7a3fd6dc66cb788c21d7705977ed13c879351 upstream.
+    
+    The randstruct support released in Clang 15 is unsafe to use due to a
+    bug that can cause miscompilations: "-frandomize-layout-seed
+    inconsistently randomizes all-function-pointers structs"
+    (https://github.com/llvm/llvm-project/issues/60349).  It has been fixed
+    on the Clang 16 release branch, so add a Clang version check.
+    
+    Fixes: 035f7f87b729 ("randstruct: Enable Clang support")
+    Cc: stable@vger.kernel.org
+    Signed-off-by: Eric Biggers <ebiggers@google.com>
+    Acked-by: Nick Desaulniers <ndesaulniers@google.com>
+    Reviewed-by: Nathan Chancellor <nathan@kernel.org>
+    Reviewed-by: Bill Wendling <morbo@google.com>
+    Signed-off-by: Kees Cook <keescook@chromium.org>
+    Link: https://lore.kernel.org/r/20230208065133.220589-1-ebiggers@kernel.org
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 0a1394e07c5d6bf1bfc25db8589ff1b1bfb6f46a
+Author: Kees Cook <keescook@chromium.org>
+Date:   Wed Jan 4 13:09:12 2023 -0800
+
+    ext4: Fix function prototype mismatch for ext4_feat_ktype
+    
+    commit 118901ad1f25d2334255b3d50512fa20591531cd upstream.
+    
+    With clang's kernel control flow integrity (kCFI, CONFIG_CFI_CLANG),
+    indirect call targets are validated against the expected function
+    pointer prototype to make sure the call target is valid to help mitigate
+    ROP attacks. If they are not identical, there is a failure at run time,
+    which manifests as either a kernel panic or thread getting killed.
+    
+    ext4_feat_ktype was setting the "release" handler to "kfree", which
+    doesn't have a matching function prototype. Add a simple wrapper
+    with the correct prototype.
+    
+    This was found as a result of Clang's new -Wcast-function-type-strict
+    flag, which is more sensitive than the simpler -Wcast-function-type,
+    which only checks for type width mismatches.
+    
+    Note that this code is only reached when ext4 is a loadable module and
+    it is being unloaded:
+    
+     CFI failure at kobject_put+0xbb/0x1b0 (target: kfree+0x0/0x180; expected type: 0x7c4aa698)
+     ...
+     RIP: 0010:kobject_put+0xbb/0x1b0
+     ...
+     Call Trace:
+      <TASK>
+      ext4_exit_sysfs+0x14/0x60 [ext4]
+      cleanup_module+0x67/0xedb [ext4]
+    
+    Fixes: b99fee58a20a ("ext4: create ext4_feat kobject dynamically")
+    Cc: Theodore Ts'o <tytso@mit.edu>
+    Cc: Eric Biggers <ebiggers@kernel.org>
+    Cc: stable@vger.kernel.org
+    Build-tested-by: Gustavo A. R. Silva <gustavoars@kernel.org>
+    Reviewed-by: Gustavo A. R. Silva <gustavoars@kernel.org>
+    Reviewed-by: Nathan Chancellor <nathan@kernel.org>
+    Link: https://lore.kernel.org/r/20230103234616.never.915-kees@kernel.org
+    Signed-off-by: Kees Cook <keescook@chromium.org>
+    Reviewed-by: Eric Biggers <ebiggers@google.com>
+    Link: https://lore.kernel.org/r/20230104210908.gonna.388-kees@kernel.org
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 30b3075be48b5854c6274be3eafb583a69c002a9
+Author: Hans de Goede <hdegoede@redhat.com>
+Date:   Fri Feb 17 15:42:08 2023 +0100
+
+    platform/x86: nvidia-wmi-ec-backlight: Add force module parameter
+    
+    commit 0d9bdd8a550170306c2021b8d6766c5343b870c2 upstream.
+    
+    On some Lenovo Legion models, the backlight might be driven by either
+    one of nvidia_wmi_ec_backlight or amdgpu_bl0 at different times.
+    
+    When the Nvidia WMI EC backlight interface reports the backlight is
+    controlled by the EC, the current backlight handling only registers
+    nvidia_wmi_ec_backlight (and registers no other backlight interfaces).
+    
+    This hides (never registers) the amdgpu_bl0 interface, where as prior
+    to 6.1.4 users would have both nvidia_wmi_ec_backlight and amdgpu_bl0
+    and could work around things in userspace.
+    
+    Add a force module parameter which can be used with acpi_backlight=native
+    to restore the old behavior as a workound (for now) by passing:
+    
+    "acpi_backlight=native nvidia-wmi-ec-backlight.force=1"
+    
+    Fixes: 8d0ca287fd8c ("platform/x86: nvidia-wmi-ec-backlight: Use acpi_video_get_backlight_type()")
+    Link: https://bugzilla.kernel.org/show_bug.cgi?id=217026
+    Cc: stable@vger.kernel.org
+    Signed-off-by: Hans de Goede <hdegoede@redhat.com>
+    Reviewed-by: Daniel Dadap <ddadap@nvidia.com>
+    Link: https://lore.kernel.org/r/20230217144208.5721-1-hdegoede@redhat.com
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 16f118699259fd1645075ec46c9a6de78fd03734
+Author: Shyam Sundar S K <Shyam-sundar.S-k@amd.com>
+Date:   Mon Feb 13 17:44:57 2023 +0530
+
+    platform/x86/amd/pmf: Add depends on CONFIG_POWER_SUPPLY
+    
+    commit 3004e8d2a0a98bbf4223ae146464fadbff68bf78 upstream.
+    
+    It is reported that amd_pmf driver is missing "depends on" for
+    CONFIG_POWER_SUPPLY causing the following build error.
+    
+    ld: drivers/platform/x86/amd/pmf/core.o: in function `amd_pmf_remove':
+    core.c:(.text+0x10): undefined reference to `power_supply_unreg_notifier'
+    ld: drivers/platform/x86/amd/pmf/core.o: in function `amd_pmf_probe':
+    core.c:(.text+0x38f): undefined reference to `power_supply_reg_notifier'
+    make[1]: *** [scripts/Makefile.vmlinux:34: vmlinux] Error 1
+    make: *** [Makefile:1248: vmlinux] Error 2
+    
+    Add this to the Kconfig file.
+    
+    Link: https://bugzilla.kernel.org/show_bug.cgi?id=217028
+    Fixes: c5258d39fc4c ("platform/x86/amd/pmf: Add helper routine to update SPS thermals")
+    Signed-off-by: Shyam Sundar S K <Shyam-sundar.S-k@amd.com>
+    Link: https://lore.kernel.org/r/20230213121457.1764463-1-Shyam-sundar.S-k@amd.com
+    Cc: stable@vger.kernel.org
+    Reviewed-by: Hans de Goede <hdegoede@redhat.com>
+    Signed-off-by: Hans de Goede <hdegoede@redhat.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 09e7816c61cd2a4ae02bd0b1d24811a6d90cdd90
+Author: Paul Moore <paul@paul-moore.com>
+Date:   Tue Feb 7 10:21:47 2023 -0500
+
+    audit: update the mailing list in MAINTAINERS
+    
+    commit 6c6cd913accd77008f74a1a9d57b816db3651daa upstream.
+    
+    We've moved the upstream Linux Kernel audit subsystem discussions to
+    a new mailing list, this patch updates the MAINTAINERS info with the
+    new list address.
+    
+    Marking this for stable inclusion to help speed uptake of the new
+    list across all of the supported kernel releases.  This is a doc only
+    patch so the risk should be close to nil.
+    
+    Cc: stable@vger.kernel.org
+    Signed-off-by: Paul Moore <paul@paul-moore.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 2c97c5bc0b6f15aeb52b477043687238ac85fe49
+Author: Lukas Wunner <lukas@wunner.de>
+Date:   Fri Jan 27 15:01:00 2023 +0100
+
+    wifi: mwifiex: Add missing compatible string for SD8787
+    
+    commit 36dd7a4c6226133b0b7aa92b8e604e688d958d0c upstream.
+    
+    Commit e3fffc1f0b47 ("devicetree: document new marvell-8xxx and
+    pwrseq-sd8787 options") documented a compatible string for SD8787 in
+    the devicetree bindings, but neglected to add it to the mwifiex driver.
+    
+    Fixes: e3fffc1f0b47 ("devicetree: document new marvell-8xxx and pwrseq-sd8787 options")
+    Signed-off-by: Lukas Wunner <lukas@wunner.de>
+    Cc: stable@vger.kernel.org # v4.11+
+    Cc: Matt Ranostay <mranostay@ti.com>
+    Signed-off-by: Kalle Valo <kvalo@kernel.org>
+    Link: https://lore.kernel.org/r/320de5005ff3b8fd76be2d2b859fd021689c3681.1674827105.git.lukas@wunner.de
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 729bad73c01f91ba12afa8e723f57cb3f945402c
+Author: Tom Saeger <tom.saeger@oracle.com>
+Date:   Mon Jan 23 17:09:35 2023 -0700
+
+    sh: define RUNTIME_DISCARD_EXIT
+    
+    commit c1c551bebf928889e7a8fef7415b44f9a64975f4 upstream.
+    
+    sh vmlinux fails to link with GNU ld < 2.40 (likely < 2.36) since
+    commit 99cb0d917ffa ("arch: fix broken BuildID for arm64 and riscv").
+    
+    This is similar to fixes for powerpc and s390:
+    commit 4b9880dbf3bd ("powerpc/vmlinux.lds: Define RUNTIME_DISCARD_EXIT").
+    commit a494398bde27 ("s390: define RUNTIME_DISCARD_EXIT to fix link error
+    with GNU ld < 2.36").
+    
+      $ sh4-linux-gnu-ld --version | head -n1
+      GNU ld (GNU Binutils for Debian) 2.35.2
+    
+      $ make ARCH=sh CROSS_COMPILE=sh4-linux-gnu- microdev_defconfig
+      $ make ARCH=sh CROSS_COMPILE=sh4-linux-gnu-
+    
+      `.exit.text' referenced in section `__bug_table' of crypto/algboss.o:
+      defined in discarded section `.exit.text' of crypto/algboss.o
+      `.exit.text' referenced in section `__bug_table' of
+      drivers/char/hw_random/core.o: defined in discarded section
+      `.exit.text' of drivers/char/hw_random/core.o
+      make[2]: *** [scripts/Makefile.vmlinux:34: vmlinux] Error 1
+      make[1]: *** [Makefile:1252: vmlinux] Error 2
+    
+    arch/sh/kernel/vmlinux.lds.S keeps EXIT_TEXT:
+    
+            /*
+             * .exit.text is discarded at runtime, not link time, to deal with
+             * references from __bug_table
+             */
+            .exit.text : AT(ADDR(.exit.text)) { EXIT_TEXT }
+    
+    However, EXIT_TEXT is thrown away by
+    DISCARD(include/asm-generic/vmlinux.lds.h) because
+    sh does not define RUNTIME_DISCARD_EXIT.
+    
+    GNU ld 2.40 does not have this issue and builds fine.
+    This corresponds with Masahiro's comments in a494398bde27:
+    "Nathan [Chancellor] also found that binutils
+    commit 21401fc7bf67 ("Duplicate output sections in scripts") cured this
+    issue, so we cannot reproduce it with binutils 2.36+, but it is better
+    to not rely on it."
+    
+    Link: https://lkml.kernel.org/r/9166a8abdc0f979e50377e61780a4bba1dfa2f52.1674518464.git.tom.saeger@oracle.com
+    Fixes: 99cb0d917ffa ("arch: fix broken BuildID for arm64 and riscv")
+    Link: https://lore.kernel.org/all/Y7Jal56f6UBh1abE@dev-arch.thelio-3990X/
+    Link: https://lore.kernel.org/all/20230123194218.47ssfzhrpnv3xfez@oracle.com/
+    Signed-off-by: Tom Saeger <tom.saeger@oracle.com>
+    Tested-by: John Paul Adrian Glaubitz <glaubitz@physik.fu-berlin.de>
+    Cc: Ard Biesheuvel <ardb@kernel.org>
+    Cc: Arnd Bergmann <arnd@arndb.de>
+    Cc: Christoph Hellwig <hch@lst.de>
+    Cc: Dennis Gilmore <dennis@ausil.us>
+    Cc: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+    Cc: Masahiro Yamada <masahiroy@kernel.org>
+    Cc: Naresh Kamboju <naresh.kamboju@linaro.org>
+    Cc: Nathan Chancellor <nathan@kernel.org>
+    Cc: Palmer Dabbelt <palmer@rivosinc.com>
+    Cc: Rich Felker <dalias@libc.org>
+    Cc: Yoshinori Sato <ysato@users.sourceforge.jp>
+    Signed-off-by: Andrew Morton <akpm@linux-foundation.org>
+    Signed-off-by: Tom Saeger <tom.saeger@oracle.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit af3fae1cb2827f4b2e534d036dbcc07f235a9ee7
+Author: Masahiro Yamada <masahiroy@kernel.org>
+Date:   Thu Jan 5 12:13:06 2023 +0900
+
+    s390: define RUNTIME_DISCARD_EXIT to fix link error with GNU ld < 2.36
+    
+    commit a494398bde273143c2352dd373cad8211f7d94b2 upstream.
+    
+    Nathan Chancellor reports that the s390 vmlinux fails to link with
+    GNU ld < 2.36 since commit 99cb0d917ffa ("arch: fix broken BuildID
+    for arm64 and riscv").
+    
+    It happens for defconfig, or more specifically for CONFIG_EXPOLINE=y.
+    
+      $ s390x-linux-gnu-ld --version | head -n1
+      GNU ld (GNU Binutils for Debian) 2.35.2
+      $ make -s ARCH=s390 CROSS_COMPILE=s390x-linux-gnu- allnoconfig
+      $ ./scripts/config -e CONFIG_EXPOLINE
+      $ make -s ARCH=s390 CROSS_COMPILE=s390x-linux-gnu- olddefconfig
+      $ make -s ARCH=s390 CROSS_COMPILE=s390x-linux-gnu-
+      `.exit.text' referenced in section `.s390_return_reg' of drivers/base/dd.o: defined in discarded section `.exit.text' of drivers/base/dd.o
+      make[1]: *** [scripts/Makefile.vmlinux:34: vmlinux] Error 1
+      make: *** [Makefile:1252: vmlinux] Error 2
+    
+    arch/s390/kernel/vmlinux.lds.S wants to keep EXIT_TEXT:
+    
+            .exit.text : {
+                    EXIT_TEXT
+            }
+    
+    But, at the same time, EXIT_TEXT is thrown away by DISCARD because
+    s390 does not define RUNTIME_DISCARD_EXIT.
+    
+    I still do not understand why the latter wins after 99cb0d917ffa,
+    but defining RUNTIME_DISCARD_EXIT seems correct because the comment
+    line in arch/s390/kernel/vmlinux.lds.S says:
+    
+            /*
+             * .exit.text is discarded at runtime, not link time,
+             * to deal with references from __bug_table
+             */
+    
+    Nathan also found that binutils commit 21401fc7bf67 ("Duplicate output
+    sections in scripts") cured this issue, so we cannot reproduce it with
+    binutils 2.36+, but it is better to not rely on it.
+    
+    Fixes: 99cb0d917ffa ("arch: fix broken BuildID for arm64 and riscv")
+    Link: https://lore.kernel.org/all/Y7Jal56f6UBh1abE@dev-arch.thelio-3990X/
+    Reported-by: Nathan Chancellor <nathan@kernel.org>
+    Signed-off-by: Masahiro Yamada <masahiroy@kernel.org>
+    Link: https://lore.kernel.org/r/20230105031306.1455409-1-masahiroy@kernel.org
+    Signed-off-by: Heiko Carstens <hca@linux.ibm.com>
+    Signed-off-by: Tom Saeger <tom.saeger@oracle.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit a783d7f7cb957c5b652b5456020ece4e39f61a29
+Author: Michael Ellerman <mpe@ellerman.id.au>
+Date:   Thu Jan 5 22:28:36 2023 +1100
+
+    powerpc/vmlinux.lds: Don't discard .rela* for relocatable builds
+    
+    commit 07b050f9290ee012a407a0f64151db902a1520f5 upstream.
+    
+    Relocatable kernels must not discard relocations, they need to be
+    processed at runtime. As such they are included for CONFIG_RELOCATABLE
+    builds in the powerpc linker script (line 340).
+    
+    However they are also unconditionally discarded later in the
+    script (line 414). Previously that worked because the earlier inclusion
+    superseded the discard.
+    
+    However commit 99cb0d917ffa ("arch: fix broken BuildID for arm64 and
+    riscv") introduced an earlier use of DISCARD as part of the RO_DATA
+    macro (line 137). With binutils < 2.36 that causes the DISCARD
+    directives later in the script to be applied earlier, causing .rela* to
+    actually be discarded at link time, leading to build warnings and a
+    kernel that doesn't boot:
+    
+      ld: warning: discarding dynamic section .rela.init.rodata
+    
+    Fix it by conditionally discarding .rela* only when CONFIG_RELOCATABLE
+    is disabled.
+    
+    Fixes: 99cb0d917ffa ("arch: fix broken BuildID for arm64 and riscv")
+    Signed-off-by: Michael Ellerman <mpe@ellerman.id.au>
+    Link: https://lore.kernel.org/r/20230105132349.384666-2-mpe@ellerman.id.au
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+    Signed-off-by: Tom Saeger <tom.saeger@oracle.com>
+
+commit 9c87fd4a3044b6950179669fbdde624e881bc669
+Author: Michael Ellerman <mpe@ellerman.id.au>
+Date:   Thu Jan 5 22:05:04 2023 +1100
+
+    powerpc/vmlinux.lds: Define RUNTIME_DISCARD_EXIT
+    
+    commit 4b9880dbf3bdba3a7c56445137c3d0e30aaa0a40 upstream.
+    
+    The powerpc linker script explicitly includes .exit.text, because
+    otherwise the link fails due to references from __bug_table and
+    __ex_table. The code is freed (discarded) at runtime along with
+    .init.text and data.
+    
+    That has worked in the past despite powerpc not defining
+    RUNTIME_DISCARD_EXIT because DISCARDS appears late in the powerpc linker
+    script (line 410), and the explicit inclusion of .exit.text
+    earlier (line 280) supersedes the discard.
+    
+    However commit 99cb0d917ffa ("arch: fix broken BuildID for arm64 and
+    riscv") introduced an earlier use of DISCARD as part of the RO_DATA
+    macro (line 136). With binutils < 2.36 that causes the DISCARD
+    directives later in the script to be applied earlier [1], causing
+    .exit.text to actually be discarded at link time, leading to build
+    errors:
+    
+      '.exit.text' referenced in section '__bug_table' of crypto/algboss.o: defined in
+      discarded section '.exit.text' of crypto/algboss.o
+      '.exit.text' referenced in section '__ex_table' of drivers/nvdimm/core.o: defined in
+      discarded section '.exit.text' of drivers/nvdimm/core.o
+    
+    Fix it by defining RUNTIME_DISCARD_EXIT, which causes the generic
+    DISCARDS macro to not include .exit.text at all.
+    
+    1: https://lore.kernel.org/lkml/87fscp2v7k.fsf@igel.home/
+    
+    Fixes: 99cb0d917ffa ("arch: fix broken BuildID for arm64 and riscv")
+    Signed-off-by: Michael Ellerman <mpe@ellerman.id.au>
+    Link: https://lore.kernel.org/r/20230105132349.384666-1-mpe@ellerman.id.au
+    Signed-off-by: Tom Saeger <tom.saeger@oracle.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit bffd0bbf8c55749e497be41b51a5e8b19ce4d4cb
+Author: Masahiro Yamada <masahiroy@kernel.org>
+Date:   Tue Dec 27 03:45:37 2022 +0900
+
+    arch: fix broken BuildID for arm64 and riscv
+    
+    commit 99cb0d917ffa1ab628bb67364ca9b162c07699b1 upstream.
+    
+    Dennis Gilmore reports that the BuildID is missing in the arm64 vmlinux
+    since commit 994b7ac1697b ("arm64: remove special treatment for the
+    link order of head.o").
+    
+    The issue is that the type of .notes section, which contains the BuildID,
+    changed from NOTES to PROGBITS.
+    
+    Ard Biesheuvel figured out that whichever object gets linked first gets
+    to decide the type of a section. The PROGBITS type is the result of the
+    compiler emitting .note.GNU-stack as PROGBITS rather than NOTE.
+    
+    While Ard provided a fix for arm64, I want to fix this globally because
+    the same issue is happening on riscv since commit 2348e6bf4421 ("riscv:
+    remove special treatment for the link order of head.o"). This problem
+    will happen in general for other architectures if they start to drop
+    unneeded entries from scripts/head-object-list.txt.
+    
+    Discard .note.GNU-stack in include/asm-generic/vmlinux.lds.h.
+    
+    Link: https://lore.kernel.org/lkml/CAABkxwuQoz1CTbyb57n0ZX65eSYiTonFCU8-LCQc=74D=xE=rA@mail.gmail.com/
+    Fixes: 994b7ac1697b ("arm64: remove special treatment for the link order of head.o")
+    Fixes: 2348e6bf4421 ("riscv: remove special treatment for the link order of head.o")
+    Reported-by: Dennis Gilmore <dennis@ausil.us>
+    Suggested-by: Ard Biesheuvel <ardb@kernel.org>
+    Signed-off-by: Masahiro Yamada <masahiroy@kernel.org>
+    Acked-by: Palmer Dabbelt <palmer@rivosinc.com>
+    Signed-off-by: Tom Saeger <tom.saeger@oracle.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 3e3e4d234d46e48480a7c7c35399fa811182e8ef
+Author: Masahiro Yamada <masahiroy@kernel.org>
+Date:   Thu Oct 13 08:35:00 2022 +0900
+
+    arm64: remove special treatment for the link order of head.o
+    
+    commit 994b7ac1697b4581b7726d2ac64321e3c840229b upstream.
+    
+    In the previous discussion (see the Link tag), Ard pointed out that
+    arm/arm64/kernel/head.o does not need any special treatment - the only
+    piece that must appear right at the start of the binary image is the
+    image header which is emitted into .head.text.
+    
+    The linker script does the right thing to do. The build system does
+    not need to manipulate the link order of head.o.
+    
+    Link: https://lore.kernel.org/lkml/CAMj1kXH77Ja8bSsq2Qj8Ck9iSZKw=1F8Uy-uAWGVDm4-CG=EuA@mail.gmail.com/
+    Suggested-by: Ard Biesheuvel <ardb@kernel.org>
+    Signed-off-by: Masahiro Yamada <masahiroy@kernel.org>
+    Reviewed-by: Nicolas Schier <nicolas@fjasle.eu>
+    Link: https://lore.kernel.org/r/20221012233500.156764-1-masahiroy@kernel.org
+    Signed-off-by: Will Deacon <will@kernel.org>
+    Signed-off-by: Tom Saeger <tom.saeger@oracle.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 48e9a752ce40bf58dd7e7516a33e5542c4aaa5d4
+Author: Jisheng Zhang <jszhang@kernel.org>
+Date:   Tue Oct 18 22:12:00 2022 +0800
+
+    riscv: remove special treatment for the link order of head.o
+    
+    commit 2348e6bf44213c5f447ff698e43c089185241ed7 upstream.
+    
+    arch/riscv/kernel/head.o does not need any special treatment - the only
+    requirement is the ".head.text" section must be placed before the
+    normal ".text" section.
+    
+    The linker script does the right thing to do. The build system does
+    not need to manipulate the link order of head.o.
+    
+    Signed-off-by: Jisheng Zhang <jszhang@kernel.org>
+    Link: https://lore.kernel.org/r/20221018141200.1040-1-jszhang@kernel.org
+    Signed-off-by: Palmer Dabbelt <palmer@rivosinc.com>
+    Signed-off-by: Tom Saeger <tom.saeger@oracle.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit f977340022ad7136163ee3386d1dca4b23b409e5
+Author: Shengyu Qu <wiagn233@outlook.com>
+Date:   Sun Oct 30 01:22:54 2022 +0800
+
+    Bluetooth: btusb: Add more device IDs for WCN6855
+    
+    commit ca2a99447e17acd67258aa1d54d7ea3c404a779c upstream.
+    
+    Add IDs to usb_device_id table for WCN6855. IDs are extracted from Windows
+    driver of Lenovo Thinkpad T14 Gen 2(Driver version 1.0.0.1205 Windows 10)
+    
+    Windows driver download address:
+    https://pcsupport.lenovo.com/us/en/products/laptops-and-netbooks/
+    thinkpad-t-series-laptops/thinkpad-t14-gen-2-type-20xk-20xl/downloads
+    /driver-list/
+    
+    Signed-off-by: Shengyu Qu <wiagn233@outlook.com>
+    Signed-off-by: Luiz Augusto von Dentz <luiz.von.dentz@intel.com>
+    Cc: "Limonciello, Mario" <Mario.Limonciello@amd.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 9d80f3e600437fafe8a3c2d813a55e292bf240ec
+Author: Peter Zijlstra <peterz@infradead.org>
+Date:   Thu Jan 26 16:34:27 2023 +0100
+
+    x86/static_call: Add support for Jcc tail-calls
+    
+    commit 923510c88d2b7d947c4217835fd9ca6bd65cc56c upstream.
+    
+    Clang likes to create conditional tail calls like:
+    
+      0000000000000350 <amd_pmu_add_event>:
+      350:       0f 1f 44 00 00          nopl   0x0(%rax,%rax,1) 351: R_X86_64_NONE      __fentry__-0x4
+      355:       48 83 bf 20 01 00 00 00         cmpq   $0x0,0x120(%rdi)
+      35d:       0f 85 00 00 00 00       jne    363 <amd_pmu_add_event+0x13>     35f: R_X86_64_PLT32     __SCT__amd_pmu_branch_add-0x4
+      363:       e9 00 00 00 00          jmp    368 <amd_pmu_add_event+0x18>     364: R_X86_64_PLT32     __x86_return_thunk-0x4
+    
+    Where 0x35d is a static call site that's turned into a conditional
+    tail-call using the Jcc class of instructions.
+    
+    Teach the in-line static call text patching about this.
+    
+    Notably, since there is no conditional-ret, in that case patch the Jcc
+    to point at an empty stub function that does the ret -- or the return
+    thunk when needed.
+    
+    Reported-by: "Erhard F." <erhard_f@mailbox.org>
+    Signed-off-by: Peter Zijlstra (Intel) <peterz@infradead.org>
+    Signed-off-by: Ingo Molnar <mingo@kernel.org>
+    Reviewed-by: Masami Hiramatsu (Google) <mhiramat@kernel.org>
+    Link: https://lore.kernel.org/r/Y9Kdg9QjHkr9G5b5@hirez.programming.kicks-ass.net
+    [nathan: Backport to 6.1:
+             - Use __x86_return_thunk instead of x86_return_thunk for func in
+               __static_call_transform()
+             - Remove ASM_FUNC_ALIGN in __static_call_return() asm, as call
+               depth tracking was merged in 6.2]
+    Signed-off-by: Nathan Chancellor <nathan@kernel.org>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit c51a456b4179f02e09dbe58d5cbbde8635e7b309
+Author: Peter Zijlstra <peterz@infradead.org>
+Date:   Mon Jan 23 21:59:17 2023 +0100
+
+    x86/alternatives: Teach text_poke_bp() to patch Jcc.d32 instructions
+    
+    commit ac0ee0a9560c97fa5fe1409e450c2425d4ebd17a upstream.
+    
+    In order to re-write Jcc.d32 instructions text_poke_bp() needs to be
+    taught about them.
+    
+    The biggest hurdle is that the whole machinery is currently made for 5
+    byte instructions and extending this would grow struct text_poke_loc
+    which is currently a nice 16 bytes and used in an array.
+    
+    However, since text_poke_loc contains a full copy of the (s32)
+    displacement, it is possible to map the Jcc.d32 2 byte opcodes to
+    Jcc.d8 1 byte opcode for the int3 emulation.
+    
+    This then leaves the replacement bytes; fudge that by only storing the
+    last 5 bytes and adding the rule that 'length == 6' instruction will
+    be prefixed with a 0x0f byte.
+    
+    Signed-off-by: Peter Zijlstra (Intel) <peterz@infradead.org>
+    Signed-off-by: Ingo Molnar <mingo@kernel.org>
+    Reviewed-by: Masami Hiramatsu (Google) <mhiramat@kernel.org>
+    Link: https://lore.kernel.org/r/20230123210607.115718513@infradead.org
+    [nathan: Introduce is_jcc32() as part of this change; upstream
+             introduced it in 3b6c1747da48]
+    Signed-off-by: Nathan Chancellor <nathan@kernel.org>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 75c066485bcb0613b5db72bbfe863ff3d1921bc4
+Author: Peter Zijlstra <peterz@infradead.org>
+Date:   Mon Jan 23 21:59:16 2023 +0100
+
+    x86/alternatives: Introduce int3_emulate_jcc()
+    
+    commit db7adcfd1cec4e95155e37bc066fddab302c6340 upstream.
+    
+    Move the kprobe Jcc emulation into int3_emulate_jcc() so it can be
+    used by more code -- specifically static_call() will need this.
+    
+    Signed-off-by: Peter Zijlstra (Intel) <peterz@infradead.org>
+    Signed-off-by: Ingo Molnar <mingo@kernel.org>
+    Reviewed-by: Masami Hiramatsu (Google) <mhiramat@kernel.org>
+    Link: https://lore.kernel.org/r/20230123210607.057678245@infradead.org
+    Signed-off-by: Nathan Chancellor <nathan@kernel.org>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 684db631a15779c8f3b2235d507efdfe6bb10278
+Author: Dave Hansen <dave.hansen@linux.intel.com>
+Date:   Tue Feb 21 12:30:15 2023 -0800
+
+    uaccess: Add speculation barrier to copy_from_user()
+    
+    commit 74e19ef0ff8061ef55957c3abd71614ef0f42f47 upstream.
+    
+    The results of "access_ok()" can be mis-speculated.  The result is that
+    you can end speculatively:
+    
+            if (access_ok(from, size))
+                    // Right here
+    
+    even for bad from/size combinations.  On first glance, it would be ideal
+    to just add a speculation barrier to "access_ok()" so that its results
+    can never be mis-speculated.
+    
+    But there are lots of system calls just doing access_ok() via
+    "copy_to_user()" and friends (example: fstat() and friends).  Those are
+    generally not problematic because they do not _consume_ data from
+    userspace other than the pointer.  They are also very quick and common
+    system calls that should not be needlessly slowed down.
+    
+    "copy_from_user()" on the other hand uses a user-controller pointer and
+    is frequently followed up with code that might affect caches.  Take
+    something like this:
+    
+            if (!copy_from_user(&kernelvar, uptr, size))
+                    do_something_with(kernelvar);
+    
+    If userspace passes in an evil 'uptr' that *actually* points to a kernel
+    addresses, and then do_something_with() has cache (or other)
+    side-effects, it could allow userspace to infer kernel data values.
+    
+    Add a barrier to the common copy_from_user() code to prevent
+    mis-speculated values which happen after the copy.
+    
+    Also add a stub for architectures that do not define barrier_nospec().
+    This makes the macro usable in generic code.
+    
+    Since the barrier is now usable in generic code, the x86 #ifdef in the
+    BPF code can also go away.
+    
+    Reported-by: Jordy Zomer <jordyzomer@google.com>
+    Suggested-by: Linus Torvalds <torvalds@linuxfoundation.org>
+    Signed-off-by: Dave Hansen <dave.hansen@linux.intel.com>
+    Reviewed-by: Thomas Gleixner <tglx@linutronix.de>
+    Acked-by: Daniel Borkmann <daniel@iogearbox.net>   # BPF bits
+    Signed-off-by: Linus Torvalds <torvalds@linux-foundation.org>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 173cadcece7601e464b29e08289a668b1ff3da73
+Author: Yu Xiao <yu.xiao@corigine.com>
+Date:   Tue Feb 7 11:16:50 2023 +0100
+
+    nfp: ethtool: fix the bug of setting unsupported port speed
+    
+    [ Upstream commit 821de68c1f9c0236b0b9c10834cda900ae9b443c ]
+    
+    Unsupported port speed can be set and cause error. Now fixing it
+    and return an error if setting unsupported speed.
+    
+    This fix depends on the following, which was included in v6.2-rc1:
+    commit a61474c41e8c ("nfp: ethtool: support reporting link modes").
+    
+    Fixes: 7c698737270f ("nfp: add support for .set_link_ksettings()")
+    Signed-off-by: Yu Xiao <yu.xiao@corigine.com>
+    Signed-off-by: Simon Horman <simon.horman@corigine.com>
+    Signed-off-by: David S. Miller <davem@davemloft.net>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 05c91c03913902dfed96669160b385beaae69232
+Author: Yu Xiao <yu.xiao@corigine.com>
+Date:   Fri Nov 25 12:30:30 2022 +0100
+
+    nfp: ethtool: support reporting link modes
+    
+    [ Upstream commit a61474c41e8c530c54a26db4f5434f050ef7718d ]
+    
+    Add support for reporting link modes,
+    including `Supported link modes` and `Advertised link modes`,
+    via ethtool $DEV.
+    
+    A new command `SPCODE_READ_MEDIA` is added to read info from
+    management firmware. Also, the mapping table `nfp_eth_media_table`
+    associates the link modes between NFP and kernel. Both of them
+    help to support this ability.
+    
+    Signed-off-by: Yu Xiao <yu.xiao@corigine.com>
+    Reviewed-by: Louis Peens <louis.peens@corigine.com>
+    Signed-off-by: Simon Horman <simon.horman@corigine.com>
+    Reviewed-by: Alexander Lobakin <alexandr.lobakin@intel.com>
+    Link: https://lore.kernel.org/r/20221125113030.141642-1-simon.horman@corigine.com
+    Signed-off-by: Paolo Abeni <pabeni@redhat.com>
+    Stable-dep-of: 821de68c1f9c ("nfp: ethtool: fix the bug of setting unsupported port speed")
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit fd2dba8b4a35c296fba0f601fed1f2190f57f87b
+Author: Michael Ellerman <mpe@ellerman.id.au>
+Date:   Tue Jan 10 23:47:53 2023 +1100
+
+    powerpc/64s/radix: Fix RWX mapping with relocated kernel
+    
+    [ Upstream commit 111bcb37385353f0510e5847d5abcd1c613dba23 ]
+    
+    If a relocatable kernel is loaded at a non-zero address and told not to
+    relocate to zero (kdump or RELOCATABLE_TEST), the mapping of the
+    interrupt code at zero is left with RWX permissions.
+    
+    That is a security weakness, and leads to a warning at boot if
+    CONFIG_DEBUG_WX is enabled:
+    
+      powerpc/mm: Found insecure W+X mapping at address 00000000056435bc/0xc000000000000000
+      WARNING: CPU: 1 PID: 1 at arch/powerpc/mm/ptdump/ptdump.c:193 note_page+0x484/0x4c0
+      CPU: 1 PID: 1 Comm: swapper/0 Not tainted 6.2.0-rc1-00001-g8ae8e98aea82-dirty #175
+      Hardware name: IBM pSeries (emulated by qemu) POWER9 (raw) 0x4e1202 0xf000005 of:SLOF,git-dd0dca hv:linux,kvm pSeries
+      NIP:  c0000000004a1c34 LR: c0000000004a1c30 CTR: 0000000000000000
+      REGS: c000000003503770 TRAP: 0700   Not tainted  (6.2.0-rc1-00001-g8ae8e98aea82-dirty)
+      MSR:  8000000002029033 <SF,VEC,EE,ME,IR,DR,RI,LE>  CR: 24000220  XER: 00000000
+      CFAR: c000000000545a58 IRQMASK: 0
+      ...
+      NIP note_page+0x484/0x4c0
+      LR  note_page+0x480/0x4c0
+      Call Trace:
+        note_page+0x480/0x4c0 (unreliable)
+        ptdump_pmd_entry+0xc8/0x100
+        walk_pgd_range+0x618/0xab0
+        walk_page_range_novma+0x74/0xc0
+        ptdump_walk_pgd+0x98/0x170
+        ptdump_check_wx+0x94/0x100
+        mark_rodata_ro+0x30/0x70
+        kernel_init+0x78/0x1a0
+        ret_from_kernel_thread+0x5c/0x64
+    
+    The fix has two parts. Firstly the pages from zero up to the end of
+    interrupts need to be marked read-only, so that they are left with R-X
+    permissions. Secondly the mapping logic needs to be taught to ensure
+    there is a page boundary at the end of the interrupt region, so that the
+    permission change only applies to the interrupt text, and not the region
+    following it.
+    
+    Fixes: c55d7b5e6426 ("powerpc: Remove STRICT_KERNEL_RWX incompatibility with RELOCATABLE")
+    Reported-by: Sachin Sant <sachinp@linux.ibm.com>
+    Tested-by: Sachin Sant <sachinp@linux.ibm.com>
+    Signed-off-by: Michael Ellerman <mpe@ellerman.id.au>
+    Link: https://lore.kernel.org/r/20230110124753.1325426-2-mpe@ellerman.id.au
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 05197a0916f5f2adab282e4868f21113ccaaf837
+Author: Paolo Bonzini <pbonzini@redhat.com>
+Date:   Sun Jan 22 04:04:50 2023 -0500
+
+    selftests: kvm: move declaration at the beginning of main()
+    
+    [ Upstream commit 50aa870ba2f7735f556e52d15f61cd0f359c4c0b ]
+    
+    Placing a declaration of evt_reset is pedantically invalid
+    according to the C standard.  While GCC does not really care
+    and only warns with -Wpedantic, clang ignores the declaration
+    altogether with an error:
+    
+    x86_64/xen_shinfo_test.c:965:2: error: expected expression
+            struct kvm_xen_hvm_attr evt_reset = {
+            ^
+    x86_64/xen_shinfo_test.c:969:38: error: use of undeclared identifier evt_reset
+            vm_ioctl(vm, KVM_XEN_HVM_SET_ATTR, &evt_reset);
+                                                ^
+    
+    Reported-by: Yu Zhang <yu.c.zhang@linux.intel.com>
+    Reported-by: Sean Christopherson <seanjc@google.com>
+    Fixes: a79b53aaaab5 ("KVM: x86: fix deadlock for KVM_XEN_EVTCHN_RESET", 2022-12-28)
+    Signed-off-by: Paolo Bonzini <pbonzini@redhat.com>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 0e2dba8c0ebeaf2e32b71356ea3df8d578057935
+Author: Paolo Bonzini <pbonzini@redhat.com>
+Date:   Wed Dec 28 05:33:41 2022 -0500
+
+    KVM: x86: fix deadlock for KVM_XEN_EVTCHN_RESET
+    
+    [ Upstream commit a79b53aaaab53de017517bf9579b6106397a523c ]
+    
+    While KVM_XEN_EVTCHN_RESET is usually called with no vCPUs running,
+    if that happened it could cause a deadlock.  This is due to
+    kvm_xen_eventfd_reset() doing a synchronize_srcu() inside
+    a kvm->lock critical section.
+    
+    To avoid this, first collect all the evtchnfd objects in an
+    array and free all of them once the kvm->lock critical section
+    is over and th SRCU grace period has expired.
+    
+    Reported-by: Michal Luczaj <mhal@rbox.co>
+    Cc: David Woodhouse <dwmw@amazon.co.uk>
+    Signed-off-by: Paolo Bonzini <pbonzini@redhat.com>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 44610f4c3093bbce3061b77d37bdf1bed8e379da
+Author: Lucas De Marchi <lucas.demarchi@intel.com>
+Date:   Wed Dec 14 11:49:44 2022 -0800
+
+    drm/i915: Remove __maybe_unused from mtl_info
+    
+    [ Upstream commit fff758698842fb6722be37498d8773e0fb47f000 ]
+    
+    The attribute __maybe_unused should remain only until the respective
+    info is not in the pciidlist. The info can't be added together
+    with its definition because that would cause the driver to automatically
+    probe for the device, while it's still not ready for that. However once
+    pciidlist contains it, the attribute can be removed.
+    
+    Fixes: 7835303982d1 ("drm/i915/mtl: Add MeteorLake PCI IDs")
+    Signed-off-by: Lucas De Marchi <lucas.demarchi@intel.com>
+    Reviewed-by: Radhakrishna Sripada <radhakrishna.sripada@intel.com>
+    Link: https://patchwork.freedesktop.org/patch/msgid/20221214194944.3670344-1-lucas.demarchi@intel.com
+    (cherry picked from commit 50490ce05b7a50b0bd4108fa7d6db3ca2972fa83)
+    Signed-off-by: Rodrigo Vivi <rodrigo.vivi@intel.com>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 185ffdeb772c6c8cb30878dd4be488976c780f2b
+Author: Ricardo Ribalda <ribalda@chromium.org>
+Date:   Sun Dec 25 09:37:12 2022 +0100
+
+    spi: mediatek: Enable irq before the spi registration
+    
+    [ Upstream commit b24cded8c065d7cef8690b2c7b82b828cce57708 ]
+    
+    If the irq is enabled after the spi si registered, there can be a race
+    with the initialization of the devices on the spi bus.
+    
+    Eg:
+    mtk-spi 1100a000.spi: spi-mem transfer timeout
+    spi-nor: probe of spi0.0 failed with error -110
+    Unable to handle kernel NULL pointer dereference at virtual address
+    0000000000000010
+    ...
+    Call trace:
+     mtk_spi_can_dma+0x0/0x2c
+    
+    Fixes: c6f7874687f7 ("spi: mediatek: Enable irq when pdata is ready")
+    Reported-by: Daniel Golle <daniel@makrotopia.org>
+    Signed-off-by: Ricardo Ribalda <ribalda@chromium.org>
+    Tested-by: Daniel Golle <daniel@makrotopia.org>
+    Link: https://lore.kernel.org/r/20221225-mtk-spi-fixes-v1-0-bb6c14c232f8@chromium.org
+    Signed-off-by: Mark Brown <broonie@kernel.org>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 5260618d578356875381ee94763b438d26867818
+Author: Sean Anderson <sean.anderson@seco.com>
+Date:   Fri Dec 16 12:29:37 2022 -0500
+
+    powerpc: dts: t208x: Disable 10G on MAC1 and MAC2
+    
+    [ Upstream commit 8d8bee13ae9e316443c6666286360126a19c8d94 ]
+    
+    There aren't enough resources to run these ports at 10G speeds. Disable
+    10G for these ports, reverting to the previous speed.
+    
+    Fixes: 36926a7d70c2 ("powerpc: dts: t208x: Mark MAC1 and MAC2 as 10G")
+    Reported-by: Camelia Alexandra Groza <camelia.groza@nxp.com>
+    Signed-off-by: Sean Anderson <sean.anderson@seco.com>
+    Reviewed-by: Camelia Groza <camelia.groza@nxp.com>
+    Tested-by: Camelia Groza <camelia.groza@nxp.com>
+    Link: https://lore.kernel.org/r/20221216172937.2960054-1-sean.anderson@seco.com
+    Signed-off-by: Jakub Kicinski <kuba@kernel.org>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit a169ff38abd0934e4d9e7853bef0a6f2d21069cb
+Author: Marc Kleine-Budde <mkl@pengutronix.de>
+Date:   Mon Dec 19 11:39:27 2022 +0100
+
+    can: kvaser_usb: hydra: help gcc-13 to figure out cmd_len
+    
+    [ Upstream commit f006229135b7debf4037adb1eb93e358559593db ]
+    
+    Debian's gcc-13 [1] throws the following error in
+    kvaser_usb_hydra_cmd_size():
+    
+    [1] gcc version 13.0.0 20221214 (experimental) [master r13-4693-g512098a3316] (Debian 13-20221214-1)
+    
+    | drivers/net/can/usb/kvaser_usb/kvaser_usb_hydra.c:502:65: error:
+    | array subscript ‘struct kvaser_cmd_ext[0]’ is partly outside array
+    | bounds of ‘unsigned char[32]’ [-Werror=array-bounds=]
+    |   502 |                 ret = le16_to_cpu(((struct kvaser_cmd_ext *)cmd)->len);
+    
+    kvaser_usb_hydra_cmd_size() returns the size of given command. It
+    depends on the command number (cmd->header.cmd_no). For extended
+    commands (cmd->header.cmd_no == CMD_EXTENDED) the above shown code is
+    executed.
+    
+    Help gcc to recognize that this code path is not taken in all cases,
+    by calling kvaser_usb_hydra_cmd_size() directly after assigning the
+    command number.
+    
+    Fixes: aec5fb2268b7 ("can: kvaser_usb: Add support for Kvaser USB hydra family")
+    Cc: Jimmy Assarsson <extja@kvaser.com>
+    Cc: Anssi Hannula <anssi.hannula@bitwise.fi>
+    Link: https://lore.kernel.org/all/20221219110104.1073881-1-mkl@pengutronix.de
+    Tested-by: Jimmy Assarsson <extja@kvaser.com>
+    Signed-off-by: Marc Kleine-Budde <mkl@pengutronix.de>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 63fada296062e91ad9f871970d4e7f19e21a6a15
+Author: Jim Mattson <jmattson@google.com>
+Date:   Wed Oct 19 14:36:20 2022 -0700
+
+    KVM: VMX: Execute IBPB on emulated VM-exit when guest has IBRS
+    
+    [ Upstream commit 2e7eab81425ad6c875f2ed47c0ce01e78afc38a5 ]
+    
+    According to Intel's document on Indirect Branch Restricted
+    Speculation, "Enabling IBRS does not prevent software from controlling
+    the predicted targets of indirect branches of unrelated software
+    executed later at the same predictor mode (for example, between two
+    different user applications, or two different virtual machines). Such
+    isolation can be ensured through use of the Indirect Branch Predictor
+    Barrier (IBPB) command." This applies to both basic and enhanced IBRS.
+    
+    Since L1 and L2 VMs share hardware predictor modes (guest-user and
+    guest-kernel), hardware IBRS is not sufficient to virtualize
+    IBRS. (The way that basic IBRS is implemented on pre-eIBRS parts,
+    hardware IBRS is actually sufficient in practice, even though it isn't
+    sufficient architecturally.)
+    
+    For virtual CPUs that support IBRS, add an indirect branch prediction
+    barrier on emulated VM-exit, to ensure that the predicted targets of
+    indirect branches executed in L1 cannot be controlled by software that
+    was executed in L2.
+    
+    Since we typically don't intercept guest writes to IA32_SPEC_CTRL,
+    perform the IBPB at emulated VM-exit regardless of the current
+    IA32_SPEC_CTRL.IBRS value, even though the IBPB could technically be
+    deferred until L1 sets IA32_SPEC_CTRL.IBRS, if IA32_SPEC_CTRL.IBRS is
+    clear at emulated VM-exit.
+    
+    This is CVE-2022-2196.
+    
+    Fixes: 5c911beff20a ("KVM: nVMX: Skip IBPB when switching between vmcs01 and vmcs02")
+    Cc: Sean Christopherson <seanjc@google.com>
+    Signed-off-by: Jim Mattson <jmattson@google.com>
+    Reviewed-by: Sean Christopherson <seanjc@google.com>
+    Link: https://lore.kernel.org/r/20221019213620.1953281-3-jmattson@google.com
+    Signed-off-by: Sean Christopherson <seanjc@google.com>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit a51ed3943eba7b7783a6df6902f9f61a61adbc57
+Author: Sean Christopherson <seanjc@google.com>
+Date:   Fri Sep 30 23:40:31 2022 +0000
+
+    KVM: SVM: Skip WRMSR fastpath on VM-Exit if next RIP isn't valid
+    
+    [ Upstream commit 5c30e8101e8d5d020b1d7119117889756a6ed713 ]
+    
+    Skip the WRMSR fastpath in SVM's VM-Exit handler if the next RIP isn't
+    valid, e.g. because KVM is running with nrips=false.  SVM must decode and
+    emulate to skip the WRMSR if the CPU doesn't provide the next RIP.
+    Getting the instruction bytes to decode the WRMSR requires reading guest
+    memory, which in turn means dereferencing memslots, and that isn't safe
+    because KVM doesn't hold SRCU when the fastpath runs.
+    
+    Don't bother trying to enable the fastpath for this case, e.g. by doing
+    only the WRMSR and leaving the "skip" until later.  NRIPS is supported on
+    all modern CPUs (KVM has considered making it mandatory), and the next
+    RIP will be valid the vast, vast majority of the time.
+    
+      =============================
+      WARNING: suspicious RCU usage
+      6.0.0-smp--4e557fcd3d80-skip #13 Tainted: G           O
+      -----------------------------
+      include/linux/kvm_host.h:954 suspicious rcu_dereference_check() usage!
+    
+      other info that might help us debug this:
+    
+      rcu_scheduler_active = 2, debug_locks = 1
+      1 lock held by stable/206475:
+       #0: ffff9d9dfebcc0f0 (&vcpu->mutex){+.+.}-{3:3}, at: kvm_vcpu_ioctl+0x8b/0x620 [kvm]
+    
+      stack backtrace:
+      CPU: 152 PID: 206475 Comm: stable Tainted: G           O       6.0.0-smp--4e557fcd3d80-skip #13
+      Hardware name: Google, Inc. Arcadia_IT_80/Arcadia_IT_80, BIOS 10.48.0 01/27/2022
+      Call Trace:
+       <TASK>
+       dump_stack_lvl+0x69/0xaa
+       dump_stack+0x10/0x12
+       lockdep_rcu_suspicious+0x11e/0x130
+       kvm_vcpu_gfn_to_memslot+0x155/0x190 [kvm]
+       kvm_vcpu_gfn_to_hva_prot+0x18/0x80 [kvm]
+       paging64_walk_addr_generic+0x183/0x450 [kvm]
+       paging64_gva_to_gpa+0x63/0xd0 [kvm]
+       kvm_fetch_guest_virt+0x53/0xc0 [kvm]
+       __do_insn_fetch_bytes+0x18b/0x1c0 [kvm]
+       x86_decode_insn+0xf0/0xef0 [kvm]
+       x86_emulate_instruction+0xba/0x790 [kvm]
+       kvm_emulate_instruction+0x17/0x20 [kvm]
+       __svm_skip_emulated_instruction+0x85/0x100 [kvm_amd]
+       svm_skip_emulated_instruction+0x13/0x20 [kvm_amd]
+       handle_fastpath_set_msr_irqoff+0xae/0x180 [kvm]
+       svm_vcpu_run+0x4b8/0x5a0 [kvm_amd]
+       vcpu_enter_guest+0x16ca/0x22f0 [kvm]
+       kvm_arch_vcpu_ioctl_run+0x39d/0x900 [kvm]
+       kvm_vcpu_ioctl+0x538/0x620 [kvm]
+       __se_sys_ioctl+0x77/0xc0
+       __x64_sys_ioctl+0x1d/0x20
+       do_syscall_64+0x3d/0x80
+       entry_SYSCALL_64_after_hwframe+0x63/0xcd
+    
+    Fixes: 404d5d7bff0d ("KVM: X86: Introduce more exit_fastpath_completion enum values")
+    Signed-off-by: Sean Christopherson <seanjc@google.com>
+    Link: https://lore.kernel.org/r/20220930234031.1732249-1-seanjc@google.com
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 896143c4333da416441fe95e2cd8b139799ae581
+Author: Sean Christopherson <seanjc@google.com>
+Date:   Fri Sep 30 23:36:32 2022 +0000
+
+    KVM: x86: Fail emulation during EMULTYPE_SKIP on any exception
+    
+    [ Upstream commit 17122c06b86c9f77f45b86b8e62c3ed440847a59 ]
+    
+    Treat any exception during instruction decode for EMULTYPE_SKIP as a
+    "full" emulation failure, i.e. signal failure instead of queuing the
+    exception.  When decoding purely to skip an instruction, KVM and/or the
+    CPU has already done some amount of emulation that cannot be unwound,
+    e.g. on an EPT misconfig VM-Exit KVM has already processeed the emulated
+    MMIO.  KVM already does this if a #UD is encountered, but not for other
+    exceptions, e.g. if a #PF is encountered during fetch.
+    
+    In SVM's soft-injection use case, queueing the exception is particularly
+    problematic as queueing exceptions while injecting events can put KVM
+    into an infinite loop due to bailing from VM-Enter to service the newly
+    pending exception.  E.g. multiple warnings to detect such behavior fire:
+    
+      ------------[ cut here ]------------
+      WARNING: CPU: 3 PID: 1017 at arch/x86/kvm/x86.c:9873 kvm_arch_vcpu_ioctl_run+0x1de5/0x20a0 [kvm]
+      Modules linked in: kvm_amd ccp kvm irqbypass
+      CPU: 3 PID: 1017 Comm: svm_nested_soft Not tainted 6.0.0-rc1+ #220
+      Hardware name: QEMU Standard PC (Q35 + ICH9, 2009), BIOS 0.0.0 02/06/2015
+      RIP: 0010:kvm_arch_vcpu_ioctl_run+0x1de5/0x20a0 [kvm]
+      Call Trace:
+       kvm_vcpu_ioctl+0x223/0x6d0 [kvm]
+       __x64_sys_ioctl+0x85/0xc0
+       do_syscall_64+0x2b/0x50
+       entry_SYSCALL_64_after_hwframe+0x46/0xb0
+      ---[ end trace 0000000000000000 ]---
+      ------------[ cut here ]------------
+      WARNING: CPU: 3 PID: 1017 at arch/x86/kvm/x86.c:9987 kvm_arch_vcpu_ioctl_run+0x12a3/0x20a0 [kvm]
+      Modules linked in: kvm_amd ccp kvm irqbypass
+      CPU: 3 PID: 1017 Comm: svm_nested_soft Tainted: G        W          6.0.0-rc1+ #220
+      Hardware name: QEMU Standard PC (Q35 + ICH9, 2009), BIOS 0.0.0 02/06/2015
+      RIP: 0010:kvm_arch_vcpu_ioctl_run+0x12a3/0x20a0 [kvm]
+      Call Trace:
+       kvm_vcpu_ioctl+0x223/0x6d0 [kvm]
+       __x64_sys_ioctl+0x85/0xc0
+       do_syscall_64+0x2b/0x50
+       entry_SYSCALL_64_after_hwframe+0x46/0xb0
+      ---[ end trace 0000000000000000 ]---
+    
+    Fixes: 6ea6e84309ca ("KVM: x86: inject exceptions produced by x86_decode_insn")
+    Signed-off-by: Sean Christopherson <seanjc@google.com>
+    Link: https://lore.kernel.org/r/20220930233632.1725475-1-seanjc@google.com
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 3fab7adc2f650609497a544973e0e45906cc0229
+Author: Yicong Yang <yangyicong@hisilicon.com>
+Date:   Thu Nov 17 16:41:34 2022 +0800
+
+    docs: perf: Fix PMU instance name of hisi-pcie-pmu
+    
+    [ Upstream commit eb79f12b4c41dd2403a0d16772ee72fcd6416015 ]
+    
+    The PMU instance will be called hisi_pcie<sicl>_core<core> rather than
+    hisi_pcie<sicl>_<core>. Fix this in the documentation.
+    
+    Fixes: c8602008e247 ("docs: perf: Add description for HiSilicon PCIe PMU driver")
+    Reviewed-by: Jonathan Cameron <Jonathan.Cameron@huawei.com>
+    Signed-off-by: Yicong Yang <yangyicong@hisilicon.com>
+    Link: https://lore.kernel.org/r/20221117084136.53572-3-yangyicong@huawei.com
+    Signed-off-by: Will Deacon <will@kernel.org>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 80cf2b219ebc7e724e0f70ae815aea53b1768b19
+Author: Ricardo Ribalda <ribalda@chromium.org>
+Date:   Mon Nov 28 12:00:01 2022 +0100
+
+    spi: mediatek: Enable irq when pdata is ready
+    
+    [ Upstream commit c6f7874687f7027d7c4b2f53ff6e4d22850f915d ]
+    
+    If the device does not come straight from reset, we might receive an IRQ
+    before we are ready to handle it.
+    
+    Fixes:
+    
+    [    0.832328] Unable to handle kernel read from unreadable memory at virtual address 0000000000000010
+    [    1.040343] Call trace:
+    [    1.040347]  mtk_spi_can_dma+0xc/0x40
+    ...
+    [    1.262265]  start_kernel+0x338/0x42c
+    
+    Signed-off-by: Ricardo Ribalda <ribalda@chromium.org>
+    Reviewed-by: AngeloGioacchino Del Regno <angelogioacchino.delregno@collabora.com>
+    Link: https://lore.kernel.org/r/20221128-spi-mt65xx-v1-0-509266830665@chromium.org
+    Signed-off-by: Mark Brown <broonie@kernel.org>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit e933c28aa5cd1536bb69967763a88d5876e54cdb
+Author: Jie Zhan <zhanjie9@hisilicon.com>
+Date:   Fri Nov 18 16:37:13 2022 +0800
+
+    scsi: hisi_sas: Fix SATA devices missing issue during I_T nexus reset
+    
+    [ Upstream commit 3c2673a09cf1181318c07b7dbc1bc532ba3d33e3 ]
+    
+    SATA devices on an expander may be removed and not be found again when I_T
+    nexus reset and revalidation are processed simultaneously.
+    
+    The issue comes from:
+    
+     - Revalidation can remove SATA devices in link reset, e.g. in
+       hisi_sas_clear_nexus_ha().
+    
+     - However, hisi_sas_debug_I_T_nexus_reset() polls the state of a SATA
+       device on an expander after sending link_reset, where it calls:
+        hisi_sas_debug_I_T_nexus_reset
+         sas_ata_wait_after_reset
+          ata_wait_after_reset
+           ata_wait_ready
+            smp_ata_check_ready
+             sas_ex_phy_discover
+              sas_ex_phy_discover_helper
+               sas_set_ex_phy
+    
+       The ex_phy's change count is updated in sas_set_ex_phy(), so SATA
+       devices after a link reset may not be found later through revalidation.
+    
+    A similar issue was reported in:
+    commit 0f3fce5cc77e ("[SCSI] libsas: fix ata_eh clobbering ex_phys via
+    smp_ata_check_ready")
+    commit 87c8331fcf72 ("[SCSI] libsas: prevent domain rediscovery competing
+    with ata error handling").
+    
+    To address this issue, in hisi_sas_debug_I_T_nexus_reset(), we now call
+    smp_ata_check_ready_type() that only polls the device type while not
+    updating the ex_phy's data of libsas.
+    
+    Fixes: 71453bd9d1bf ("scsi: hisi_sas: Use sas_ata_wait_after_reset() in IT nexus reset")
+    Signed-off-by: Jie Zhan <zhanjie9@hisilicon.com>
+    Link: https://lore.kernel.org/r/20221118083714.4034612-5-zhanjie9@hisilicon.com
+    Signed-off-by: Martin K. Petersen <martin.petersen@oracle.com>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 8ec73f41504b924243f3f55af89ad8ac52039c76
+Author: Jie Zhan <zhanjie9@hisilicon.com>
+Date:   Fri Nov 18 16:37:12 2022 +0800
+
+    scsi: libsas: Add smp_ata_check_ready_type()
+    
+    [ Upstream commit 9181ce3cb5d96f0ee28246a857ca651830fa3746 ]
+    
+    Create function smp_ata_check_ready_type() for LLDDs to wait for SATA
+    devices to come up after a link reset.
+    
+    Signed-off-by: Jie Zhan <zhanjie9@hisilicon.com>
+    Link: https://lore.kernel.org/r/20221118083714.4034612-4-zhanjie9@hisilicon.com
+    Signed-off-by: Martin K. Petersen <martin.petersen@oracle.com>
+    Stable-dep-of: 3c2673a09cf1 ("scsi: hisi_sas: Fix SATA devices missing issue during I_T nexus reset")
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 38c5d24d87235f5f047c8d868fc1460544993b8b
+Author: Jason A. Donenfeld <Jason@zx2c4.com>
+Date:   Wed Jun 1 22:45:33 2022 +0200
+
+    random: always mix cycle counter in add_latent_entropy()
+    
+    [ Upstream commit d7bf7f3b813e3755226bcb5114ad2ac477514ebf ]
+    
+    add_latent_entropy() is called every time a process forks, in
+    kernel_clone(). This in turn calls add_device_randomness() using the
+    latent entropy global state. add_device_randomness() does two things:
+    
+       2) Mixes into the input pool the latent entropy argument passed; and
+       1) Mixes in a cycle counter, a sort of measurement of when the event
+          took place, the high precision bits of which are presumably
+          difficult to predict.
+    
+    (2) is impossible without CONFIG_GCC_PLUGIN_LATENT_ENTROPY=y. But (1) is
+    always possible. However, currently CONFIG_GCC_PLUGIN_LATENT_ENTROPY=n
+    disables both (1) and (2), instead of just (2).
+    
+    This commit causes the CONFIG_GCC_PLUGIN_LATENT_ENTROPY=n case to still
+    do (1) by passing NULL (len 0) to add_device_randomness() when add_latent_
+    entropy() is called.
+    
+    Cc: Dominik Brodowski <linux@dominikbrodowski.net>
+    Cc: PaX Team <pageexec@freemail.hu>
+    Cc: Emese Revfy <re.emese@gmail.com>
+    Fixes: 38addce8b600 ("gcc-plugins: Add latent_entropy plugin")
+    Signed-off-by: Jason A. Donenfeld <Jason@zx2c4.com>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit afec25854ca7c49b60b02bf47674630f9d7e0377
+Author: Suren Baghdasaryan <surenb@google.com>
+Date:   Fri Oct 28 12:45:41 2022 -0700
+
+    sched/psi: Stop relying on timer_pending() for poll_work rescheduling
+    
+    [ Upstream commit 710ffe671e014d5ccbcff225130a178b088ef090 ]
+    
+    Psi polling mechanism is trying to minimize the number of wakeups to
+    run psi_poll_work and is currently relying on timer_pending() to detect
+    when this work is already scheduled. This provides a window of opportunity
+    for psi_group_change to schedule an immediate psi_poll_work after
+    poll_timer_fn got called but before psi_poll_work could reschedule itself.
+    Below is the depiction of this entire window:
+    
+    poll_timer_fn
+      wake_up_interruptible(&group->poll_wait);
+    
+    psi_poll_worker
+      wait_event_interruptible(group->poll_wait, ...)
+      psi_poll_work
+        psi_schedule_poll_work
+          if (timer_pending(&group->poll_timer)) return;
+          ...
+          mod_timer(&group->poll_timer, jiffies + delay);
+    
+    Prior to 461daba06bdc we used to rely on poll_scheduled atomic which was
+    reset and set back inside psi_poll_work and therefore this race window
+    was much smaller.
+    The larger window causes increased number of wakeups and our partners
+    report visible power regression of ~10mA after applying 461daba06bdc.
+    Bring back the poll_scheduled atomic and make this race window even
+    narrower by resetting poll_scheduled only when we reach polling expiration
+    time. This does not completely eliminate the possibility of extra wakeups
+    caused by a race with psi_group_change however it will limit it to the
+    worst case scenario of one extra wakeup per every tracking window (0.5s
+    in the worst case).
+    This patch also ensures correct ordering between clearing poll_scheduled
+    flag and obtaining changed_states using memory barrier. Correct ordering
+    between updating changed_states and setting poll_scheduled is ensured by
+    atomic_xchg operation.
+    By tracing the number of immediate rescheduling attempts performed by
+    psi_group_change and the number of these attempts being blocked due to
+    psi monitor being already active, we can assess the effects of this change:
+    
+    Before the patch:
+                                               Run#1    Run#2      Run#3
+    Immediate reschedules attempted:           684365   1385156    1261240
+    Immediate reschedules blocked:             682846   1381654    1258682
+    Immediate reschedules (delta):             1519     3502       2558
+    Immediate reschedules (% of attempted):    0.22%    0.25%      0.20%
+    
+    After the patch:
+                                               Run#1    Run#2      Run#3
+    Immediate reschedules attempted:           882244   770298    426218
+    Immediate reschedules blocked:             881996   769796    426074
+    Immediate reschedules (delta):             248      502       144
+    Immediate reschedules (% of attempted):    0.03%    0.07%     0.03%
+    
+    The number of non-blocked immediate reschedules dropped from 0.22-0.25%
+    to 0.03-0.07%. The drop is attributed to the decrease in the race window
+    size and the fact that we allow this race only when psi monitors reach
+    polling window expiration time.
+    
+    Fixes: 461daba06bdc ("psi: eliminate kthread_worker from psi trigger scheduling mechanism")
+    Reported-by: Kathleen Chang <yt.chang@mediatek.com>
+    Reported-by: Wenju Xu <wenju.xu@mediatek.com>
+    Reported-by: Jonathan Chen <jonathan.jmchen@mediatek.com>
+    Signed-off-by: Suren Baghdasaryan <surenb@google.com>
+    Signed-off-by: Peter Zijlstra (Intel) <peterz@infradead.org>
+    Reviewed-by: Chengming Zhou <zhouchengming@bytedance.com>
+    Acked-by: Johannes Weiner <hannes@cmpxchg.org>
+    Tested-by: SH Chen <show-hong.chen@mediatek.com>
+    Link: https://lore.kernel.org/r/20221028194541.813985-1-surenb@google.com
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 104cf4cc127b8bfa61da9ef9c3171612062dd8cc
+Author: Rahul Tanwar <rtanwar@maxlinear.com>
+Date:   Tue Oct 25 19:03:57 2022 +0800
+
+    clk: mxl: syscon_node_to_regmap() returns error pointers
+    
+    [ Upstream commit 7256d1f4618b40792d1e9b9b6cb1406a13cad2dd ]
+    
+    Commit 036177310bac ("clk: mxl: Switch from direct readl/writel based IO
+    to regmap based IO") introduced code resulting in below warning issued
+    by the smatch static checker.
+    
+      drivers/clk/x86/clk-lgm.c:441 lgm_cgu_probe() warn: passing zero to 'PTR_ERR'
+    
+    Fix the warning by replacing incorrect IS_ERR_OR_NULL() with IS_ERR().
+    
+    Fixes: 036177310bac ("clk: mxl: Switch from direct readl/writel based IO to regmap based IO")
+    Reported-by: Dan Carpenter <dan.carpenter@oracle.com>
+    Signed-off-by: Rahul Tanwar <rtanwar@maxlinear.com>
+    Link: https://lore.kernel.org/r/49e339d4739e4ae4c92b00c1b2918af0755d4122.1666695221.git.rtanwar@maxlinear.com
+    Signed-off-by: Stephen Boyd <sboyd@kernel.org>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 65e53eaad07712473eda7250f158e5c6253cac70
+Author: Sean Anderson <sean.anderson@seco.com>
+Date:   Mon Oct 17 16:22:39 2022 -0400
+
+    powerpc: dts: t208x: Mark MAC1 and MAC2 as 10G
+    
+    [ Upstream commit 36926a7d70c2d462fca1ed85bfee000d17fd8662 ]
+    
+    On the T208X SoCs, MAC1 and MAC2 support XGMII. Add some new MAC dtsi
+    fragments, and mark the QMAN ports as 10G.
+    
+    Fixes: da414bb923d9 ("powerpc/mpc85xx: Add FSL QorIQ DPAA FMan support to the SoC device tree(s)")
+    Signed-off-by: Sean Anderson <sean.anderson@seco.com>
+    Signed-off-by: David S. Miller <davem@davemloft.net>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 3391bea3d6b81822f1d61f1c62103719303396f0
+Author: Rahul Tanwar <rtanwar@maxlinear.com>
+Date:   Thu Oct 13 14:48:33 2022 +0800
+
+    clk: mxl: Fix a clk entry by adding relevant flags
+    
+    [ Upstream commit 106ef3bda21006fe37b62c85931230a6355d78d3 ]
+    
+    One of the clock entry "dcl" clk has some HW limitations. One is that
+    its rate can only by changed by changing its parent clk's rate & two is
+    that HW does not support enable/disable for this clk.
+    
+    Handle above two limitations by adding relevant flags. Add standard flag
+    CLK_SET_RATE_PARENT to handle rate change and add driver internal flag
+    DIV_CLK_NO_MASK to handle enable/disable.
+    
+    Fixes: d058fd9e8984 ("clk: intel: Add CGU clock driver for a new SoC")
+    Reviewed-by: Yi xin Zhu <yzhu@maxlinear.com>
+    Signed-off-by: Rahul Tanwar <rtanwar@maxlinear.com>
+    Link: https://lore.kernel.org/r/a4770e7225f8a0c03c8ab2ba80434a4e8e9afb17.1665642720.git.rtanwar@maxlinear.com
+    Signed-off-by: Stephen Boyd <sboyd@kernel.org>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 77fee59653c63d3b771a28a4a0f76b80b330aa9a
+Author: Rahul Tanwar <rtanwar@maxlinear.com>
+Date:   Thu Oct 13 14:48:32 2022 +0800
+
+    clk: mxl: Add option to override gate clks
+    
+    [ Upstream commit a5d49bd369b8588c0ee9d4d0a2c0160558a3ab69 ]
+    
+    In MxL's LGM SoC, gate clocks can be controlled either from CGU clk driver
+    i.e. this driver or directly from power management driver/daemon. It is
+    dependent on the power policy/profile requirements of the end product.
+    
+    To support such use cases, provide option to override gate clks enable/disable
+    by adding a flag GATE_CLK_HW which controls if these gate clks are controlled
+    by HW i.e. this driver or overridden in order to allow it to be controlled
+    by power profiles instead.
+    
+    Reviewed-by: Yi xin Zhu <yzhu@maxlinear.com>
+    Signed-off-by: Rahul Tanwar <rtanwar@maxlinear.com>
+    Link: https://lore.kernel.org/r/bdc9c89317b5d338a6c4f1d49386b696e947a672.1665642720.git.rtanwar@maxlinear.com
+    [sboyd@kernel.org: Add braces on many line if-else]
+    Signed-off-by: Stephen Boyd <sboyd@kernel.org>
+    Stable-dep-of: 106ef3bda210 ("clk: mxl: Fix a clk entry by adding relevant flags")
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 005b9a123c970d95bf97309d7397f8fa5e631358
+Author: Rahul Tanwar <rtanwar@maxlinear.com>
+Date:   Thu Oct 13 14:48:31 2022 +0800
+
+    clk: mxl: Remove redundant spinlocks
+    
+    [ Upstream commit eaabee88a88a26b108be8d120fc072dfaf462cef ]
+    
+    Patch 1/4 of this patch series switches from direct readl/writel
+    based register access to regmap based register access. Instead
+    of using direct readl/writel, regmap API's are used to read, write
+    & read-modify-write clk registers. Regmap API's already use their
+    own spinlocks to serialize the register accesses across multiple
+    cores in which case additional driver spinlocks becomes redundant.
+    
+    Hence, remove redundant spinlocks from driver in this patch 2/4.
+    
+    Reviewed-by: Yi xin Zhu <yzhu@maxlinear.com>
+    Signed-off-by: Rahul Tanwar <rtanwar@maxlinear.com>
+    Link: https://lore.kernel.org/r/a8a02c8773b88924503a9fdaacd37dd2e6488bf3.1665642720.git.rtanwar@maxlinear.com
+    Signed-off-by: Stephen Boyd <sboyd@kernel.org>
+    Stable-dep-of: 106ef3bda210 ("clk: mxl: Fix a clk entry by adding relevant flags")
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 811bdf228e72c423cf167448ed812d7d3a50f0ec
+Author: Rahul Tanwar <rtanwar@maxlinear.com>
+Date:   Thu Oct 13 14:48:30 2022 +0800
+
+    clk: mxl: Switch from direct readl/writel based IO to regmap based IO
+    
+    [ Upstream commit 036177310bac5534de44ff6a7b60a4d2c0b6567c ]
+    
+    Earlier version of driver used direct io remapped register read
+    writes using readl/writel. But we need secure boot access which
+    is only possible when registers are read & written using regmap.
+    This is because the security bus/hook is written & coupled only
+    with regmap layer.
+    
+    Switch the driver from direct readl/writel based register accesses
+    to regmap based register accesses.
+    
+    Additionally, update the license headers to latest status.
+    
+    Reviewed-by: Yi xin Zhu <yzhu@maxlinear.com>
+    Signed-off-by: Rahul Tanwar <rtanwar@maxlinear.com>
+    Link: https://lore.kernel.org/r/2610331918206e0e3bd18babb39393a558fb34f9.1665642720.git.rtanwar@maxlinear.com
+    Signed-off-by: Stephen Boyd <sboyd@kernel.org>
+    Stable-dep-of: 106ef3bda210 ("clk: mxl: Fix a clk entry by adding relevant flags")
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 0deb50618944aed143269214daea0ba2ddf2222d
+Author: Ankit Nautiyal <ankit.k.nautiyal@intel.com>
+Date:   Fri Sep 16 15:35:48 2022 +0530
+
+    drm/edid: Fix minimum bpc supported with DSC1.2 for HDMI sink
+    
+    [ Upstream commit 18feaf6d0784dcba888859109676adf1e0260dfd ]
+    
+    HF-VSDB/SCDB has bits to advertise support for 16, 12 and 10 bpc.
+    If none of the bits are set, the minimum bpc supported with DSC is 8.
+    
+    This patch corrects the min bpc supported to be 8, instead of 0.
+    
+    Fixes: 76ee7b905678 ("drm/edid: Parse DSC1.2 cap fields from HFVSDB block")
+    Cc: Ankit Nautiyal <ankit.k.nautiyal@intel.com>
+    Cc: Uma Shankar <uma.shankar@intel.com>
+    Cc: Jani Nikula <jani.nikula@intel.com>
+    Cc: Maarten Lankhorst <maarten.lankhorst@linux.intel.com>
+    
+    v2: s/DSC1.2/DSC 1.2
+    
+    Signed-off-by: Ankit Nautiyal <ankit.k.nautiyal@intel.com>
+    Reviewed-by: Jani Nikula <jani.nikula@intel.com>
+    Signed-off-by: Jani Nikula <jani.nikula@intel.com>
+    Link: https://patchwork.freedesktop.org/patch/msgid/20220916100551.2531750-2-ankit.k.nautiyal@intel.com
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 0076bded9663da1bb7ec4dfe0e4c36e84280e353
+Author: Bitterblue Smith <rtl8821cerfe2@gmail.com>
+Date:   Wed Sep 28 23:36:51 2022 +0300
+
+    wifi: rtl8xxxu: gen2: Turn on the rate control
+    
+    [ Upstream commit 791082ec0ab843e0be07c8ce3678e4c2afd2e33d ]
+    
+    Re-enable the function rtl8xxxu_gen2_report_connect.
+    
+    It informs the firmware when connecting to a network. This makes the
+    firmware enable the rate control, which makes the upload faster.
+    
+    It also informs the firmware when disconnecting from a network. In the
+    past this made reconnecting impossible because it was sending the
+    auth on queue 0x7 (TXDESC_QUEUE_VO) instead of queue 0x12
+    (TXDESC_QUEUE_MGNT):
+    
+    wlp0s20f0u3: send auth to 90:55:de:__:__:__ (try 1/3)
+    wlp0s20f0u3: send auth to 90:55:de:__:__:__ (try 2/3)
+    wlp0s20f0u3: send auth to 90:55:de:__:__:__ (try 3/3)
+    wlp0s20f0u3: authentication with 90:55:de:__:__:__ timed out
+    
+    Probably the firmware disables the unnecessary TX queues when it
+    knows it's disconnected.
+    
+    However, this was fixed in commit edd5747aa12e ("wifi: rtl8xxxu: Fix
+    skb misuse in TX queue selection").
+    
+    Fixes: c59f13bbead4 ("rtl8xxxu: Work around issue with 8192eu and 8723bu devices not reconnecting")
+    Signed-off-by: Bitterblue Smith <rtl8821cerfe2@gmail.com>
+    Signed-off-by: Kalle Valo <kvalo@kernel.org>
+    Link: https://lore.kernel.org/r/43200afc-0c65-ee72-48f8-231edd1df493@gmail.com
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 441961c43150e3673115c9e80629088a507f8a96
+Author: Wen Gong <quic_wgong@quicinc.com>
+Date:   Wed Sep 28 03:38:32 2022 -0400
+
+    wifi: ath11k: fix warning in dma_free_coherent() of memory chunks while recovery
+    
+    [ Upstream commit f74878433d5ade360447da5d92e9c2e535780d80 ]
+    
+    Commit 26f3a021b37c ("ath11k: allocate smaller chunks of memory for
+    firmware") and commit f6f92968e1e5 ("ath11k: qmi: try to allocate a
+    big block of DMA memory first") change ath11k to allocate the memory
+    chunks for target twice while wlan load. It fails for the 1st time
+    because of large memory and then changed to allocate many small chunks
+    for the 2nd time sometimes as below log.
+    
+    1st time failed:
+    [10411.640620] ath11k_pci 0000:05:00.0: qmi firmware request memory request
+    [10411.640625] ath11k_pci 0000:05:00.0: qmi mem seg type 1 size 6881280
+    [10411.640630] ath11k_pci 0000:05:00.0: qmi mem seg type 4 size 3784704
+    [10411.640658] ath11k_pci 0000:05:00.0: qmi dma allocation failed (6881280 B type 1), will try later with small size
+    [10411.640671] ath11k_pci 0000:05:00.0: qmi delays mem_request 2
+    [10411.640677] ath11k_pci 0000:05:00.0: qmi respond memory request delayed 1
+    2nd time success:
+    [10411.642004] ath11k_pci 0000:05:00.0: qmi firmware request memory request
+    [10411.642008] ath11k_pci 0000:05:00.0: qmi mem seg type 1 size 524288
+    [10411.642012] ath11k_pci 0000:05:00.0: qmi mem seg type 1 size 524288
+    [10411.642014] ath11k_pci 0000:05:00.0: qmi mem seg type 1 size 524288
+    [10411.642016] ath11k_pci 0000:05:00.0: qmi mem seg type 1 size 524288
+    [10411.642018] ath11k_pci 0000:05:00.0: qmi mem seg type 1 size 524288
+    [10411.642020] ath11k_pci 0000:05:00.0: qmi mem seg type 1 size 524288
+    [10411.642022] ath11k_pci 0000:05:00.0: qmi mem seg type 1 size 524288
+    [10411.642024] ath11k_pci 0000:05:00.0: qmi mem seg type 1 size 524288
+    [10411.642027] ath11k_pci 0000:05:00.0: qmi mem seg type 1 size 524288
+    [10411.642029] ath11k_pci 0000:05:00.0: qmi mem seg type 1 size 524288
+    [10411.642031] ath11k_pci 0000:05:00.0: qmi mem seg type 1 size 458752
+    [10411.642033] ath11k_pci 0000:05:00.0: qmi mem seg type 1 size 131072
+    [10411.642035] ath11k_pci 0000:05:00.0: qmi mem seg type 4 size 524288
+    [10411.642037] ath11k_pci 0000:05:00.0: qmi mem seg type 4 size 524288
+    [10411.642039] ath11k_pci 0000:05:00.0: qmi mem seg type 4 size 524288
+    [10411.642041] ath11k_pci 0000:05:00.0: qmi mem seg type 4 size 524288
+    [10411.642043] ath11k_pci 0000:05:00.0: qmi mem seg type 4 size 524288
+    [10411.642045] ath11k_pci 0000:05:00.0: qmi mem seg type 4 size 524288
+    [10411.642047] ath11k_pci 0000:05:00.0: qmi mem seg type 4 size 491520
+    [10411.642049] ath11k_pci 0000:05:00.0: qmi mem seg type 1 size 524288
+    
+    And then commit 5962f370ce41 ("ath11k: Reuse the available memory after
+    firmware reload") skip the ath11k_qmi_free_resource() which frees the
+    memory chunks while recovery, after that, when run recovery test on
+    WCN6855, a warning happened every time as below and finally leads fail
+    for recovery.
+    
+    [  159.570318] BUG: Bad page state in process kworker/u16:5  pfn:33300
+    [  159.570320] page:0000000096ffdbb9 refcount:1 mapcount:0 mapping:0000000000000000 index:0x0 pfn:0x33300
+    [  159.570324] flags: 0xfffffc0000000(node=0|zone=1|lastcpupid=0x1fffff)
+    [  159.570329] raw: 000fffffc0000000 0000000000000000 dead000000000122 0000000000000000
+    [  159.570332] raw: 0000000000000000 0000000000000000 00000001ffffffff 0000000000000000
+    [  159.570334] page dumped because: nonzero _refcount
+    [  159.570440]  firewire_ohci syscopyarea sysfillrect psmouse sdhci_pci ahci sysimgblt firewire_core fb_sys_fops libahci crc_itu_t cqhci drm sdhci e1000e wmi video
+    [  159.570460] CPU: 2 PID: 217 Comm: kworker/u16:5 Kdump: loaded Tainted: G    B             5.19.0-rc1-wt-ath+ #3
+    [  159.570465] Hardware name: LENOVO 418065C/418065C, BIOS 83ET63WW (1.33 ) 07/29/2011
+    [  159.570467] Workqueue: qmi_msg_handler qmi_data_ready_work [qmi_helpers]
+    [  159.570475] Call Trace:
+    [  159.570476]  <TASK>
+    [  159.570478]  dump_stack_lvl+0x49/0x5f
+    [  159.570486]  dump_stack+0x10/0x12
+    [  159.570493]  bad_page+0xab/0xf0
+    [  159.570502]  check_free_page_bad+0x66/0x70
+    [  159.570511]  __free_pages_ok+0x530/0x9a0
+    [  159.570517]  ? __dev_printk+0x58/0x6b
+    [  159.570525]  ? _dev_printk+0x56/0x72
+    [  159.570534]  ? qmi_decode+0x119/0x470 [qmi_helpers]
+    [  159.570543]  __free_pages+0x91/0xd0
+    [  159.570548]  dma_free_contiguous+0x50/0x60
+    [  159.570556]  dma_direct_free+0xe5/0x140
+    [  159.570564]  dma_free_attrs+0x35/0x50
+    [  159.570570]  ath11k_qmi_msg_mem_request_cb+0x2ae/0x3c0 [ath11k]
+    [  159.570620]  qmi_invoke_handler+0xac/0xe0 [qmi_helpers]
+    [  159.570630]  qmi_handle_message+0x6d/0x180 [qmi_helpers]
+    [  159.570643]  qmi_data_ready_work+0x2ca/0x440 [qmi_helpers]
+    [  159.570656]  process_one_work+0x227/0x440
+    [  159.570667]  worker_thread+0x31/0x3d0
+    [  159.570676]  ? process_one_work+0x440/0x440
+    [  159.570685]  kthread+0xfe/0x130
+    [  159.570692]  ? kthread_complete_and_exit+0x20/0x20
+    [  159.570701]  ret_from_fork+0x22/0x30
+    [  159.570712]  </TASK>
+    
+    The reason is because when wlan start to recovery, the type, size and
+    count is not same for the 1st and 2nd QMI_WLFW_REQUEST_MEM_IND message,
+    Then it leads the parameter size is not correct for the dma_free_coherent().
+    For the chunk[1], the actual dma size is 524288 which allocate in the
+    2nd time of the initial wlan load phase, and the size which pass to
+    dma_free_coherent() is 3784704 which is got in the 1st time of recovery
+    phase, then warning above happened.
+    
+    Change to use prev_size of struct target_mem_chunk for the paramter of
+    dma_free_coherent() since prev_size is the real size of last load/recovery.
+    Also change to check both type and size of struct target_mem_chunk to
+    reuse the memory to avoid mismatch buffer size for target. Then the
+    warning disappear and recovery success. When the 1st QMI_WLFW_REQUEST_MEM_IND
+    for recovery arrived, the trunk[0] is freed in ath11k_qmi_alloc_target_mem_chunk()
+    and then dma_alloc_coherent() failed caused by large size, and then
+    trunk[1] is freed in ath11k_qmi_free_target_mem_chunk(), the left 18
+    trunks will be reuse for the 2nd QMI_WLFW_REQUEST_MEM_IND message.
+    
+    Tested-on: WCN6855 hw2.0 PCI WLAN.HSP.1.1-03125-QCAHSPSWPL_V1_V2_SILICONZ_LITE-3
+    
+    Fixes: 5962f370ce41 ("ath11k: Reuse the available memory after firmware reload")
+    Signed-off-by: Wen Gong <quic_wgong@quicinc.com>
+    Signed-off-by: Kalle Valo <quic_kvalo@quicinc.com>
+    Link: https://lore.kernel.org/r/20220928073832.16251-1-quic_wgong@quicinc.com
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 2af157c9c8f357cfce4de3218a27d314dfaabcbe
+Author: Lucas Stach <l.stach@pengutronix.de>
+Date:   Fri Sep 16 12:40:31 2022 +0200
+
+    drm/etnaviv: don't truncate physical page address
+    
+    [ Upstream commit d37c120b73128690434cc093952439eef9d56af1 ]
+    
+    While the interface for the MMU mapping takes phys_addr_t to hold a
+    full 64bit address when necessary and MMUv2 is able to map physical
+    addresses with up to 40bit, etnaviv_iommu_map() truncates the address
+    to 32bits. Fix this by using the correct type.
+    
+    Fixes: 931e97f3afd8 ("drm/etnaviv: mmuv2: support 40 bit phys address")
+    Signed-off-by: Lucas Stach <l.stach@pengutronix.de>
+    Reviewed-by: Philipp Zabel <p.zabel@pengutronix.de>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>

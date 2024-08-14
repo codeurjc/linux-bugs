@@ -1,0 +1,1229 @@
+commit d7af3e5ba454d007b4939f858739cf1cecdeab46
+Author: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+Date:   Mon Jun 5 09:21:27 2023 +0200
+
+    Linux 5.15.115
+    
+    Link: https://lore.kernel.org/r/20230601131936.699199833@linuxfoundation.org
+    Link: https://lore.kernel.org/r/20230601143331.405588582@linuxfoundation.org
+    Tested-by: Florian Fainelli <florian.fainelli@broadcom.com>
+    Tested-by: Shuah Khan <skhan@linuxfoundation.org>
+    Tested-by: Ron Economos <re@w6rz.net>
+    Tested-by: Jon Hunter <jonathanh@nvidia.com>
+    Tested-by: Bagas Sanjaya <bagasdotme@gmail.com>
+    Tested-by: Harshit Mogalapalli <harshit.m.mogalapalli@oracle.com>
+    Link: https://lore.kernel.org/r/20230603143543.855276091@linuxfoundation.org
+    Tested-by: Sudip Mukherjee <sudip.mukherjee@codethink.co.uk>
+    Tested-by: Linux Kernel Functional Testing <lkft@linaro.org>
+    Tested-by: Guenter Roeck <linux@roeck-us.net>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit e226893c935fd4aeaff21cf1af13927bf684e669
+Author: Paul Blakey <paulb@nvidia.com>
+Date:   Wed Mar 22 09:35:32 2023 +0200
+
+    netfilter: ctnetlink: Support offloaded conntrack entry deletion
+    
+    commit 9b7c68b3911aef84afa4cbfc31bce20f10570d51 upstream.
+    
+    Currently, offloaded conntrack entries (flows) can only be deleted
+    after they are removed from offload, which is either by timeout,
+    tcp state change or tc ct rule deletion. This can cause issues for
+    users wishing to manually delete or flush existing entries.
+    
+    Support deletion of offloaded conntrack entries.
+    
+    Example usage:
+     # Delete all offloaded (and non offloaded) conntrack entries
+     # whose source address is 1.2.3.4
+     $ conntrack -D -s 1.2.3.4
+     # Delete all entries
+     $ conntrack -F
+    
+    Signed-off-by: Paul Blakey <paulb@nvidia.com>
+    Reviewed-by: Simon Horman <simon.horman@corigine.com>
+    Acked-by: Pablo Neira Ayuso <pablo@netfilter.org>
+    Signed-off-by: Florian Westphal <fw@strlen.de>
+    Cc: Demi Marie Obenour <demi@invisiblethingslab.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 395d846c61c5f4e1ac18f618e4d65a9060ad402d
+Author: Nicolas Dichtel <nicolas.dichtel@6wind.com>
+Date:   Mon May 22 14:08:20 2023 +0200
+
+    ipv{4,6}/raw: fix output xfrm lookup wrt protocol
+    
+    commit 3632679d9e4f879f49949bb5b050e0de553e4739 upstream.
+    
+    With a raw socket bound to IPPROTO_RAW (ie with hdrincl enabled), the
+    protocol field of the flow structure, build by raw_sendmsg() /
+    rawv6_sendmsg()),  is set to IPPROTO_RAW. This breaks the ipsec policy
+    lookup when some policies are defined with a protocol in the selector.
+    
+    For ipv6, the sin6_port field from 'struct sockaddr_in6' could be used to
+    specify the protocol. Just accept all values for IPPROTO_RAW socket.
+    
+    For ipv4, the sin_port field of 'struct sockaddr_in' could not be used
+    without breaking backward compatibility (the value of this field was never
+    checked). Let's add a new kind of control message, so that the userland
+    could specify which protocol is used.
+    
+    Fixes: 1da177e4c3f4 ("Linux-2.6.12-rc2")
+    CC: stable@vger.kernel.org
+    Signed-off-by: Nicolas Dichtel <nicolas.dichtel@6wind.com>
+    Link: https://lore.kernel.org/r/20230522120820.1319391-1-nicolas.dichtel@6wind.com
+    Signed-off-by: Paolo Abeni <pabeni@redhat.com>
+    Signed-off-by: Nicolas Dichtel <nicolas.dichtel@6wind.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 1bb8a65190d45cd5c7dbc85e29b9102110cd6be6
+Author: Carlos Llamas <cmllamas@google.com>
+Date:   Tue May 30 19:43:38 2023 +0000
+
+    binder: fix UAF of alloc->vma in race with munmap()
+    
+    commit d1d8875c8c13517f6fd1ff8d4d3e1ac366a17e07 upstream.
+    
+    [ cmllamas: clean forward port from commit 015ac18be7de ("binder: fix
+      UAF of alloc->vma in race with munmap()") in 5.10 stable. It is needed
+      in mainline after the revert of commit a43cfc87caaf ("android: binder:
+      stop saving a pointer to the VMA") as pointed out by Liam. The commit
+      log and tags have been tweaked to reflect this. ]
+    
+    In commit 720c24192404 ("ANDROID: binder: change down_write to
+    down_read") binder assumed the mmap read lock is sufficient to protect
+    alloc->vma inside binder_update_page_range(). This used to be accurate
+    until commit dd2283f2605e ("mm: mmap: zap pages with read mmap_sem in
+    munmap"), which now downgrades the mmap_lock after detaching the vma
+    from the rbtree in munmap(). Then it proceeds to teardown and free the
+    vma with only the read lock held.
+    
+    This means that accesses to alloc->vma in binder_update_page_range() now
+    will race with vm_area_free() in munmap() and can cause a UAF as shown
+    in the following KASAN trace:
+    
+      ==================================================================
+      BUG: KASAN: use-after-free in vm_insert_page+0x7c/0x1f0
+      Read of size 8 at addr ffff16204ad00600 by task server/558
+    
+      CPU: 3 PID: 558 Comm: server Not tainted 5.10.150-00001-gdc8dcf942daa #1
+      Hardware name: linux,dummy-virt (DT)
+      Call trace:
+       dump_backtrace+0x0/0x2a0
+       show_stack+0x18/0x2c
+       dump_stack+0xf8/0x164
+       print_address_description.constprop.0+0x9c/0x538
+       kasan_report+0x120/0x200
+       __asan_load8+0xa0/0xc4
+       vm_insert_page+0x7c/0x1f0
+       binder_update_page_range+0x278/0x50c
+       binder_alloc_new_buf+0x3f0/0xba0
+       binder_transaction+0x64c/0x3040
+       binder_thread_write+0x924/0x2020
+       binder_ioctl+0x1610/0x2e5c
+       __arm64_sys_ioctl+0xd4/0x120
+       el0_svc_common.constprop.0+0xac/0x270
+       do_el0_svc+0x38/0xa0
+       el0_svc+0x1c/0x2c
+       el0_sync_handler+0xe8/0x114
+       el0_sync+0x180/0x1c0
+    
+      Allocated by task 559:
+       kasan_save_stack+0x38/0x6c
+       __kasan_kmalloc.constprop.0+0xe4/0xf0
+       kasan_slab_alloc+0x18/0x2c
+       kmem_cache_alloc+0x1b0/0x2d0
+       vm_area_alloc+0x28/0x94
+       mmap_region+0x378/0x920
+       do_mmap+0x3f0/0x600
+       vm_mmap_pgoff+0x150/0x17c
+       ksys_mmap_pgoff+0x284/0x2dc
+       __arm64_sys_mmap+0x84/0xa4
+       el0_svc_common.constprop.0+0xac/0x270
+       do_el0_svc+0x38/0xa0
+       el0_svc+0x1c/0x2c
+       el0_sync_handler+0xe8/0x114
+       el0_sync+0x180/0x1c0
+    
+      Freed by task 560:
+       kasan_save_stack+0x38/0x6c
+       kasan_set_track+0x28/0x40
+       kasan_set_free_info+0x24/0x4c
+       __kasan_slab_free+0x100/0x164
+       kasan_slab_free+0x14/0x20
+       kmem_cache_free+0xc4/0x34c
+       vm_area_free+0x1c/0x2c
+       remove_vma+0x7c/0x94
+       __do_munmap+0x358/0x710
+       __vm_munmap+0xbc/0x130
+       __arm64_sys_munmap+0x4c/0x64
+       el0_svc_common.constprop.0+0xac/0x270
+       do_el0_svc+0x38/0xa0
+       el0_svc+0x1c/0x2c
+       el0_sync_handler+0xe8/0x114
+       el0_sync+0x180/0x1c0
+    
+      [...]
+      ==================================================================
+    
+    To prevent the race above, revert back to taking the mmap write lock
+    inside binder_update_page_range(). One might expect an increase of mmap
+    lock contention. However, binder already serializes these calls via top
+    level alloc->mutex. Also, there was no performance impact shown when
+    running the binder benchmark tests.
+    
+    Fixes: c0fd2101781e ("Revert "android: binder: stop saving a pointer to the VMA"")
+    Fixes: dd2283f2605e ("mm: mmap: zap pages with read mmap_sem in munmap")
+    Reported-by: Jann Horn <jannh@google.com>
+    Closes: https://lore.kernel.org/all/20230518144052.xkj6vmddccq4v66b@revolver
+    Cc: <stable@vger.kernel.org>
+    Cc: Minchan Kim <minchan@kernel.org>
+    Cc: Yang Shi <yang.shi@linux.alibaba.com>
+    Cc: Liam Howlett <liam.howlett@oracle.com>
+    Signed-off-by: Carlos Llamas <cmllamas@google.com>
+    Acked-by: Todd Kjos <tkjos@google.com>
+    Link: https://lore.kernel.org/r/20230519195950.1775656-1-cmllamas@google.com
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+    Signed-off-by: Carlos Llamas <cmllamas@google.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 1cae0d51368ec5b12045523224cfe6c183c05b9c
+Author: Carlos Llamas <cmllamas@google.com>
+Date:   Tue May 30 19:43:37 2023 +0000
+
+    binder: add lockless binder_alloc_(set|get)_vma()
+    
+    commit 0fa53349c3acba0239369ba4cd133740a408d246 upstream.
+    
+    Bring back the original lockless design in binder_alloc to determine
+    whether the buffer setup has been completed by the ->mmap() handler.
+    However, this time use smp_load_acquire() and smp_store_release() to
+    wrap all the ordering in a single macro call.
+    
+    Also, add comments to make it evident that binder uses alloc->vma to
+    determine when the binder_alloc has been fully initialized. In these
+    scenarios acquiring the mmap_lock is not required.
+    
+    Fixes: a43cfc87caaf ("android: binder: stop saving a pointer to the VMA")
+    Cc: Liam Howlett <liam.howlett@oracle.com>
+    Cc: Suren Baghdasaryan <surenb@google.com>
+    Cc: stable@vger.kernel.org
+    Signed-off-by: Carlos Llamas <cmllamas@google.com>
+    Link: https://lore.kernel.org/r/20230502201220.1756319-3-cmllamas@google.com
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+    [cmllamas: fixed minor merge conflict in binder_alloc_set_vma()]
+    Signed-off-by: Carlos Llamas <cmllamas@google.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit dd7aff43d005c396d1ccbc71728aaeb61f4de96d
+Author: Carlos Llamas <cmllamas@google.com>
+Date:   Tue May 30 19:43:36 2023 +0000
+
+    Revert "android: binder: stop saving a pointer to the VMA"
+    
+    commit c0fd2101781ef761b636769b2f445351f71c3626 upstream.
+    
+    This reverts commit a43cfc87caaf46710c8027a8c23b8a55f1078f19.
+    
+    This patch fixed an issue reported by syzkaller in [1]. However, this
+    turned out to be only a band-aid in binder. The root cause, as bisected
+    by syzkaller, was fixed by commit 5789151e48ac ("mm/mmap: undo ->mmap()
+    when mas_preallocate() fails"). We no longer need the patch for binder.
+    
+    Reverting such patch allows us to have a lockless access to alloc->vma
+    in specific cases where the mmap_lock is not required. This approach
+    avoids the contention that caused a performance regression.
+    
+    [1] https://lore.kernel.org/all/0000000000004a0dbe05e1d749e0@google.com
+    
+    [cmllamas: resolved conflicts with rework of alloc->mm and removal of
+     binder_alloc_set_vma() also fixed comment section]
+    
+    Fixes: a43cfc87caaf ("android: binder: stop saving a pointer to the VMA")
+    Cc: Liam Howlett <liam.howlett@oracle.com>
+    Cc: Suren Baghdasaryan <surenb@google.com>
+    Cc: stable@vger.kernel.org
+    Signed-off-by: Carlos Llamas <cmllamas@google.com>
+    Link: https://lore.kernel.org/r/20230502201220.1756319-2-cmllamas@google.com
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+    [cmllamas: fixed merge conflict in binder_alloc_set_vma()]
+    Signed-off-by: Carlos Llamas <cmllamas@google.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 6802c700902ca9047a160cf544dd8380951e2a87
+Author: Carlos Llamas <cmllamas@google.com>
+Date:   Tue May 30 19:43:35 2023 +0000
+
+    Revert "binder_alloc: add missing mmap_lock calls when using the VMA"
+    
+    commit b15655b12ddca7ade09807f790bafb6fab61b50a upstream.
+    
+    This reverts commit 44e602b4e52f70f04620bbbf4fe46ecb40170bde.
+    
+    This caused a performance regression particularly when pages are getting
+    reclaimed. We don't need to acquire the mmap_lock to determine when the
+    binder buffer has been fully initialized. A subsequent patch will bring
+    back the lockless approach for this.
+    
+    [cmllamas: resolved trivial conflicts with renaming of alloc->mm]
+    
+    Fixes: 44e602b4e52f ("binder_alloc: add missing mmap_lock calls when using the VMA")
+    Cc: Liam Howlett <liam.howlett@oracle.com>
+    Cc: Suren Baghdasaryan <surenb@google.com>
+    Cc: stable@vger.kernel.org
+    Signed-off-by: Carlos Llamas <cmllamas@google.com>
+    Link: https://lore.kernel.org/r/20230502201220.1756319-1-cmllamas@google.com
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+    [cmllamas: revert of original commit 44e602b4e52f applied clean]
+    Signed-off-by: Carlos Llamas <cmllamas@google.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 09411f1b8672708b2b8a257607c98c74ae6614af
+Author: Ruihan Li <lrh2000@pku.edu.cn>
+Date:   Sun Apr 16 16:02:51 2023 +0800
+
+    bluetooth: Add cmd validity checks at the start of hci_sock_ioctl()
+    
+    commit 000c2fa2c144c499c881a101819cf1936a1f7cf2 upstream.
+    
+    Previously, channel open messages were always sent to monitors on the first
+    ioctl() call for unbound HCI sockets, even if the command and arguments
+    were completely invalid. This can leave an exploitable hole with the abuse
+    of invalid ioctl calls.
+    
+    This commit hardens the ioctl processing logic by first checking if the
+    command is valid, and immediately returning with an ENOIOCTLCMD error code
+    if it is not. This ensures that ioctl calls with invalid commands are free
+    of side effects, and increases the difficulty of further exploitation by
+    forcing exploitation to find a way to pass a valid command first.
+    
+    Signed-off-by: Ruihan Li <lrh2000@pku.edu.cn>
+    Co-developed-by: Marcel Holtmann <marcel@holtmann.org>
+    Signed-off-by: Marcel Holtmann <marcel@holtmann.org>
+    Signed-off-by: Luiz Augusto von Dentz <luiz.von.dentz@intel.com>
+    Signed-off-by: Dragos-Marian Panait <dragos.panait@windriver.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 0f21b8621756e7a6751c6a8d6b3c5ab7555b083e
+Author: Sebastian Andrzej Siewior <bigeasy@linutronix.de>
+Date:   Wed Mar 9 23:13:45 2022 +0100
+
+    xdp: xdp_mem_allocator can be NULL in trace_mem_connect().
+    
+    [ Upstream commit e0ae713023a9d09d6e1b454bdc8e8c1dd32c586e ]
+    
+    Since the commit mentioned below __xdp_reg_mem_model() can return a NULL
+    pointer. This pointer is dereferenced in trace_mem_connect() which leads
+    to segfault.
+    
+    The trace points (mem_connect + mem_disconnect) were put in place to
+    pair connect/disconnect using the IDs. The ID is only assigned if
+    __xdp_reg_mem_model() does not return NULL. That connect trace point is
+    of no use if there is no ID.
+    
+    Skip that connect trace point if xdp_alloc is NULL.
+    
+    [ Toke Høiland-Jørgensen delivered the reasoning for skipping the trace
+      point ]
+    
+    Fixes: 4a48ef70b93b8 ("xdp: Allow registering memory model without rxq reference")
+    Signed-off-by: Sebastian Andrzej Siewior <bigeasy@linutronix.de>
+    Acked-by: Toke Høiland-Jørgensen <toke@redhat.com>
+    Link: https://lore.kernel.org/r/YikmmXsffE+QajTB@linutronix.de
+    Signed-off-by: Jakub Kicinski <kuba@kernel.org>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit b6c4afcbd6257417bf5057387ee7fd24a38e085f
+Author: Jiaxun Yang <jiaxun.yang@flygoat.com>
+Date:   Mon Apr 24 11:31:55 2023 +0100
+
+    irqchip/mips-gic: Don't touch vl_map if a local interrupt is not routable
+    
+    [ Upstream commit 2c6c9c049510163090b979ea5f92a68ae8d93c45 ]
+    
+    When a GIC local interrupt is not routable, it's vl_map will be used
+    to control some internal states for core (providing IPTI, IPPCI, IPFDC
+    input signal for core). Overriding it will interfere core's intetrupt
+    controller.
+    
+    Do not touch vl_map if a local interrupt is not routable, we are not
+    going to remap it.
+    
+    Before dd098a0e0319 (" irqchip/mips-gic: Get rid of the reliance on
+    irq_cpu_online()"), if a local interrupt is not routable, then it won't
+    be requested from GIC Local domain, and thus gic_all_vpes_irq_cpu_online
+    won't be called for that particular interrupt.
+    
+    Fixes: dd098a0e0319 (" irqchip/mips-gic: Get rid of the reliance on irq_cpu_online()")
+    Cc: stable@vger.kernel.org
+    Signed-off-by: Jiaxun Yang <jiaxun.yang@flygoat.com>
+    Reviewed-by: Serge Semin <fancer.lancer@gmail.com>
+    Tested-by: Serge Semin <fancer.lancer@gmail.com>
+    Signed-off-by: Marc Zyngier <maz@kernel.org>
+    Link: https://lore.kernel.org/r/20230424103156.66753-2-jiaxun.yang@flygoat.com
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 13b290f02094f4a7f6c593c8a261330173528851
+Author: Yunsheng Lin <linyunsheng@huawei.com>
+Date:   Mon May 22 11:17:14 2023 +0800
+
+    page_pool: fix inconsistency for page_pool_ring_[un]lock()
+    
+    [ Upstream commit 368d3cb406cdd074d1df2ad9ec06d1bfcb664882 ]
+    
+    page_pool_ring_[un]lock() use in_softirq() to decide which
+    spin lock variant to use, and when they are called in the
+    context with in_softirq() being false, spin_lock_bh() is
+    called in page_pool_ring_lock() while spin_unlock() is
+    called in page_pool_ring_unlock(), because spin_lock_bh()
+    has disabled the softirq in page_pool_ring_lock(), which
+    causes inconsistency for spin lock pair calling.
+    
+    This patch fixes it by returning in_softirq state from
+    page_pool_producer_lock(), and use it to decide which
+    spin lock variant to use in page_pool_producer_unlock().
+    
+    As pool->ring has both producer and consumer lock, so
+    rename it to page_pool_producer_[un]lock() to reflect
+    the actual usage. Also move them to page_pool.c as they
+    are only used there, and remove the 'inline' as the
+    compiler may have better idea to do inlining or not.
+    
+    Fixes: 7886244736a4 ("net: page_pool: Add bulk support for ptr_ring")
+    Signed-off-by: Yunsheng Lin <linyunsheng@huawei.com>
+    Acked-by: Jesper Dangaard Brouer <brouer@redhat.com>
+    Acked-by: Ilias Apalodimas <ilias.apalodimas@linaro.org>
+    Link: https://lore.kernel.org/r/20230522031714.5089-1-linyunsheng@huawei.com
+    Signed-off-by: Jakub Kicinski <kuba@kernel.org>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 3af319d5147454dc63665ef451229c674b538377
+Author: Qingfang DENG <qingfang.deng@siflower.com.cn>
+Date:   Fri Feb 3 09:16:11 2023 +0800
+
+    net: page_pool: use in_softirq() instead
+    
+    [ Upstream commit 542bcea4be866b14b3a5c8e90773329066656c43 ]
+    
+    We use BH context only for synchronization, so we don't care if it's
+    actually serving softirq or not.
+    
+    As a side node, in case of threaded NAPI, in_serving_softirq() will
+    return false because it's in process context with BH off, making
+    page_pool_recycle_in_cache() unreachable.
+    
+    Signed-off-by: Qingfang DENG <qingfang.deng@siflower.com.cn>
+    Tested-by: Felix Fietkau <nbd@nbd.name>
+    Signed-off-by: David S. Miller <davem@davemloft.net>
+    Stable-dep-of: 368d3cb406cd ("page_pool: fix inconsistency for page_pool_ring_[un]lock()")
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 1c097b9db17314285b0f897fd7a954b0d4a1055f
+Author: Toke Høiland-Jørgensen <toke@redhat.com>
+Date:   Mon Jan 3 16:08:06 2022 +0100
+
+    xdp: Allow registering memory model without rxq reference
+    
+    [ Upstream commit 4a48ef70b93b8c7ed5190adfca18849e76387b80 ]
+    
+    The functions that register an XDP memory model take a struct xdp_rxq as
+    parameter, but the RXQ is not actually used for anything other than pulling
+    out the struct xdp_mem_info that it embeds. So refactor the register
+    functions and export variants that just take a pointer to the xdp_mem_info.
+    
+    This is in preparation for enabling XDP_REDIRECT in bpf_prog_run(), using a
+    page_pool instance that is not connected to any network device.
+    
+    Signed-off-by: Toke Høiland-Jørgensen <toke@redhat.com>
+    Signed-off-by: Alexei Starovoitov <ast@kernel.org>
+    Link: https://lore.kernel.org/bpf/20220103150812.87914-2-toke@redhat.com
+    Stable-dep-of: 368d3cb406cd ("page_pool: fix inconsistency for page_pool_ring_[un]lock()")
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 623d965c2dee79eee0c1d649ce2db8ecfbd56028
+Author: Rahul Rameshbabu <rrameshbabu@nvidia.com>
+Date:   Tue Feb 21 16:18:48 2023 -0800
+
+    net/mlx5e: Fix SQ wake logic in ptp napi_poll context
+    
+    [ Upstream commit 7aa50380191635e5897a773f272829cc961a2be5 ]
+    
+    Check in the mlx5e_ptp_poll_ts_cq context if the ptp tx sq should be woken
+    up. Before change, the ptp tx sq may never wake up if the ptp tx ts skb
+    fifo is full when mlx5e_poll_tx_cq checks if the queue should be woken up.
+    
+    Fixes: 1880bc4e4a96 ("net/mlx5e: Add TX port timestamp support")
+    Signed-off-by: Rahul Rameshbabu <rrameshbabu@nvidia.com>
+    Reviewed-by: Tariq Toukan <tariqt@nvidia.com>
+    Signed-off-by: Saeed Mahameed <saeedm@nvidia.com>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 9085886c04d9ecb54fad7893fa426ca900687754
+Author: Jiaxun Yang <jiaxun.yang@flygoat.com>
+Date:   Mon Apr 24 11:31:56 2023 +0100
+
+    irqchip/mips-gic: Use raw spinlock for gic_lock
+    
+    [ Upstream commit 3d6a0e4197c04599d75d85a608c8bb16a630a38c ]
+    
+    Since we may hold gic_lock in hardirq context, use raw spinlock
+    makes more sense given that it is for low-level interrupt handling
+    routine and the critical section is small.
+    
+    Fixes BUG:
+    
+    [    0.426106] =============================
+    [    0.426257] [ BUG: Invalid wait context ]
+    [    0.426422] 6.3.0-rc7-next-20230421-dirty #54 Not tainted
+    [    0.426638] -----------------------------
+    [    0.426766] swapper/0/1 is trying to lock:
+    [    0.426954] ffffffff8104e7b8 (gic_lock){....}-{3:3}, at: gic_set_type+0x30/08
+    
+    Fixes: 95150ae8b330 ("irqchip: mips-gic: Implement irq_set_type callback")
+    Cc: stable@vger.kernel.org
+    Signed-off-by: Jiaxun Yang <jiaxun.yang@flygoat.com>
+    Reviewed-by: Serge Semin <fancer.lancer@gmail.com>
+    Tested-by: Serge Semin <fancer.lancer@gmail.com>
+    Signed-off-by: Marc Zyngier <maz@kernel.org>
+    Link: https://lore.kernel.org/r/20230424103156.66753-3-jiaxun.yang@flygoat.com
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 4517730b4c1e8a65d72f354c3dd59ea94f16f5c3
+Author: Marc Zyngier <maz@kernel.org>
+Date:   Thu Oct 21 18:04:13 2021 +0100
+
+    irqchip/mips-gic: Get rid of the reliance on irq_cpu_online()
+    
+    [ Upstream commit dd098a0e031928cf88c89f7577d31821e1f0e6de ]
+    
+    The MIPS GIC driver uses irq_cpu_online() to go and program the
+    per-CPU interrupts. However, this method iterates over all IRQs
+    in the system, despite only 3 per-CPU interrupts being of interest.
+    
+    Let's be terribly bold and do the iteration ourselves. To ensure
+    mutual exclusion, hold the gic_lock spinlock that is otherwise
+    taken while dealing with these interrupts.
+    
+    Signed-off-by: Marc Zyngier <maz@kernel.org>
+    Reviewed-by: Serge Semin <fancer.lancer@gmail.com>
+    Reviewed-by: Florian Fainelli <f.fainelli@gmail.com>
+    Tested-by: Serge Semin <fancer.lancer@gmail.com>
+    Link: https://lore.kernel.org/r/20211021170414.3341522-3-maz@kernel.org
+    Stable-dep-of: 3d6a0e4197c0 ("irqchip/mips-gic: Use raw spinlock for gic_lock")
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 5fd7c1e36b0a500d5fce820ee63c2a5b47b36e85
+Author: Carlos Llamas <cmllamas@google.com>
+Date:   Fri May 5 20:30:20 2023 +0000
+
+    binder: fix UAF caused by faulty buffer cleanup
+    
+    [ Upstream commit bdc1c5fac982845a58d28690cdb56db8c88a530d ]
+    
+    In binder_transaction_buffer_release() the 'failed_at' offset indicates
+    the number of objects to clean up. However, this function was changed by
+    commit 44d8047f1d87 ("binder: use standard functions to allocate fds"),
+    to release all the objects in the buffer when 'failed_at' is zero.
+    
+    This introduced an issue when a transaction buffer is released without
+    any objects having been processed so far. In this case, 'failed_at' is
+    indeed zero yet it is misinterpreted as releasing the entire buffer.
+    
+    This leads to use-after-free errors where nodes are incorrectly freed
+    and subsequently accessed. Such is the case in the following KASAN
+    report:
+    
+      ==================================================================
+      BUG: KASAN: slab-use-after-free in binder_thread_read+0xc40/0x1f30
+      Read of size 8 at addr ffff4faf037cfc58 by task poc/474
+    
+      CPU: 6 PID: 474 Comm: poc Not tainted 6.3.0-12570-g7df047b3f0aa #5
+      Hardware name: linux,dummy-virt (DT)
+      Call trace:
+       dump_backtrace+0x94/0xec
+       show_stack+0x18/0x24
+       dump_stack_lvl+0x48/0x60
+       print_report+0xf8/0x5b8
+       kasan_report+0xb8/0xfc
+       __asan_load8+0x9c/0xb8
+       binder_thread_read+0xc40/0x1f30
+       binder_ioctl+0xd9c/0x1768
+       __arm64_sys_ioctl+0xd4/0x118
+       invoke_syscall+0x60/0x188
+      [...]
+    
+      Allocated by task 474:
+       kasan_save_stack+0x3c/0x64
+       kasan_set_track+0x2c/0x40
+       kasan_save_alloc_info+0x24/0x34
+       __kasan_kmalloc+0xb8/0xbc
+       kmalloc_trace+0x48/0x5c
+       binder_new_node+0x3c/0x3a4
+       binder_transaction+0x2b58/0x36f0
+       binder_thread_write+0x8e0/0x1b78
+       binder_ioctl+0x14a0/0x1768
+       __arm64_sys_ioctl+0xd4/0x118
+       invoke_syscall+0x60/0x188
+      [...]
+    
+      Freed by task 475:
+       kasan_save_stack+0x3c/0x64
+       kasan_set_track+0x2c/0x40
+       kasan_save_free_info+0x38/0x5c
+       __kasan_slab_free+0xe8/0x154
+       __kmem_cache_free+0x128/0x2bc
+       kfree+0x58/0x70
+       binder_dec_node_tmpref+0x178/0x1fc
+       binder_transaction_buffer_release+0x430/0x628
+       binder_transaction+0x1954/0x36f0
+       binder_thread_write+0x8e0/0x1b78
+       binder_ioctl+0x14a0/0x1768
+       __arm64_sys_ioctl+0xd4/0x118
+       invoke_syscall+0x60/0x188
+      [...]
+      ==================================================================
+    
+    In order to avoid these issues, let's always calculate the intended
+    'failed_at' offset beforehand. This is renamed and wrapped in a helper
+    function to make it clear and convenient.
+    
+    Fixes: 32e9f56a96d8 ("binder: don't detect sender/target during buffer cleanup")
+    Reported-by: Zi Fan Tan <zifantan@google.com>
+    Cc: stable@vger.kernel.org
+    Signed-off-by: Carlos Llamas <cmllamas@google.com>
+    Acked-by: Todd Kjos <tkjos@google.com>
+    Link: https://lore.kernel.org/r/20230505203020.4101154-1-cmllamas@google.com
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit c88d21c0ae323a415e23470d0525724cc5da6ae1
+Author: Hangbin Liu <liuhangbin@gmail.com>
+Date:   Tue May 9 11:11:57 2023 +0800
+
+    bonding: fix send_peer_notif overflow
+    
+    [ Upstream commit 9949e2efb54eb3001cb2f6512ff3166dddbfb75d ]
+    
+    Bonding send_peer_notif was defined as u8. Since commit 07a4ddec3ce9
+    ("bonding: add an option to specify a delay between peer notifications").
+    the bond->send_peer_notif will be num_peer_notif multiplied by
+    peer_notif_delay, which is u8 * u32. This would cause the send_peer_notif
+    overflow easily. e.g.
+    
+      ip link add bond0 type bond mode 1 miimon 100 num_grat_arp 30 peer_notify_delay 1000
+    
+    To fix the overflow, let's set the send_peer_notif to u32 and limit
+    peer_notif_delay to 300s.
+    
+    Reported-by: Liang Li <liali@redhat.com>
+    Closes: https://bugzilla.redhat.com/show_bug.cgi?id=2090053
+    Fixes: 07a4ddec3ce9 ("bonding: add an option to specify a delay between peer notifications")
+    Signed-off-by: Hangbin Liu <liuhangbin@gmail.com>
+    Signed-off-by: David S. Miller <davem@davemloft.net>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 7ee611fc85adbb82e63501e7cb517163bacb0086
+Author: Hangbin Liu <liuhangbin@gmail.com>
+Date:   Tue Nov 30 12:29:47 2021 +0800
+
+    Bonding: add arp_missed_max option
+    
+    [ Upstream commit 5944b5abd8646e8c6ac6af2b55f87dede1dae898 ]
+    
+    Currently, we use hard code number to verify if we are in the
+    arp_interval timeslice. But some user may want to reduce/extend
+    the verify timeslice. With the similar team option 'missed_max'
+    the uers could change that number based on their own environment.
+    
+    Acked-by: Jay Vosburgh <jay.vosburgh@canonical.com>
+    Signed-off-by: Hangbin Liu <liuhangbin@gmail.com>
+    Signed-off-by: David S. Miller <davem@davemloft.net>
+    Stable-dep-of: 9949e2efb54e ("bonding: fix send_peer_notif overflow")
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 5b925b48bebc16cf52be124b13b64410b9c43181
+Author: Arınç ÜNAL <arinc.unal@arinc9.com>
+Date:   Wed May 3 00:09:47 2023 +0300
+
+    net: dsa: mt7530: fix network connectivity with multiple CPU ports
+    
+    [ Upstream commit 120a56b01beed51ab5956a734adcfd2760307107 ]
+    
+    On mt753x_cpu_port_enable() there's code that enables flooding for the CPU
+    port only. Since mt753x_cpu_port_enable() runs twice when both CPU ports
+    are enabled, port 6 becomes the only port to forward the frames to. But
+    port 5 is the active port, so no frames received from the user ports will
+    be forwarded to port 5 which breaks network connectivity.
+    
+    Every bit of the BC_FFP, UNM_FFP, and UNU_FFP bits represents a port. Fix
+    this issue by setting the bit that corresponds to the CPU port without
+    overwriting the other bits.
+    
+    Clear the bits beforehand only for the MT7531 switch. According to the
+    documents MT7621 Giga Switch Programming Guide v0.3 and MT7531 Reference
+    Manual for Development Board v1.0, after reset, the BC_FFP, UNM_FFP, and
+    UNU_FFP bits are set to 1 for MT7531, 0 for MT7530.
+    
+    The commit 5e5502e012b8 ("net: dsa: mt7530: fix roaming from DSA user
+    ports") silently changed the method to set the bits on the MT7530_MFC.
+    Instead of clearing the relevant bits before mt7530_cpu_port_enable()
+    which runs under a for loop, the commit started doing it on
+    mt7530_cpu_port_enable().
+    
+    Back then, this didn't really matter as only a single CPU port could be
+    used since the CPU port number was hardcoded. The driver was later changed
+    with commit 1f9a6abecf53 ("net: dsa: mt7530: get cpu-port via dp->cpu_dp
+    instead of constant") to retrieve the CPU port via dp->cpu_dp. With that,
+    this silent change became an issue for when using multiple CPU ports.
+    
+    Fixes: 5e5502e012b8 ("net: dsa: mt7530: fix roaming from DSA user ports")
+    Signed-off-by: Arınç ÜNAL <arinc.unal@arinc9.com>
+    Signed-off-by: David S. Miller <davem@davemloft.net>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 5a7266feaa6d708fc6880a161786eaa884ef3c8e
+Author: Daniel Golle <daniel@makrotopia.org>
+Date:   Mon Apr 3 02:19:02 2023 +0100
+
+    net: dsa: mt7530: split-off common parts from mt7531_setup
+    
+    [ Upstream commit 7f54cc9772ced2d76ac11832f0ada43798443ac9 ]
+    
+    MT7988 shares a significant part of the setup function with MT7531.
+    Split-off those parts into a shared function which is going to be used
+    also by mt7988_setup.
+    
+    Signed-off-by: Daniel Golle <daniel@makrotopia.org>
+    Reviewed-by: Andrew Lunn <andrew@lunn.ch>
+    Signed-off-by: David S. Miller <davem@davemloft.net>
+    Stable-dep-of: 120a56b01bee ("net: dsa: mt7530: fix network connectivity with multiple CPU ports")
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 0753c1ef24194580f7165ae6e259b59a851392f2
+Author: Frank Wunderlich <frank-w@public-files.de>
+Date:   Fri Jun 10 19:05:38 2022 +0200
+
+    net: dsa: mt7530: rework mt753[01]_setup
+    
+    [ Upstream commit 6e19bc26cccdd34739b8c42aba2758777d18b211 ]
+    
+    Enumerate available cpu-ports instead of using hardcoded constant.
+    
+    Suggested-by: Vladimir Oltean <olteanv@gmail.com>
+    Signed-off-by: Frank Wunderlich <frank-w@public-files.de>
+    Reviewed-by: Vladimir Oltean <olteanv@gmail.com>
+    Reviewed-by: Florian Fainelli <f.fainelli@gmail.com>
+    Signed-off-by: Jakub Kicinski <kuba@kernel.org>
+    Stable-dep-of: 120a56b01bee ("net: dsa: mt7530: fix network connectivity with multiple CPU ports")
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 9902f91cf666124a6b50bbcf483b46ecb09ef408
+Author: Vladimir Oltean <vladimir.oltean@nxp.com>
+Date:   Wed Oct 20 20:49:49 2021 +0300
+
+    net: dsa: introduce helpers for iterating through ports using dp
+    
+    [ Upstream commit 82b318983c515f29b8b3a0dad9f6a5fe8a68a7f4 ]
+    
+    Since the DSA conversion from the ds->ports array into the dst->ports
+    list, the DSA API has encouraged driver writers, as well as the core
+    itself, to write inefficient code.
+    
+    Currently, code that wants to filter by a specific type of port when
+    iterating, like {!unused, user, cpu, dsa}, uses the dsa_is_*_port helper.
+    Under the hood, this uses dsa_to_port which iterates again through
+    dst->ports. But the driver iterates through the port list already, so
+    the complexity is quadratic for the typical case of a single-switch
+    tree.
+    
+    This patch introduces some iteration helpers where the iterator is
+    already a struct dsa_port *dp, so that the other variant of the
+    filtering functions, dsa_port_is_{unused,user,cpu_dsa}, can be used
+    directly on the iterator. This eliminates the second lookup.
+    
+    These functions can be used both by the core and by drivers.
+    
+    Signed-off-by: Vladimir Oltean <vladimir.oltean@nxp.com>
+    Reviewed-by: Florian Fainelli <f.fainelli@gmail.com>
+    Signed-off-by: David S. Miller <davem@davemloft.net>
+    Stable-dep-of: 120a56b01bee ("net: dsa: mt7530: fix network connectivity with multiple CPU ports")
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit d84b42b725260afbf94b5fec354633636be55bf1
+Author: David Epping <david.epping@missinglinkelectronics.com>
+Date:   Tue May 23 17:31:08 2023 +0200
+
+    net: phy: mscc: enable VSC8501/2 RGMII RX clock
+    
+    [ Upstream commit 71460c9ec5c743e9ffffca3c874d66267c36345e ]
+    
+    By default the VSC8501 and VSC8502 RGMII/GMII/MII RX_CLK output is
+    disabled. To allow packet forwarding towards the MAC it needs to be
+    enabled.
+    
+    For other PHYs supported by this driver the clock output is enabled
+    by default.
+    
+    Fixes: d3169863310d ("net: phy: mscc: add support for VSC8502")
+    Signed-off-by: David Epping <david.epping@missinglinkelectronics.com>
+    Reviewed-by: Russell King (Oracle) <rmk+kernel@armlinux.org.uk>
+    Reviewed-by: Vladimir Oltean <olteanv@gmail.com>
+    Signed-off-by: Jakub Kicinski <kuba@kernel.org>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 3dce2f3d8359c74b4e7e9e831c20b7613bebdd81
+Author: Steve Wahl <steve.wahl@hpe.com>
+Date:   Fri May 19 11:04:20 2023 -0500
+
+    platform/x86: ISST: Remove 8 socket limit
+    
+    [ Upstream commit bbb320bfe2c3e9740fe89cfa0a7089b4e8bfc4ff ]
+    
+    Stop restricting the PCI search to a range of PCI domains fed to
+    pci_get_domain_bus_and_slot().  Instead, use for_each_pci_dev() and
+    look at all PCI domains in one pass.
+    
+    On systems with more than 8 sockets, this avoids error messages like
+    "Information: Invalid level, Can't get TDP control information at
+    specified levels on cpu 480" from the intel speed select utility.
+    
+    Fixes: aa2ddd242572 ("platform/x86: ISST: Use numa node id for cpu pci dev mapping")
+    Signed-off-by: Steve Wahl <steve.wahl@hpe.com>
+    Reviewed-by: Ilpo Järvinen <ilpo.jarvinen@linux.intel.com>
+    Link: https://lore.kernel.org/r/20230519160420.2588475-1-steve.wahl@hpe.com
+    Signed-off-by: Hans de Goede <hdegoede@redhat.com>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 017a634f9f38ae704d9d57817555773de700219e
+Author: Srinivas Pandruvada <srinivas.pandruvada@linux.intel.com>
+Date:   Wed Jun 29 12:48:17 2022 -0700
+
+    platform/x86: ISST: PUNIT device mapping with Sub-NUMA clustering
+    
+    [ Upstream commit 9a1aac8a96dc014bec49806a7a964bf2fdbd315f ]
+    
+    On a multiple package system using Sub-NUMA clustering, there is an issue
+    in mapping Linux CPU number to PUNIT PCI device when manufacturer decided
+    to reuse the PCI bus number across packages. Bus number can be reused as
+    long as they are in different domain or segment. In this case some CPU
+    will fail to find a PCI device to issue SST requests.
+    
+    When bus numbers are reused across CPU packages, we are using proximity
+    information by matching CPU numa node id to PUNIT PCI device numa node
+    id. But on a package there can be only one PUNIT PCI device, but multiple
+    numa nodes (one for each sub cluster). So, the numa node ID of the PUNIT
+    PCI device can only match with one numa node id of CPUs in a sub cluster
+    in the package.
+    
+    Since there can be only one PUNIT PCI device per package, if we match
+    with numa node id of any sub cluster in that package, we can use that
+    mapping for any CPU in that package. So, store the match information
+    in a per package data structure and return the information when there
+    is no match.
+    
+    While here, use defines for max bus number instead of hardcoding.
+    
+    Signed-off-by: Srinivas Pandruvada <srinivas.pandruvada@linux.intel.com>
+    Link: https://lore.kernel.org/r/20220629194817.2418240-1-srinivas.pandruvada@linux.intel.com
+    Reviewed-by: Hans de Goede <hdegoede@redhat.com>
+    Signed-off-by: Hans de Goede <hdegoede@redhat.com>
+    Stable-dep-of: bbb320bfe2c3 ("platform/x86: ISST: Remove 8 socket limit")
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit ff455f7fbce7265e0e50fa80d3a3b0e8580b1f80
+Author: Shay Drory <shayd@nvidia.com>
+Date:   Tue May 2 13:36:42 2023 +0300
+
+    net/mlx5: Devcom, serialize devcom registration
+    
+    [ Upstream commit 1f893f57a3bf9fe1f4bcb25b55aea7f7f9712fe7 ]
+    
+    From one hand, mlx5 driver is allowing to probe PFs in parallel.
+    From the other hand, devcom, which is a share resource between PFs, is
+    registered without any lock. This might resulted in memory problems.
+    
+    Hence, use the global mlx5_dev_list_lock in order to serialize devcom
+    registration.
+    
+    Fixes: fadd59fc50d0 ("net/mlx5: Introduce inter-device communication mechanism")
+    Signed-off-by: Shay Drory <shayd@nvidia.com>
+    Reviewed-by: Mark Bloch <mbloch@nvidia.com>
+    Signed-off-by: Saeed Mahameed <saeedm@nvidia.com>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 69966bce28da6aadccfd968b75d128a79da32d17
+Author: Vlad Buslov <vladbu@nvidia.com>
+Date:   Fri Mar 31 14:20:51 2023 +0200
+
+    net/mlx5e: Fix deadlock in tc route query code
+    
+    [ Upstream commit 691c041bf20899fc13c793f92ba61ab660fa3a30 ]
+    
+    Cited commit causes ABBA deadlock[0] when peer flows are created while
+    holding the devcom rw semaphore. Due to peer flows offload implementation
+    the lock is taken much higher up the call chain and there is no obvious way
+    to easily fix the deadlock. Instead, since tc route query code needs the
+    peer eswitch structure only to perform a lookup in xarray and doesn't
+    perform any sleeping operations with it, refactor the code for lockless
+    execution in following ways:
+    
+    - RCUify the devcom 'data' pointer. When resetting the pointer
+    synchronously wait for RCU grace period before returning. This is fine
+    since devcom is currently only used for synchronization of
+    pairing/unpairing of eswitches which is rare and already expensive as-is.
+    
+    - Wrap all usages of 'paired' boolean in {READ|WRITE}_ONCE(). The flag has
+    already been used in some unlocked contexts without proper
+    annotations (e.g. users of mlx5_devcom_is_paired() function), but it wasn't
+    an issue since all relevant code paths checked it again after obtaining the
+    devcom semaphore. Now it is also used by mlx5_devcom_get_peer_data_rcu() as
+    "best effort" check to return NULL when devcom is being unpaired. Note that
+    while RCU read lock doesn't prevent the unpaired flag from being changed
+    concurrently it still guarantees that reader can continue to use 'data'.
+    
+    - Refactor mlx5e_tc_query_route_vport() function to use new
+    mlx5_devcom_get_peer_data_rcu() API which fixes the deadlock.
+    
+    [0]:
+    
+    [  164.599612] ======================================================
+    [  164.600142] WARNING: possible circular locking dependency detected
+    [  164.600667] 6.3.0-rc3+ #1 Not tainted
+    [  164.601021] ------------------------------------------------------
+    [  164.601557] handler1/3456 is trying to acquire lock:
+    [  164.601998] ffff88811f1714b0 (&esw->offloads.encap_tbl_lock){+.+.}-{3:3}, at: mlx5e_attach_encap+0xd8/0x8b0 [mlx5_core]
+    [  164.603078]
+                   but task is already holding lock:
+    [  164.603617] ffff88810137fc98 (&comp->sem){++++}-{3:3}, at: mlx5_devcom_get_peer_data+0x37/0x80 [mlx5_core]
+    [  164.604459]
+                   which lock already depends on the new lock.
+    
+    [  164.605190]
+                   the existing dependency chain (in reverse order) is:
+    [  164.605848]
+                   -> #1 (&comp->sem){++++}-{3:3}:
+    [  164.606380]        down_read+0x39/0x50
+    [  164.606772]        mlx5_devcom_get_peer_data+0x37/0x80 [mlx5_core]
+    [  164.607336]        mlx5e_tc_query_route_vport+0x86/0xc0 [mlx5_core]
+    [  164.607914]        mlx5e_tc_tun_route_lookup+0x1a4/0x1d0 [mlx5_core]
+    [  164.608495]        mlx5e_attach_decap_route+0xc6/0x1e0 [mlx5_core]
+    [  164.609063]        mlx5e_tc_add_fdb_flow+0x1ea/0x360 [mlx5_core]
+    [  164.609627]        __mlx5e_add_fdb_flow+0x2d2/0x430 [mlx5_core]
+    [  164.610175]        mlx5e_configure_flower+0x952/0x1a20 [mlx5_core]
+    [  164.610741]        tc_setup_cb_add+0xd4/0x200
+    [  164.611146]        fl_hw_replace_filter+0x14c/0x1f0 [cls_flower]
+    [  164.611661]        fl_change+0xc95/0x18a0 [cls_flower]
+    [  164.612116]        tc_new_tfilter+0x3fc/0xd20
+    [  164.612516]        rtnetlink_rcv_msg+0x418/0x5b0
+    [  164.612936]        netlink_rcv_skb+0x54/0x100
+    [  164.613339]        netlink_unicast+0x190/0x250
+    [  164.613746]        netlink_sendmsg+0x245/0x4a0
+    [  164.614150]        sock_sendmsg+0x38/0x60
+    [  164.614522]        ____sys_sendmsg+0x1d0/0x1e0
+    [  164.614934]        ___sys_sendmsg+0x80/0xc0
+    [  164.615320]        __sys_sendmsg+0x51/0x90
+    [  164.615701]        do_syscall_64+0x3d/0x90
+    [  164.616083]        entry_SYSCALL_64_after_hwframe+0x46/0xb0
+    [  164.616568]
+                   -> #0 (&esw->offloads.encap_tbl_lock){+.+.}-{3:3}:
+    [  164.617210]        __lock_acquire+0x159e/0x26e0
+    [  164.617638]        lock_acquire+0xc2/0x2a0
+    [  164.618018]        __mutex_lock+0x92/0xcd0
+    [  164.618401]        mlx5e_attach_encap+0xd8/0x8b0 [mlx5_core]
+    [  164.618943]        post_process_attr+0x153/0x2d0 [mlx5_core]
+    [  164.619471]        mlx5e_tc_add_fdb_flow+0x164/0x360 [mlx5_core]
+    [  164.620021]        __mlx5e_add_fdb_flow+0x2d2/0x430 [mlx5_core]
+    [  164.620564]        mlx5e_configure_flower+0xe33/0x1a20 [mlx5_core]
+    [  164.621125]        tc_setup_cb_add+0xd4/0x200
+    [  164.621531]        fl_hw_replace_filter+0x14c/0x1f0 [cls_flower]
+    [  164.622047]        fl_change+0xc95/0x18a0 [cls_flower]
+    [  164.622500]        tc_new_tfilter+0x3fc/0xd20
+    [  164.622906]        rtnetlink_rcv_msg+0x418/0x5b0
+    [  164.623324]        netlink_rcv_skb+0x54/0x100
+    [  164.623727]        netlink_unicast+0x190/0x250
+    [  164.624138]        netlink_sendmsg+0x245/0x4a0
+    [  164.624544]        sock_sendmsg+0x38/0x60
+    [  164.624919]        ____sys_sendmsg+0x1d0/0x1e0
+    [  164.625340]        ___sys_sendmsg+0x80/0xc0
+    [  164.625731]        __sys_sendmsg+0x51/0x90
+    [  164.626117]        do_syscall_64+0x3d/0x90
+    [  164.626502]        entry_SYSCALL_64_after_hwframe+0x46/0xb0
+    [  164.626995]
+                   other info that might help us debug this:
+    
+    [  164.627725]  Possible unsafe locking scenario:
+    
+    [  164.628268]        CPU0                    CPU1
+    [  164.628683]        ----                    ----
+    [  164.629098]   lock(&comp->sem);
+    [  164.629421]                                lock(&esw->offloads.encap_tbl_lock);
+    [  164.630066]                                lock(&comp->sem);
+    [  164.630555]   lock(&esw->offloads.encap_tbl_lock);
+    [  164.630993]
+                    *** DEADLOCK ***
+    
+    [  164.631575] 3 locks held by handler1/3456:
+    [  164.631962]  #0: ffff888124b75130 (&block->cb_lock){++++}-{3:3}, at: tc_setup_cb_add+0x5b/0x200
+    [  164.632703]  #1: ffff888116e512b8 (&esw->mode_lock){++++}-{3:3}, at: mlx5_esw_hold+0x39/0x50 [mlx5_core]
+    [  164.633552]  #2: ffff88810137fc98 (&comp->sem){++++}-{3:3}, at: mlx5_devcom_get_peer_data+0x37/0x80 [mlx5_core]
+    [  164.634435]
+                   stack backtrace:
+    [  164.634883] CPU: 17 PID: 3456 Comm: handler1 Not tainted 6.3.0-rc3+ #1
+    [  164.635431] Hardware name: QEMU Standard PC (Q35 + ICH9, 2009), BIOS rel-1.13.0-0-gf21b5a4aeb02-prebuilt.qemu.org 04/01/2014
+    [  164.636340] Call Trace:
+    [  164.636616]  <TASK>
+    [  164.636863]  dump_stack_lvl+0x47/0x70
+    [  164.637217]  check_noncircular+0xfe/0x110
+    [  164.637601]  __lock_acquire+0x159e/0x26e0
+    [  164.637977]  ? mlx5_cmd_set_fte+0x5b0/0x830 [mlx5_core]
+    [  164.638472]  lock_acquire+0xc2/0x2a0
+    [  164.638828]  ? mlx5e_attach_encap+0xd8/0x8b0 [mlx5_core]
+    [  164.639339]  ? lock_is_held_type+0x98/0x110
+    [  164.639728]  __mutex_lock+0x92/0xcd0
+    [  164.640074]  ? mlx5e_attach_encap+0xd8/0x8b0 [mlx5_core]
+    [  164.640576]  ? __lock_acquire+0x382/0x26e0
+    [  164.640958]  ? mlx5e_attach_encap+0xd8/0x8b0 [mlx5_core]
+    [  164.641468]  ? mlx5e_attach_encap+0xd8/0x8b0 [mlx5_core]
+    [  164.641965]  mlx5e_attach_encap+0xd8/0x8b0 [mlx5_core]
+    [  164.642454]  ? lock_release+0xbf/0x240
+    [  164.642819]  post_process_attr+0x153/0x2d0 [mlx5_core]
+    [  164.643318]  mlx5e_tc_add_fdb_flow+0x164/0x360 [mlx5_core]
+    [  164.643835]  __mlx5e_add_fdb_flow+0x2d2/0x430 [mlx5_core]
+    [  164.644340]  mlx5e_configure_flower+0xe33/0x1a20 [mlx5_core]
+    [  164.644862]  ? lock_acquire+0xc2/0x2a0
+    [  164.645219]  tc_setup_cb_add+0xd4/0x200
+    [  164.645588]  fl_hw_replace_filter+0x14c/0x1f0 [cls_flower]
+    [  164.646067]  fl_change+0xc95/0x18a0 [cls_flower]
+    [  164.646488]  tc_new_tfilter+0x3fc/0xd20
+    [  164.646861]  ? tc_del_tfilter+0x810/0x810
+    [  164.647236]  rtnetlink_rcv_msg+0x418/0x5b0
+    [  164.647621]  ? rtnl_setlink+0x160/0x160
+    [  164.647982]  netlink_rcv_skb+0x54/0x100
+    [  164.648348]  netlink_unicast+0x190/0x250
+    [  164.648722]  netlink_sendmsg+0x245/0x4a0
+    [  164.649090]  sock_sendmsg+0x38/0x60
+    [  164.649434]  ____sys_sendmsg+0x1d0/0x1e0
+    [  164.649804]  ? copy_msghdr_from_user+0x6d/0xa0
+    [  164.650213]  ___sys_sendmsg+0x80/0xc0
+    [  164.650563]  ? lock_acquire+0xc2/0x2a0
+    [  164.650926]  ? lock_acquire+0xc2/0x2a0
+    [  164.651286]  ? __fget_files+0x5/0x190
+    [  164.651644]  ? find_held_lock+0x2b/0x80
+    [  164.652006]  ? __fget_files+0xb9/0x190
+    [  164.652365]  ? lock_release+0xbf/0x240
+    [  164.652723]  ? __fget_files+0xd3/0x190
+    [  164.653079]  __sys_sendmsg+0x51/0x90
+    [  164.653435]  do_syscall_64+0x3d/0x90
+    [  164.653784]  entry_SYSCALL_64_after_hwframe+0x46/0xb0
+    [  164.654229] RIP: 0033:0x7f378054f8bd
+    [  164.654577] Code: 28 89 54 24 1c 48 89 74 24 10 89 7c 24 08 e8 6a c3 f4 ff 8b 54 24 1c 48 8b 74 24 10 41 89 c0 8b 7c 24 08 b8 2e 00 00 00 0f 05 <48> 3d 00 f0 ff ff 77 33 44 89 c7 48 89 44 24 08 e8 be c3 f4 ff 48
+    [  164.656041] RSP: 002b:00007f377fa114b0 EFLAGS: 00000293 ORIG_RAX: 000000000000002e
+    [  164.656701] RAX: ffffffffffffffda RBX: 0000000000000001 RCX: 00007f378054f8bd
+    [  164.657297] RDX: 0000000000000000 RSI: 00007f377fa11540 RDI: 0000000000000014
+    [  164.657885] RBP: 00007f377fa12278 R08: 0000000000000000 R09: 000000000000015c
+    [  164.658472] R10: 00007f377fa123d0 R11: 0000000000000293 R12: 0000560962d99bd0
+    [  164.665317] R13: 0000000000000000 R14: 0000560962d99bd0 R15: 00007f377fa11540
+    
+    Fixes: f9d196bd632b ("net/mlx5e: Use correct eswitch for stack devices with lag")
+    Signed-off-by: Vlad Buslov <vladbu@nvidia.com>
+    Reviewed-by: Roi Dayan <roid@nvidia.com>
+    Reviewed-by: Shay Drory <shayd@nvidia.com>
+    Reviewed-by: Tariq Toukan <tariqt@nvidia.com>
+    Signed-off-by: Saeed Mahameed <saeedm@nvidia.com>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 1c4e3cf8944f2d13831240dea356779b5af24361
+Author: Mark Bloch <mbloch@nvidia.com>
+Date:   Sun Feb 27 12:23:34 2022 +0000
+
+    net/mlx5: devcom only supports 2 ports
+    
+    [ Upstream commit 8a6e75e5f57e9ac82268d9bfca3403598d9d0292 ]
+    
+    Devcom API is intended to be used between 2 devices only add this
+    implied assumption into the code and check when it's no true.
+    
+    Signed-off-by: Mark Bloch <mbloch@nvidia.com>
+    Reviewed-by: Maor Gottlieb <maorg@nvidia.com>
+    Signed-off-by: Saeed Mahameed <saeedm@nvidia.com>
+    Stable-dep-of: 691c041bf208 ("net/mlx5e: Fix deadlock in tc route query code")
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 79ea1a12fb9a8275b6e19d4ca625dd872dedcbb9
+Author: Anton Protopopov <aspsk@isovalent.com>
+Date:   Mon May 22 15:45:58 2023 +0000
+
+    bpf: fix a memory leak in the LRU and LRU_PERCPU hash maps
+    
+    [ Upstream commit b34ffb0c6d23583830f9327864b9c1f486003305 ]
+    
+    The LRU and LRU_PERCPU maps allocate a new element on update before locking the
+    target hash table bucket. Right after that the maps try to lock the bucket.
+    If this fails, then maps return -EBUSY to the caller without releasing the
+    allocated element. This makes the element untracked: it doesn't belong to
+    either of free lists, and it doesn't belong to the hash table, so can't be
+    re-used; this eventually leads to the permanent -ENOMEM on LRU map updates,
+    which is unexpected. Fix this by returning the element to the local free list
+    if bucket locking fails.
+    
+    Fixes: 20b6cc34ea74 ("bpf: Avoid hashtab deadlock with map_locked")
+    Signed-off-by: Anton Protopopov <aspsk@isovalent.com>
+    Link: https://lore.kernel.org/r/20230522154558.2166815-1-aspsk@isovalent.com
+    Signed-off-by: Martin KaFai Lau <martin.lau@kernel.org>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 1f06b2a6044534f8849f764a4aac5c8a5be1278e
+Author: Hans de Goede <hdegoede@redhat.com>
+Date:   Sat Apr 15 20:23:41 2023 +0200
+
+    power: supply: bq24190: Call power_supply_changed() after updating input current
+    
+    [ Upstream commit 77c2a3097d7029441e8a91aa0de1b4e5464593da ]
+    
+    The bq24192 model relies on external charger-type detection and once
+    that is done the bq24190_charger code will update the input current.
+    
+    In this case, when the initial power_supply_changed() call is made
+    from the interrupt handler, the input settings are 5V/0.5A which
+    on many devices is not enough power to charge (while the device is on).
+    
+    On many devices the fuel-gauge relies in its external_power_changed
+    callback to timely signal userspace about charging <-> discharging
+    status changes. Add a power_supply_changed() call after updating
+    the input current. This allows the fuel-gauge driver to timely recheck
+    if the battery is charging after the new input current has been applied
+    and then it can immediately notify userspace about this.
+    
+    Fixes: 18f8e6f695ac ("power: supply: bq24190_charger: Get input_current_limit from our supplier")
+    Signed-off-by: Hans de Goede <hdegoede@redhat.com>
+    Signed-off-by: Sebastian Reichel <sebastian.reichel@collabora.com>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 8c6f881dc13b02c4f5ef09f60c94ba9e1d1b322a
+Author: Hans de Goede <hdegoede@redhat.com>
+Date:   Tue Feb 1 14:06:47 2022 +0100
+
+    power: supply: core: Refactor power_supply_set_input_current_limit_from_supplier()
+    
+    [ Upstream commit 2220af8ca61ae67de4ec3deec1c6395a2f65b9fd ]
+    
+    Some (USB) charger ICs have variants with USB D+ and D- pins to do their
+    own builtin charger-type detection, like e.g. the bq24190 and bq25890 and
+    also variants which lack this functionality, e.g. the bq24192 and bq25892.
+    
+    In case the charger-type; and thus the input-current-limit detection is
+    done outside the charger IC then we need some way to communicate this to
+    the charger IC. In the past extcon was used for this, but if the external
+    detection does e.g. full USB PD negotiation then the extcon cable-types do
+    not convey enough information.
+    
+    For these setups it was decided to model the external charging "brick"
+    and the parameters negotiated with it as a power_supply class-device
+    itself; and power_supply_set_input_current_limit_from_supplier() was
+    introduced to allow drivers to get the input-current-limit this way.
+    
+    But in some cases psy drivers may want to know other properties, e.g. the
+    bq25892 can do "quick-charge" negotiation by pulsing its current draw,
+    but this should only be done if the usb_type psy-property of its supplier
+    is set to DCP (and device-properties indicate the board allows higher
+    voltages).
+    
+    Instead of adding extra helper functions for each property which
+    a psy-driver wants to query from its supplier, refactor
+    power_supply_set_input_current_limit_from_supplier() into a
+    more generic power_supply_get_property_from_supplier() function.
+    
+    Reviewed-by: Andy Shevchenko <andriy.shevchenko@linux.intel.com>
+    Signed-off-by: Hans de Goede <hdegoede@redhat.com>
+    Signed-off-by: Sebastian Reichel <sebastian.reichel@collabora.com>
+    Stable-dep-of: 77c2a3097d70 ("power: supply: bq24190: Call power_supply_changed() after updating input current")
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 1f9367a890acdfb7a23e3e8dc2d080f74152b511
+Author: Hans de Goede <hdegoede@redhat.com>
+Date:   Sat Apr 15 20:23:38 2023 +0200
+
+    power: supply: bq27xxx: After charger plug in/out wait 0.5s for things to stabilize
+    
+    [ Upstream commit 59a99cd462fbdf71f4e845e09f37783035088b4f ]
+    
+    bq27xxx_external_power_changed() gets called when the charger is plugged
+    in or out. Rather then immediately scheduling an update wait 0.5 seconds
+    for things to stabilize, so that e.g. the (dis)charge current is stable
+    when bq27xxx_battery_update() runs.
+    
+    Fixes: 740b755a3b34 ("bq27x00: Poll battery state")
+    Signed-off-by: Hans de Goede <hdegoede@redhat.com>
+    Signed-off-by: Sebastian Reichel <sebastian.reichel@collabora.com>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 75a7e9de60a26ada44ac3784e86a546fd68dae1b
+Author: Hans de Goede <hdegoede@redhat.com>
+Date:   Sat Apr 15 20:23:37 2023 +0200
+
+    power: supply: bq27xxx: Ensure power_supply_changed() is called on current sign changes
+    
+    [ Upstream commit 939a116142012926e25de0ea6b7e2f8d86a5f1b6 ]
+    
+    On gauges where the current register is signed, there is no charging
+    flag in the flags register. So only checking flags will not result
+    in power_supply_changed() getting called when e.g. a charger is plugged
+    in and the current sign changes from negative (discharging) to
+    positive (charging).
+    
+    This causes userspace's notion of the status to lag until userspace
+    does a poll.
+    
+    And when a power_supply_leds.c LED trigger is used to indicate charging
+    status with a LED, this LED will lag until the capacity percentage
+    changes, which may take many minutes (because the LED trigger only is
+    updated on power_supply_changed() calls).
+    
+    Fix this by calling bq27xxx_battery_current_and_status() on gauges with
+    a signed current register and checking if the status has changed.
+    
+    Fixes: 297a533b3e62 ("bq27x00: Cache battery registers")
+    Signed-off-by: Hans de Goede <hdegoede@redhat.com>
+    Signed-off-by: Sebastian Reichel <sebastian.reichel@collabora.com>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit e4c708a9bbde46f989d94dba1531c2120aea8e57
+Author: Hans de Goede <hdegoede@redhat.com>
+Date:   Sat Apr 15 20:23:36 2023 +0200
+
+    power: supply: bq27xxx: Move bq27xxx_battery_update() down
+    
+    [ Upstream commit ff4c4a2a4437a6d03787c7aafb2617f20c3ef45f ]
+    
+    Move the bq27xxx_battery_update() functions to below
+    the bq27xxx_battery_current_and_status() function.
+    
+    This is just moving a block of text, no functional changes.
+    
+    This is a preparation patch for making bq27xxx_battery_update() check
+    the status and have it call power_supply_changed() on status changes.
+    
+    Fixes: 297a533b3e62 ("bq27x00: Cache battery registers")
+    Signed-off-by: Hans de Goede <hdegoede@redhat.com>
+    Signed-off-by: Sebastian Reichel <sebastian.reichel@collabora.com>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 2288fa1ae9b172d4cb755333da926e519daeb683
+Author: Sicelo A. Mhlongo <absicsz@gmail.com>
+Date:   Wed Apr 20 14:30:59 2022 +0200
+
+    power: supply: bq27xxx: expose battery data when CI=1
+    
+    [ Upstream commit 68fdbe090c362e8be23890a7333d156e18c27781 ]
+    
+    When the Capacity Inaccurate flag is set, the chip still provides data
+    about the battery, albeit inaccurate. Instead of discarding capacity
+    values for CI=1, expose the stale data and use the
+    POWER_SUPPLY_HEALTH_CALIBRATION_REQUIRED property to indicate that the
+    values should be used with care.
+    
+    Reviewed-by: Pali Rohár <pali@kernel.org>
+    Signed-off-by: Sicelo A. Mhlongo <absicsz@gmail.com>
+    Signed-off-by: Sebastian Reichel <sebastian.reichel@collabora.com>
+    Stable-dep-of: ff4c4a2a4437 ("power: supply: bq27xxx: Move bq27xxx_battery_update() down")
+    Signed-off-by: Sasha Levin <sashal@kernel.org>

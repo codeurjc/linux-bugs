@@ -1,0 +1,814 @@
+commit 69f65d442efe5eb3c1ee8adec251b918c1b0090a
+Author: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+Date:   Sat Feb 25 11:53:27 2023 +0100
+
+    Linux 5.4.233
+    
+    Link: https://lore.kernel.org/r/20230223130425.680784802@linuxfoundation.org
+    Link: https://lore.kernel.org/r/20230223141539.591151658@linuxfoundation.org
+    Tested-by: Florian Fainelli <f.fainelli@gmail.com>
+    Tested-by: Shuah Khan <skhan@linuxfoundation.org>
+    Tested-by: Slade Watkins <srw@sladewatkins.net>
+    Tested-by: Guenter Roeck <linux@roeck-us.net>
+    Tested-by: Sudip Mukherjee <sudip.mukherjee@codethink.co.uk>
+    Tested-by: Linux Kernel Functional Testing <lkft@linaro.org>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit c6cc0121d44d4f8dcde65fec71eb1ee8915392ed
+Author: Linus Torvalds <torvalds@linux-foundation.org>
+Date:   Wed Feb 22 09:52:32 2023 -0800
+
+    bpf: add missing header file include
+    
+    commit f3dd0c53370e70c0f9b7e931bbec12916f3bb8cc upstream.
+    
+    Commit 74e19ef0ff80 ("uaccess: Add speculation barrier to
+    copy_from_user()") built fine on x86-64 and arm64, and that's the extent
+    of my local build testing.
+    
+    It turns out those got the <linux/nospec.h> include incidentally through
+    other header files (<linux/kvm_host.h> in particular), but that was not
+    true of other architectures, resulting in build errors
+    
+      kernel/bpf/core.c: In function ‘___bpf_prog_run’:
+      kernel/bpf/core.c:1913:3: error: implicit declaration of function ‘barrier_nospec’
+    
+    so just make sure to explicitly include the proper <linux/nospec.h>
+    header file to make everybody see it.
+    
+    Fixes: 74e19ef0ff80 ("uaccess: Add speculation barrier to copy_from_user()")
+    Reported-by: kernel test robot <lkp@intel.com>
+    Reported-by: Viresh Kumar <viresh.kumar@linaro.org>
+    Reported-by: Huacai Chen <chenhuacai@loongson.cn>
+    Tested-by: Geert Uytterhoeven <geert@linux-m68k.org>
+    Tested-by: Dave Hansen <dave.hansen@linux.intel.com>
+    Acked-by: Alexei Starovoitov <alexei.starovoitov@gmail.com>
+    Signed-off-by: Linus Torvalds <torvalds@linux-foundation.org>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 5d873a6c658f23b11c5ab574fa9bd659591f6037
+Author: Vladimir Oltean <vladimir.oltean@nxp.com>
+Date:   Wed Oct 5 01:01:00 2022 +0300
+
+    Revert "net/sched: taprio: make qdisc_leaf() see the per-netdev-queue pfifo child qdiscs"
+    
+    commit af7b29b1deaac6da3bb7637f0e263dfab7bfc7a3 upstream.
+    
+    taprio_attach() has this logic at the end, which should have been
+    removed with the blamed patch (which is now being reverted):
+    
+            /* access to the child qdiscs is not needed in offload mode */
+            if (FULL_OFFLOAD_IS_ENABLED(q->flags)) {
+                    kfree(q->qdiscs);
+                    q->qdiscs = NULL;
+            }
+    
+    because otherwise, we make use of q->qdiscs[] even after this array was
+    deallocated, namely in taprio_leaf(). Therefore, whenever one would try
+    to attach a valid child qdisc to a fully offloaded taprio root, one
+    would immediately dereference a NULL pointer.
+    
+    $ tc qdisc replace dev eno0 handle 8001: parent root taprio \
+            num_tc 8 \
+            map 0 1 2 3 4 5 6 7 \
+            queues 1@0 1@1 1@2 1@3 1@4 1@5 1@6 1@7 \
+            max-sdu 0 0 0 0 0 200 0 0 \
+            base-time 200 \
+            sched-entry S 80 20000 \
+            sched-entry S a0 20000 \
+            sched-entry S 5f 60000 \
+            flags 2
+    $ max_frame_size=1500
+    $ data_rate_kbps=20000
+    $ port_transmit_rate_kbps=1000000
+    $ idleslope=$data_rate_kbps
+    $ sendslope=$(($idleslope - $port_transmit_rate_kbps))
+    $ locredit=$(($max_frame_size * $sendslope / $port_transmit_rate_kbps))
+    $ hicredit=$(($max_frame_size * $idleslope / $port_transmit_rate_kbps))
+    $ tc qdisc replace dev eno0 parent 8001:7 cbs \
+            idleslope $idleslope \
+            sendslope $sendslope \
+            hicredit $hicredit \
+            locredit $locredit \
+            offload 0
+    
+    Unable to handle kernel NULL pointer dereference at virtual address 0000000000000030
+    pc : taprio_leaf+0x28/0x40
+    lr : qdisc_leaf+0x3c/0x60
+    Call trace:
+     taprio_leaf+0x28/0x40
+     tc_modify_qdisc+0xf0/0x72c
+     rtnetlink_rcv_msg+0x12c/0x390
+     netlink_rcv_skb+0x5c/0x130
+     rtnetlink_rcv+0x1c/0x2c
+    
+    The solution is not as obvious as the problem. The code which deallocates
+    q->qdiscs[] is in fact copied and pasted from mqprio, which also
+    deallocates the array in mqprio_attach() and never uses it afterwards.
+    
+    Therefore, the identical cleanup logic of priv->qdiscs[] that
+    mqprio_destroy() has is deceptive because it will never take place at
+    qdisc_destroy() time, but just at raw ops->destroy() time (otherwise
+    said, priv->qdiscs[] do not last for the entire lifetime of the mqprio
+    root), but rather, this is just the twisted way in which the Qdisc API
+    understands error path cleanup should be done (Qdisc_ops :: destroy() is
+    called even when Qdisc_ops :: init() never succeeded).
+    
+    Side note, in fact this is also what the comment in mqprio_init() says:
+    
+            /* pre-allocate qdisc, attachment can't fail */
+    
+    Or reworded, mqprio's priv->qdiscs[] scheme is only meant to serve as
+    data passing between Qdisc_ops :: init() and Qdisc_ops :: attach().
+    
+    [ this comment was also copied and pasted into the initial taprio
+      commit, even though taprio_attach() came way later ]
+    
+    The problem is that taprio also makes extensive use of the q->qdiscs[]
+    array in the software fast path (taprio_enqueue() and taprio_dequeue()),
+    but it does not keep a reference of its own on q->qdiscs[i] (you'd think
+    that since it creates these Qdiscs, it holds the reference, but nope,
+    this is not completely true).
+    
+    To understand the difference between taprio_destroy() and mqprio_destroy()
+    one must look before commit 13511704f8d7 ("net: taprio offload: enforce
+    qdisc to netdev queue mapping"), because that just muddied the waters.
+    
+    In the "original" taprio design, taprio always attached itself (the root
+    Qdisc) to all netdev TX queues, so that dev_qdisc_enqueue() would go
+    through taprio_enqueue().
+    
+    It also called qdisc_refcount_inc() on itself for as many times as there
+    were netdev TX queues, in order to counter-balance what tc_get_qdisc()
+    does when destroying a Qdisc (simplified for brevity below):
+    
+            if (n->nlmsg_type == RTM_DELQDISC)
+                    err = qdisc_graft(dev, parent=NULL, new=NULL, q, extack);
+    
+    qdisc_graft(where "new" is NULL so this deletes the Qdisc):
+    
+            for (i = 0; i < num_q; i++) {
+                    struct netdev_queue *dev_queue;
+    
+                    dev_queue = netdev_get_tx_queue(dev, i);
+    
+                    old = dev_graft_qdisc(dev_queue, new);
+                    if (new && i > 0)
+                            qdisc_refcount_inc(new);
+    
+                    qdisc_put(old);
+                    ~~~~~~~~~~~~~~
+                    this decrements taprio's refcount once for each TX queue
+            }
+    
+            notify_and_destroy(net, skb, n, classid,
+                               rtnl_dereference(dev->qdisc), new);
+                               ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+                               and this finally decrements it to zero,
+                               making qdisc_put() call qdisc_destroy()
+    
+    The q->qdiscs[] created using qdisc_create_dflt() (or their
+    replacements, if taprio_graft() was ever to get called) were then
+    privately freed by taprio_destroy().
+    
+    This is still what is happening after commit 13511704f8d7 ("net: taprio
+    offload: enforce qdisc to netdev queue mapping"), but only for software
+    mode.
+    
+    In full offload mode, the per-txq "qdisc_put(old)" calls from
+    qdisc_graft() now deallocate the child Qdiscs rather than decrement
+    taprio's refcount. So when notify_and_destroy(taprio) finally calls
+    taprio_destroy(), the difference is that the child Qdiscs were already
+    deallocated.
+    
+    And this is exactly why the taprio_attach() comment "access to the child
+    qdiscs is not needed in offload mode" is deceptive too. Not only the
+    q->qdiscs[] array is not needed, but it is also necessary to get rid of
+    it as soon as possible, because otherwise, we will also call qdisc_put()
+    on the child Qdiscs in qdisc_destroy() -> taprio_destroy(), and this
+    will cause a nasty use-after-free/refcount-saturate/whatever.
+    
+    In short, the problem is that since the blamed commit, taprio_leaf()
+    needs q->qdiscs[] to not be freed by taprio_attach(), while qdisc_destroy()
+    -> taprio_destroy() does need q->qdiscs[] to be freed by taprio_attach()
+    for full offload. Fixing one problem triggers the other.
+    
+    All of this can be solved by making taprio keep its q->qdiscs[i] with a
+    refcount elevated at 2 (in offloaded mode where they are attached to the
+    netdev TX queues), both in taprio_attach() and in taprio_graft(). The
+    generic qdisc_graft() would just decrement the child qdiscs' refcounts
+    to 1, and taprio_destroy() would give them the final coup de grace.
+    
+    However the rabbit hole of changes is getting quite deep, and the
+    complexity increases. The blamed commit was supposed to be a bug fix in
+    the first place, and the bug it addressed is not so significant so as to
+    justify further rework in stable trees. So I'd rather just revert it.
+    I don't know enough about multi-queue Qdisc design to make a proper
+    judgement right now regarding what is/isn't idiomatic use of Qdisc
+    concepts in taprio. I will try to study the problem more and come with a
+    different solution in net-next.
+    
+    Fixes: 1461d212ab27 ("net/sched: taprio: make qdisc_leaf() see the per-netdev-queue pfifo child qdiscs")
+    Reported-by: Muhammad Husaini Zulkifli <muhammad.husaini.zulkifli@intel.com>
+    Reported-by: Vinicius Costa Gomes <vinicius.gomes@intel.com>
+    Signed-off-by: Vladimir Oltean <vladimir.oltean@nxp.com>
+    Reviewed-by: Vinicius Costa Gomes <vinicius.gomes@intel.com>
+    Link: https://lore.kernel.org/r/20221004220100.1650558-1-vladimir.oltean@nxp.com
+    Signed-off-by: Jakub Kicinski <kuba@kernel.org>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 99e3fd21f8fc975c95e8cf76fbf6a3d2656f8f71
+Author: Kees Cook <keescook@chromium.org>
+Date:   Wed Jan 4 13:09:12 2023 -0800
+
+    ext4: Fix function prototype mismatch for ext4_feat_ktype
+    
+    commit 118901ad1f25d2334255b3d50512fa20591531cd upstream.
+    
+    With clang's kernel control flow integrity (kCFI, CONFIG_CFI_CLANG),
+    indirect call targets are validated against the expected function
+    pointer prototype to make sure the call target is valid to help mitigate
+    ROP attacks. If they are not identical, there is a failure at run time,
+    which manifests as either a kernel panic or thread getting killed.
+    
+    ext4_feat_ktype was setting the "release" handler to "kfree", which
+    doesn't have a matching function prototype. Add a simple wrapper
+    with the correct prototype.
+    
+    This was found as a result of Clang's new -Wcast-function-type-strict
+    flag, which is more sensitive than the simpler -Wcast-function-type,
+    which only checks for type width mismatches.
+    
+    Note that this code is only reached when ext4 is a loadable module and
+    it is being unloaded:
+    
+     CFI failure at kobject_put+0xbb/0x1b0 (target: kfree+0x0/0x180; expected type: 0x7c4aa698)
+     ...
+     RIP: 0010:kobject_put+0xbb/0x1b0
+     ...
+     Call Trace:
+      <TASK>
+      ext4_exit_sysfs+0x14/0x60 [ext4]
+      cleanup_module+0x67/0xedb [ext4]
+    
+    Fixes: b99fee58a20a ("ext4: create ext4_feat kobject dynamically")
+    Cc: Theodore Ts'o <tytso@mit.edu>
+    Cc: Eric Biggers <ebiggers@kernel.org>
+    Cc: stable@vger.kernel.org
+    Build-tested-by: Gustavo A. R. Silva <gustavoars@kernel.org>
+    Reviewed-by: Gustavo A. R. Silva <gustavoars@kernel.org>
+    Reviewed-by: Nathan Chancellor <nathan@kernel.org>
+    Link: https://lore.kernel.org/r/20230103234616.never.915-kees@kernel.org
+    Signed-off-by: Kees Cook <keescook@chromium.org>
+    Reviewed-by: Eric Biggers <ebiggers@google.com>
+    Link: https://lore.kernel.org/r/20230104210908.gonna.388-kees@kernel.org
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 6f86bb6f853f57fb28bdfce23418bd8d18867b8b
+Author: Lukas Wunner <lukas@wunner.de>
+Date:   Fri Jan 27 15:01:00 2023 +0100
+
+    wifi: mwifiex: Add missing compatible string for SD8787
+    
+    commit 36dd7a4c6226133b0b7aa92b8e604e688d958d0c upstream.
+    
+    Commit e3fffc1f0b47 ("devicetree: document new marvell-8xxx and
+    pwrseq-sd8787 options") documented a compatible string for SD8787 in
+    the devicetree bindings, but neglected to add it to the mwifiex driver.
+    
+    Fixes: e3fffc1f0b47 ("devicetree: document new marvell-8xxx and pwrseq-sd8787 options")
+    Signed-off-by: Lukas Wunner <lukas@wunner.de>
+    Cc: stable@vger.kernel.org # v4.11+
+    Cc: Matt Ranostay <mranostay@ti.com>
+    Signed-off-by: Kalle Valo <kvalo@kernel.org>
+    Link: https://lore.kernel.org/r/320de5005ff3b8fd76be2d2b859fd021689c3681.1674827105.git.lukas@wunner.de
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 6c750ed0367f6bf1b09c0c353a701781ee05dd22
+Author: Dave Hansen <dave.hansen@linux.intel.com>
+Date:   Tue Feb 21 12:30:15 2023 -0800
+
+    uaccess: Add speculation barrier to copy_from_user()
+    
+    commit 74e19ef0ff8061ef55957c3abd71614ef0f42f47 upstream.
+    
+    The results of "access_ok()" can be mis-speculated.  The result is that
+    you can end speculatively:
+    
+            if (access_ok(from, size))
+                    // Right here
+    
+    even for bad from/size combinations.  On first glance, it would be ideal
+    to just add a speculation barrier to "access_ok()" so that its results
+    can never be mis-speculated.
+    
+    But there are lots of system calls just doing access_ok() via
+    "copy_to_user()" and friends (example: fstat() and friends).  Those are
+    generally not problematic because they do not _consume_ data from
+    userspace other than the pointer.  They are also very quick and common
+    system calls that should not be needlessly slowed down.
+    
+    "copy_from_user()" on the other hand uses a user-controller pointer and
+    is frequently followed up with code that might affect caches.  Take
+    something like this:
+    
+            if (!copy_from_user(&kernelvar, uptr, size))
+                    do_something_with(kernelvar);
+    
+    If userspace passes in an evil 'uptr' that *actually* points to a kernel
+    addresses, and then do_something_with() has cache (or other)
+    side-effects, it could allow userspace to infer kernel data values.
+    
+    Add a barrier to the common copy_from_user() code to prevent
+    mis-speculated values which happen after the copy.
+    
+    Also add a stub for architectures that do not define barrier_nospec().
+    This makes the macro usable in generic code.
+    
+    Since the barrier is now usable in generic code, the x86 #ifdef in the
+    BPF code can also go away.
+    
+    Reported-by: Jordy Zomer <jordyzomer@google.com>
+    Suggested-by: Linus Torvalds <torvalds@linuxfoundation.org>
+    Signed-off-by: Dave Hansen <dave.hansen@linux.intel.com>
+    Reviewed-by: Thomas Gleixner <tglx@linutronix.de>
+    Acked-by: Daniel Borkmann <daniel@iogearbox.net>   # BPF bits
+    Signed-off-by: Linus Torvalds <torvalds@linux-foundation.org>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 4d2e5de071fd5da69c3561ef360c8898143fc56a
+Author: Pavel Skripkin <paskripkin@gmail.com>
+Date:   Thu Dec 30 22:55:47 2021 +0300
+
+    mac80211: mesh: embedd mesh_paths and mpp_paths into ieee80211_if_mesh
+    
+    commit 8b5cb7e41d9d77ffca036b0239177de123394a55 upstream.
+    
+    Syzbot hit NULL deref in rhashtable_free_and_destroy(). The problem was
+    in mesh_paths and mpp_paths being NULL.
+    
+    mesh_pathtbl_init() could fail in case of memory allocation failure, but
+    nobody cared, since ieee80211_mesh_init_sdata() returns void. It led to
+    leaving 2 pointers as NULL. Syzbot has found null deref on exit path,
+    but it could happen anywhere else, because code assumes these pointers are
+    valid.
+    
+    Since all ieee80211_*_setup_sdata functions are void and do not fail,
+    let's embedd mesh_paths and mpp_paths into parent struct to avoid
+    adding error handling on higher levels and follow the pattern of others
+    setup_sdata functions
+    
+    Fixes: 60854fd94573 ("mac80211: mesh: convert path table to rhashtable")
+    Reported-and-tested-by: syzbot+860268315ba86ea6b96b@syzkaller.appspotmail.com
+    Signed-off-by: Pavel Skripkin <paskripkin@gmail.com>
+    Link: https://lore.kernel.org/r/20211230195547.23977-1-paskripkin@gmail.com
+    Signed-off-by: Johannes Berg <johannes.berg@intel.com>
+    [pchelkin@ispras.ru: adapt a comment spell fixing issue]
+    Signed-off-by: Fedor Pchelkin <pchelkin@ispras.ru>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 787ef0db014085df8691e5aeb58ab0bb081e5ff0
+Author: Zheng Wang <zyytlz.wz@163.com>
+Date:   Fri Dec 30 00:56:41 2022 +0800
+
+    drm/i915/gvt: fix double free bug in split_2MB_gtt_entry
+    
+    commit 4a61648af68f5ba4884f0e3b494ee1cabc4b6620 upstream.
+    
+    If intel_gvt_dma_map_guest_page failed, it will call
+    ppgtt_invalidate_spt, which will finally free the spt.
+    But the caller function ppgtt_populate_spt_by_guest_entry
+    does not notice that, it will free spt again in its error
+    path.
+    
+    Fix this by canceling the mapping of DMA address and freeing sub_spt.
+    Besides, leave the handle of spt destroy to caller function instead
+    of callee function when error occurs.
+    
+    Fixes: b901b252b6cf ("drm/i915/gvt: Add 2M huge gtt support")
+    Signed-off-by: Zheng Wang <zyytlz.wz@163.com>
+    Reviewed-by: Zhenyu Wang <zhenyuw@linux.intel.com>
+    Signed-off-by: Zhenyu Wang <zhenyuw@linux.intel.com>
+    Link: http://patchwork.freedesktop.org/patch/msgid/20221229165641.1192455-1-zyytlz.wz@163.com
+    Signed-off-by: Ovidiu Panait <ovidiu.panait@eng.windriver.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 100cf2af1b39cd77d4f5f2c852dda7ce28e1580a
+Author: Thomas Gleixner <tglx@linutronix.de>
+Date:   Thu Feb 9 23:25:49 2023 +0100
+
+    alarmtimer: Prevent starvation by small intervals and SIG_IGN
+    
+    commit d125d1349abeb46945dc5e98f7824bf688266f13 upstream.
+    
+    syzbot reported a RCU stall which is caused by setting up an alarmtimer
+    with a very small interval and ignoring the signal. The reproducer arms the
+    alarm timer with a relative expiry of 8ns and an interval of 9ns. Not a
+    problem per se, but that's an issue when the signal is ignored because then
+    the timer is immediately rearmed because there is no way to delay that
+    rearming to the signal delivery path.  See posix_timer_fn() and commit
+    58229a189942 ("posix-timers: Prevent softirq starvation by small intervals
+    and SIG_IGN") for details.
+    
+    The reproducer does not set SIG_IGN explicitely, but it sets up the timers
+    signal with SIGCONT. That has the same effect as explicitely setting
+    SIG_IGN for a signal as SIGCONT is ignored if there is no handler set and
+    the task is not ptraced.
+    
+    The log clearly shows that:
+    
+       [pid  5102] --- SIGCONT {si_signo=SIGCONT, si_code=SI_TIMER, si_timerid=0, si_overrun=316014, si_int=0, si_ptr=NULL} ---
+    
+    It works because the tasks are traced and therefore the signal is queued so
+    the tracer can see it, which delays the restart of the timer to the signal
+    delivery path. But then the tracer is killed:
+    
+       [pid  5087] kill(-5102, SIGKILL <unfinished ...>
+       ...
+       ./strace-static-x86_64: Process 5107 detached
+    
+    and after it's gone the stall can be observed:
+    
+       syzkaller login: [   79.439102][    C0] hrtimer: interrupt took 68471 ns
+       [  184.460538][    C1] rcu: INFO: rcu_preempt detected stalls on CPUs/tasks:
+       ...
+       [  184.658237][    C1] rcu: Stack dump where RCU GP kthread last ran:
+       [  184.664574][    C1] Sending NMI from CPU 1 to CPUs 0:
+       [  184.669821][    C0] NMI backtrace for cpu 0
+       [  184.669831][    C0] CPU: 0 PID: 5108 Comm: syz-executor192 Not tainted 6.2.0-rc6-next-20230203-syzkaller #0
+       ...
+       [  184.670036][    C0] Call Trace:
+       [  184.670041][    C0]  <IRQ>
+       [  184.670045][    C0]  alarmtimer_fired+0x327/0x670
+    
+    posix_timer_fn() prevents that by checking whether the interval for
+    timers which have the signal ignored is smaller than a jiffie and
+    artifically delay it by shifting the next expiry out by a jiffie. That's
+    accurate vs. the overrun accounting, but slightly inaccurate
+    vs. timer_gettimer(2).
+    
+    The comment in that function says what needs to be done and there was a fix
+    available for the regular userspace induced SIG_IGN mechanism, but that did
+    not work due to the implicit ignore for SIGCONT and similar signals. This
+    needs to be worked on, but for now the only available workaround is to do
+    exactly what posix_timer_fn() does:
+    
+    Increase the interval of self-rearming timers, which have their signal
+    ignored, to at least a jiffie.
+    
+    Interestingly this has been fixed before via commit ff86bf0c65f1
+    ("alarmtimer: Rate limit periodic intervals") already, but that fix got
+    lost in a later rework.
+    
+    Reported-by: syzbot+b9564ba6e8e00694511b@syzkaller.appspotmail.com
+    Fixes: f2c45807d399 ("alarmtimer: Switch over to generic set/get/rearm routine")
+    Signed-off-by: Thomas Gleixner <tglx@linutronix.de>
+    Acked-by: John Stultz <jstultz@google.com>
+    Cc: stable@vger.kernel.org
+    Link: https://lore.kernel.org/r/87k00q1no2.ffs@tglx
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit dab2066c5fff5dedcef5e885ca65b4492fd75368
+Author: Sean Anderson <sean.anderson@seco.com>
+Date:   Fri Dec 16 12:29:37 2022 -0500
+
+    powerpc: dts: t208x: Disable 10G on MAC1 and MAC2
+    
+    [ Upstream commit 8d8bee13ae9e316443c6666286360126a19c8d94 ]
+    
+    There aren't enough resources to run these ports at 10G speeds. Disable
+    10G for these ports, reverting to the previous speed.
+    
+    Fixes: 36926a7d70c2 ("powerpc: dts: t208x: Mark MAC1 and MAC2 as 10G")
+    Reported-by: Camelia Alexandra Groza <camelia.groza@nxp.com>
+    Signed-off-by: Sean Anderson <sean.anderson@seco.com>
+    Reviewed-by: Camelia Groza <camelia.groza@nxp.com>
+    Tested-by: Camelia Groza <camelia.groza@nxp.com>
+    Link: https://lore.kernel.org/r/20221216172937.2960054-1-sean.anderson@seco.com
+    Signed-off-by: Jakub Kicinski <kuba@kernel.org>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 113e0cde39bbabdc5f4bca5b55f139da95037a65
+Author: Marc Kleine-Budde <mkl@pengutronix.de>
+Date:   Mon Dec 19 11:39:27 2022 +0100
+
+    can: kvaser_usb: hydra: help gcc-13 to figure out cmd_len
+    
+    [ Upstream commit f006229135b7debf4037adb1eb93e358559593db ]
+    
+    Debian's gcc-13 [1] throws the following error in
+    kvaser_usb_hydra_cmd_size():
+    
+    [1] gcc version 13.0.0 20221214 (experimental) [master r13-4693-g512098a3316] (Debian 13-20221214-1)
+    
+    | drivers/net/can/usb/kvaser_usb/kvaser_usb_hydra.c:502:65: error:
+    | array subscript ‘struct kvaser_cmd_ext[0]’ is partly outside array
+    | bounds of ‘unsigned char[32]’ [-Werror=array-bounds=]
+    |   502 |                 ret = le16_to_cpu(((struct kvaser_cmd_ext *)cmd)->len);
+    
+    kvaser_usb_hydra_cmd_size() returns the size of given command. It
+    depends on the command number (cmd->header.cmd_no). For extended
+    commands (cmd->header.cmd_no == CMD_EXTENDED) the above shown code is
+    executed.
+    
+    Help gcc to recognize that this code path is not taken in all cases,
+    by calling kvaser_usb_hydra_cmd_size() directly after assigning the
+    command number.
+    
+    Fixes: aec5fb2268b7 ("can: kvaser_usb: Add support for Kvaser USB hydra family")
+    Cc: Jimmy Assarsson <extja@kvaser.com>
+    Cc: Anssi Hannula <anssi.hannula@bitwise.fi>
+    Link: https://lore.kernel.org/all/20221219110104.1073881-1-mkl@pengutronix.de
+    Tested-by: Jimmy Assarsson <extja@kvaser.com>
+    Signed-off-by: Marc Kleine-Budde <mkl@pengutronix.de>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit f93a1a5bdcdd122aae0a3eab7a52c15b71fb725b
+Author: Jim Mattson <jmattson@google.com>
+Date:   Wed Oct 19 14:36:20 2022 -0700
+
+    KVM: VMX: Execute IBPB on emulated VM-exit when guest has IBRS
+    
+    [ Upstream commit 2e7eab81425ad6c875f2ed47c0ce01e78afc38a5 ]
+    
+    According to Intel's document on Indirect Branch Restricted
+    Speculation, "Enabling IBRS does not prevent software from controlling
+    the predicted targets of indirect branches of unrelated software
+    executed later at the same predictor mode (for example, between two
+    different user applications, or two different virtual machines). Such
+    isolation can be ensured through use of the Indirect Branch Predictor
+    Barrier (IBPB) command." This applies to both basic and enhanced IBRS.
+    
+    Since L1 and L2 VMs share hardware predictor modes (guest-user and
+    guest-kernel), hardware IBRS is not sufficient to virtualize
+    IBRS. (The way that basic IBRS is implemented on pre-eIBRS parts,
+    hardware IBRS is actually sufficient in practice, even though it isn't
+    sufficient architecturally.)
+    
+    For virtual CPUs that support IBRS, add an indirect branch prediction
+    barrier on emulated VM-exit, to ensure that the predicted targets of
+    indirect branches executed in L1 cannot be controlled by software that
+    was executed in L2.
+    
+    Since we typically don't intercept guest writes to IA32_SPEC_CTRL,
+    perform the IBPB at emulated VM-exit regardless of the current
+    IA32_SPEC_CTRL.IBRS value, even though the IBPB could technically be
+    deferred until L1 sets IA32_SPEC_CTRL.IBRS, if IA32_SPEC_CTRL.IBRS is
+    clear at emulated VM-exit.
+    
+    This is CVE-2022-2196.
+    
+    Fixes: 5c911beff20a ("KVM: nVMX: Skip IBPB when switching between vmcs01 and vmcs02")
+    Cc: Sean Christopherson <seanjc@google.com>
+    Signed-off-by: Jim Mattson <jmattson@google.com>
+    Reviewed-by: Sean Christopherson <seanjc@google.com>
+    Link: https://lore.kernel.org/r/20221019213620.1953281-3-jmattson@google.com
+    Signed-off-by: Sean Christopherson <seanjc@google.com>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit db209f39f1d1ff3f4c3e7bd27b6d1d3849bade56
+Author: Sean Christopherson <seanjc@google.com>
+Date:   Fri Sep 30 23:36:32 2022 +0000
+
+    KVM: x86: Fail emulation during EMULTYPE_SKIP on any exception
+    
+    [ Upstream commit 17122c06b86c9f77f45b86b8e62c3ed440847a59 ]
+    
+    Treat any exception during instruction decode for EMULTYPE_SKIP as a
+    "full" emulation failure, i.e. signal failure instead of queuing the
+    exception.  When decoding purely to skip an instruction, KVM and/or the
+    CPU has already done some amount of emulation that cannot be unwound,
+    e.g. on an EPT misconfig VM-Exit KVM has already processeed the emulated
+    MMIO.  KVM already does this if a #UD is encountered, but not for other
+    exceptions, e.g. if a #PF is encountered during fetch.
+    
+    In SVM's soft-injection use case, queueing the exception is particularly
+    problematic as queueing exceptions while injecting events can put KVM
+    into an infinite loop due to bailing from VM-Enter to service the newly
+    pending exception.  E.g. multiple warnings to detect such behavior fire:
+    
+      ------------[ cut here ]------------
+      WARNING: CPU: 3 PID: 1017 at arch/x86/kvm/x86.c:9873 kvm_arch_vcpu_ioctl_run+0x1de5/0x20a0 [kvm]
+      Modules linked in: kvm_amd ccp kvm irqbypass
+      CPU: 3 PID: 1017 Comm: svm_nested_soft Not tainted 6.0.0-rc1+ #220
+      Hardware name: QEMU Standard PC (Q35 + ICH9, 2009), BIOS 0.0.0 02/06/2015
+      RIP: 0010:kvm_arch_vcpu_ioctl_run+0x1de5/0x20a0 [kvm]
+      Call Trace:
+       kvm_vcpu_ioctl+0x223/0x6d0 [kvm]
+       __x64_sys_ioctl+0x85/0xc0
+       do_syscall_64+0x2b/0x50
+       entry_SYSCALL_64_after_hwframe+0x46/0xb0
+      ---[ end trace 0000000000000000 ]---
+      ------------[ cut here ]------------
+      WARNING: CPU: 3 PID: 1017 at arch/x86/kvm/x86.c:9987 kvm_arch_vcpu_ioctl_run+0x12a3/0x20a0 [kvm]
+      Modules linked in: kvm_amd ccp kvm irqbypass
+      CPU: 3 PID: 1017 Comm: svm_nested_soft Tainted: G        W          6.0.0-rc1+ #220
+      Hardware name: QEMU Standard PC (Q35 + ICH9, 2009), BIOS 0.0.0 02/06/2015
+      RIP: 0010:kvm_arch_vcpu_ioctl_run+0x12a3/0x20a0 [kvm]
+      Call Trace:
+       kvm_vcpu_ioctl+0x223/0x6d0 [kvm]
+       __x64_sys_ioctl+0x85/0xc0
+       do_syscall_64+0x2b/0x50
+       entry_SYSCALL_64_after_hwframe+0x46/0xb0
+      ---[ end trace 0000000000000000 ]---
+    
+    Fixes: 6ea6e84309ca ("KVM: x86: inject exceptions produced by x86_decode_insn")
+    Signed-off-by: Sean Christopherson <seanjc@google.com>
+    Link: https://lore.kernel.org/r/20220930233632.1725475-1-seanjc@google.com
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit dc399695dfe9241d61d33e53bd578ccb077d1a6f
+Author: Jason A. Donenfeld <Jason@zx2c4.com>
+Date:   Wed Jun 1 22:45:33 2022 +0200
+
+    random: always mix cycle counter in add_latent_entropy()
+    
+    [ Upstream commit d7bf7f3b813e3755226bcb5114ad2ac477514ebf ]
+    
+    add_latent_entropy() is called every time a process forks, in
+    kernel_clone(). This in turn calls add_device_randomness() using the
+    latent entropy global state. add_device_randomness() does two things:
+    
+       2) Mixes into the input pool the latent entropy argument passed; and
+       1) Mixes in a cycle counter, a sort of measurement of when the event
+          took place, the high precision bits of which are presumably
+          difficult to predict.
+    
+    (2) is impossible without CONFIG_GCC_PLUGIN_LATENT_ENTROPY=y. But (1) is
+    always possible. However, currently CONFIG_GCC_PLUGIN_LATENT_ENTROPY=n
+    disables both (1) and (2), instead of just (2).
+    
+    This commit causes the CONFIG_GCC_PLUGIN_LATENT_ENTROPY=n case to still
+    do (1) by passing NULL (len 0) to add_device_randomness() when add_latent_
+    entropy() is called.
+    
+    Cc: Dominik Brodowski <linux@dominikbrodowski.net>
+    Cc: PaX Team <pageexec@freemail.hu>
+    Cc: Emese Revfy <re.emese@gmail.com>
+    Fixes: 38addce8b600 ("gcc-plugins: Add latent_entropy plugin")
+    Signed-off-by: Jason A. Donenfeld <Jason@zx2c4.com>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit eff0e02f7d3f640e94b7bbbf80f6465e6fb10654
+Author: Sean Anderson <sean.anderson@seco.com>
+Date:   Mon Oct 17 16:22:39 2022 -0400
+
+    powerpc: dts: t208x: Mark MAC1 and MAC2 as 10G
+    
+    [ Upstream commit 36926a7d70c2d462fca1ed85bfee000d17fd8662 ]
+    
+    On the T208X SoCs, MAC1 and MAC2 support XGMII. Add some new MAC dtsi
+    fragments, and mark the QMAN ports as 10G.
+    
+    Fixes: da414bb923d9 ("powerpc/mpc85xx: Add FSL QorIQ DPAA FMan support to the SoC device tree(s)")
+    Signed-off-by: Sean Anderson <sean.anderson@seco.com>
+    Signed-off-by: David S. Miller <davem@davemloft.net>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit ead0689bd6fd65ef22372b248ab19eaeeac3c2c2
+Author: Bitterblue Smith <rtl8821cerfe2@gmail.com>
+Date:   Wed Sep 28 23:36:51 2022 +0300
+
+    wifi: rtl8xxxu: gen2: Turn on the rate control
+    
+    [ Upstream commit 791082ec0ab843e0be07c8ce3678e4c2afd2e33d ]
+    
+    Re-enable the function rtl8xxxu_gen2_report_connect.
+    
+    It informs the firmware when connecting to a network. This makes the
+    firmware enable the rate control, which makes the upload faster.
+    
+    It also informs the firmware when disconnecting from a network. In the
+    past this made reconnecting impossible because it was sending the
+    auth on queue 0x7 (TXDESC_QUEUE_VO) instead of queue 0x12
+    (TXDESC_QUEUE_MGNT):
+    
+    wlp0s20f0u3: send auth to 90:55:de:__:__:__ (try 1/3)
+    wlp0s20f0u3: send auth to 90:55:de:__:__:__ (try 2/3)
+    wlp0s20f0u3: send auth to 90:55:de:__:__:__ (try 3/3)
+    wlp0s20f0u3: authentication with 90:55:de:__:__:__ timed out
+    
+    Probably the firmware disables the unnecessary TX queues when it
+    knows it's disconnected.
+    
+    However, this was fixed in commit edd5747aa12e ("wifi: rtl8xxxu: Fix
+    skb misuse in TX queue selection").
+    
+    Fixes: c59f13bbead4 ("rtl8xxxu: Work around issue with 8192eu and 8723bu devices not reconnecting")
+    Signed-off-by: Bitterblue Smith <rtl8821cerfe2@gmail.com>
+    Signed-off-by: Kalle Valo <kvalo@kernel.org>
+    Link: https://lore.kernel.org/r/43200afc-0c65-ee72-48f8-231edd1df493@gmail.com
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 0a77a966aa4a760792387775f0167b1b9998557f
+Author: Lucas Stach <l.stach@pengutronix.de>
+Date:   Fri Sep 16 12:40:31 2022 +0200
+
+    drm/etnaviv: don't truncate physical page address
+    
+    [ Upstream commit d37c120b73128690434cc093952439eef9d56af1 ]
+    
+    While the interface for the MMU mapping takes phys_addr_t to hold a
+    full 64bit address when necessary and MMUv2 is able to map physical
+    addresses with up to 40bit, etnaviv_iommu_map() truncates the address
+    to 32bits. Fix this by using the correct type.
+    
+    Fixes: 931e97f3afd8 ("drm/etnaviv: mmuv2: support 40 bit phys address")
+    Signed-off-by: Lucas Stach <l.stach@pengutronix.de>
+    Reviewed-by: Philipp Zabel <p.zabel@pengutronix.de>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit fa2845b21671a4ff8bd7a38d6c95247b21d9aa94
+Author: Marek Szyprowski <m.szyprowski@samsung.com>
+Date:   Tue Apr 28 13:08:23 2020 +0200
+
+    drm: etnaviv: fix common struct sg_table related issues
+    
+    [ Upstream commit 182354a526a0540c9197e03d9fce8a949ffd36ca ]
+    
+    The Documentation/DMA-API-HOWTO.txt states that the dma_map_sg() function
+    returns the number of the created entries in the DMA address space.
+    However the subsequent calls to the dma_sync_sg_for_{device,cpu}() and
+    dma_unmap_sg must be called with the original number of the entries
+    passed to the dma_map_sg().
+    
+    struct sg_table is a common structure used for describing a non-contiguous
+    memory buffer, used commonly in the DRM and graphics subsystems. It
+    consists of a scatterlist with memory pages and DMA addresses (sgl entry),
+    as well as the number of scatterlist entries: CPU pages (orig_nents entry)
+    and DMA mapped pages (nents entry).
+    
+    It turned out that it was a common mistake to misuse nents and orig_nents
+    entries, calling DMA-mapping functions with a wrong number of entries or
+    ignoring the number of mapped entries returned by the dma_map_sg()
+    function.
+    
+    To avoid such issues, lets use a common dma-mapping wrappers operating
+    directly on the struct sg_table objects and use scatterlist page
+    iterators where possible. This, almost always, hides references to the
+    nents and orig_nents entries, making the code robust, easier to follow
+    and copy/paste safe.
+    
+    Signed-off-by: Marek Szyprowski <m.szyprowski@samsung.com>
+    Reviewed-by: Robin Murphy <robin.murphy@arm.com>
+    Acked-by: Lucas Stach <l.stach@pengutronix.de>
+    Stable-dep-of: d37c120b7312 ("drm/etnaviv: don't truncate physical page address")
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 4626550b09ea66d95ceb2a9273d60559d6cb67df
+Author: Marek Szyprowski <m.szyprowski@samsung.com>
+Date:   Wed May 13 15:32:09 2020 +0200
+
+    scatterlist: add generic wrappers for iterating over sgtable objects
+    
+    [ Upstream commit 709d6d73c756107fb8a292a9f957d630097425fa ]
+    
+    struct sg_table is a common structure used for describing a memory
+    buffer. It consists of a scatterlist with memory pages and DMA addresses
+    (sgl entry), as well as the number of scatterlist entries: CPU pages
+    (orig_nents entry) and DMA mapped pages (nents entry).
+    
+    It turned out that it was a common mistake to misuse nents and orig_nents
+    entries, calling the scatterlist iterating functions with a wrong number
+    of the entries.
+    
+    To avoid such issues, lets introduce a common wrappers operating directly
+    on the struct sg_table objects, which take care of the proper use of
+    the nents and orig_nents entries.
+    
+    While touching this, lets clarify some ambiguities in the comments for
+    the existing for_each helpers.
+    
+    Signed-off-by: Marek Szyprowski <m.szyprowski@samsung.com>
+    Reviewed-by: Robin Murphy <robin.murphy@arm.com>
+    Signed-off-by: Christoph Hellwig <hch@lst.de>
+    Stable-dep-of: d37c120b7312 ("drm/etnaviv: don't truncate physical page address")
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit fe3e217272a86bfc7958315229b35cc6ee41b155
+Author: Marek Szyprowski <m.szyprowski@samsung.com>
+Date:   Wed May 13 15:32:08 2020 +0200
+
+    dma-mapping: add generic helpers for mapping sgtable objects
+    
+    [ Upstream commit d9d200bcebc1f6e56f0178cbb8db9953e8cc9a11 ]
+    
+    struct sg_table is a common structure used for describing a memory
+    buffer. It consists of a scatterlist with memory pages and DMA addresses
+    (sgl entry), as well as the number of scatterlist entries: CPU pages
+    (orig_nents entry) and DMA mapped pages (nents entry).
+    
+    It turned out that it was a common mistake to misuse nents and orig_nents
+    entries, calling DMA-mapping functions with a wrong number of entries or
+    ignoring the number of mapped entries returned by the dma_map_sg
+    function.
+    
+    To avoid such issues, let's introduce a common wrappers operating
+    directly on the struct sg_table objects, which take care of the proper
+    use of the nents and orig_nents entries.
+    
+    Signed-off-by: Marek Szyprowski <m.szyprowski@samsung.com>
+    Reviewed-by: Robin Murphy <robin.murphy@arm.com>
+    Signed-off-by: Christoph Hellwig <hch@lst.de>
+    Stable-dep-of: d37c120b7312 ("drm/etnaviv: don't truncate physical page address")
+    Signed-off-by: Sasha Levin <sashal@kernel.org>

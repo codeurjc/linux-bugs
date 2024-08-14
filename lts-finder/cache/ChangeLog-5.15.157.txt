@@ -1,0 +1,2765 @@
+commit b925f60c6ee7ec871d2d48575d0fde3872129c20
+Author: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+Date:   Sat Apr 27 17:05:29 2024 +0200
+
+    Linux 5.15.157
+    
+    Link: https://lore.kernel.org/r/20240423213844.122920086@linuxfoundation.org
+    Tested-by: SeongJae Park <sj@kernel.org>
+    Tested-by: Florian Fainelli <florian.fainelli@broadcom.com>
+    Tested-by: Pavel Machek (CIP) <pavel@denx.de>
+    Tested-by: Ron Economos <re@w6rz.net>
+    Tested-by: Harshit Mogalapalli <harshit.m.mogalapalli@oracle.com>
+    Tested-by: Jon Hunter <jonathanh@nvidia.com>
+    Tested-by: kernelci.org bot <bot@kernelci.org>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit d564809f27eae6fac3d3a5c5415b795c5b5887b5
+Author: Arınç ÜNAL <arinc.unal@arinc9.com>
+Date:   Mon Apr 8 10:08:53 2024 +0300
+
+    net: dsa: mt7530: fix enabling EEE on MT7531 switch on all boards
+    
+    commit 06dfcd4098cfdc4d4577d94793a4f9125386da8b upstream.
+    
+    The commit 40b5d2f15c09 ("net: dsa: mt7530: Add support for EEE features")
+    brought EEE support but did not enable EEE on MT7531 switch MACs. EEE is
+    enabled on MT7531 switch MACs by pulling the LAN2LED0 pin low on the board
+    (bootstrapping), unsetting the EEE_DIS bit on the trap register, or setting
+    the internal EEE switch bit on the CORE_PLL_GROUP4 register. Thanks to
+    SkyLake Huang (黃啟澤) from MediaTek for providing information on the
+    internal EEE switch bit.
+    
+    There are existing boards that were not designed to pull the pin low.
+    Because of that, the EEE status currently depends on the board design.
+    
+    The EEE_DIS bit on the trap pertains to the LAN2LED0 pin which is usually
+    used to control an LED. Once the bit is unset, the pin will be low. That
+    will make the active low LED turn on. The pin is controlled by the switch
+    PHY. It seems that the PHY controls the pin in the way that it inverts the
+    pin state. That means depending on the wiring of the LED connected to
+    LAN2LED0 on the board, the LED may be on without an active link.
+    
+    To not cause this unwanted behaviour whilst enabling EEE on all boards, set
+    the internal EEE switch bit on the CORE_PLL_GROUP4 register.
+    
+    My testing on MT7531 shows a certain amount of traffic loss when EEE is
+    enabled. That said, I haven't come across a board that enables EEE. So
+    enable EEE on the switch MACs but disable EEE advertisement on the switch
+    PHYs. This way, we don't change the behaviour of the majority of the boards
+    that have this switch. The mediatek-ge PHY driver already disables EEE
+    advertisement on the switch PHYs but my testing shows that it is somehow
+    enabled afterwards. Disabling EEE advertisement before the PHY driver
+    initialises keeps it off.
+    
+    With this change, EEE can now be enabled using ethtool.
+    
+    Fixes: 40b5d2f15c09 ("net: dsa: mt7530: Add support for EEE features")
+    Reviewed-by: Florian Fainelli <florian.fainelli@broadcom.com>
+    Signed-off-by: Arınç ÜNAL <arinc.unal@arinc9.com>
+    Tested-by: Daniel Golle <daniel@makrotopia.org>
+    Reviewed-by: Daniel Golle <daniel@makrotopia.org>
+    Link: https://lore.kernel.org/r/20240408-for-net-mt7530-fix-eee-for-mt7531-mt7988-v3-1-84fdef1f008b@arinc9.com
+    Signed-off-by: Jakub Kicinski <kuba@kernel.org>
+    Signed-off-by: Arınç ÜNAL <arinc.unal@arinc9.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit eb6535c6f7c222bebc76b4205f6c5135fbb59c63
+Author: Arınç ÜNAL <arinc.unal@arinc9.com>
+Date:   Wed Mar 20 23:45:30 2024 +0300
+
+    net: dsa: mt7530: fix improper frames on all 25MHz and 40MHz XTAL MT7530
+    
+    commit 5f563c31ff0c40ce395d0bae7daa94c7950dac97 upstream.
+    
+    The MT7530 switch after reset initialises with a core clock frequency that
+    works with a 25MHz XTAL connected to it. For 40MHz XTAL, the core clock
+    frequency must be set to 500MHz.
+    
+    The mt7530_pll_setup() function is responsible of setting the core clock
+    frequency. Currently, it runs on MT7530 with 25MHz and 40MHz XTAL. This
+    causes MT7530 switch with 25MHz XTAL to egress and ingress frames
+    improperly.
+    
+    Introduce a check to run it only on MT7530 with 40MHz XTAL.
+    
+    The core clock frequency is set by writing to a switch PHY's register.
+    Access to the PHY's register is done via the MDIO bus the switch is also
+    on. Therefore, it works only when the switch makes switch PHYs listen on
+    the MDIO bus the switch is on. This is controlled either by the state of
+    the ESW_P1_LED_1 pin after reset deassertion or modifying bit 5 of the
+    modifiable trap register.
+    
+    When ESW_P1_LED_1 is pulled high, PHY indirect access is used. That means
+    accessing PHY registers via the PHY indirect access control register of the
+    switch.
+    
+    When ESW_P1_LED_1 is pulled low, PHY direct access is used. That means
+    accessing PHY registers via the MDIO bus the switch is on.
+    
+    For MT7530 switch with 40MHz XTAL on a board with ESW_P1_LED_1 pulled high,
+    the core clock frequency won't be set to 500MHz, causing the switch to
+    egress and ingress frames improperly.
+    
+    Run mt7530_pll_setup() after PHY direct access is set on the modifiable
+    trap register.
+    
+    With these two changes, all MT7530 switches with 25MHz and 40MHz, and
+    P1_LED_1 pulled high or low, will egress and ingress frames properly.
+    
+    Link: https://github.com/BPI-SINOVOIP/BPI-R2-bsp/blob/4a5dd143f2172ec97a2872fa29c7c4cd520f45b5/linux-mt/drivers/net/ethernet/mediatek/gsw_mt7623.c#L1039
+    Fixes: b8f126a8d543 ("net-next: dsa: add dsa support for Mediatek MT7530 switch")
+    Signed-off-by: Arınç ÜNAL <arinc.unal@arinc9.com>
+    Link: https://lore.kernel.org/r/20240320-for-net-mt7530-fix-25mhz-xtal-with-direct-phy-access-v1-1-d92f605f1160@arinc9.com
+    Signed-off-by: Paolo Abeni <pabeni@redhat.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 63ba7a80d6e2932bc98f21cfd8cb8c098e70145e
+Author: Vladimir Oltean <olteanv@gmail.com>
+Date:   Sat Jun 17 09:26:48 2023 +0300
+
+    net: dsa: introduce preferred_default_local_cpu_port and use on MT7530
+    
+    commit b79d7c14f48083abb3fb061370c0c64a569edf4c upstream.
+    
+    Since the introduction of the OF bindings, DSA has always had a policy that
+    in case multiple CPU ports are present in the device tree, the numerically
+    smallest one is always chosen.
+    
+    The MT7530 switch family, except the switch on the MT7988 SoC, has 2 CPU
+    ports, 5 and 6, where port 6 is preferable on the MT7531BE switch because
+    it has higher bandwidth.
+    
+    The MT7530 driver developers had 3 options:
+    - to modify DSA when the MT7531 switch support was introduced, such as to
+      prefer the better port
+    - to declare both CPU ports in device trees as CPU ports, and live with the
+      sub-optimal performance resulting from not preferring the better port
+    - to declare just port 6 in the device tree as a CPU port
+    
+    Of course they chose the path of least resistance (3rd option), kicking the
+    can down the road. The hardware description in the device tree is supposed
+    to be stable - developers are not supposed to adopt the strategy of
+    piecemeal hardware description, where the device tree is updated in
+    lockstep with the features that the kernel currently supports.
+    
+    Now, as a result of the fact that they did that, any attempts to modify the
+    device tree and describe both CPU ports as CPU ports would make DSA change
+    its default selection from port 6 to 5, effectively resulting in a
+    performance degradation visible to users with the MT7531BE switch as can be
+    seen below.
+    
+    Without preferring port 6:
+    
+    [ ID][Role] Interval           Transfer     Bitrate         Retr
+    [  5][TX-C]   0.00-20.00  sec   374 MBytes   157 Mbits/sec  734    sender
+    [  5][TX-C]   0.00-20.00  sec   373 MBytes   156 Mbits/sec    receiver
+    [  7][RX-C]   0.00-20.00  sec  1.81 GBytes   778 Mbits/sec    0    sender
+    [  7][RX-C]   0.00-20.00  sec  1.81 GBytes   777 Mbits/sec    receiver
+    
+    With preferring port 6:
+    
+    [ ID][Role] Interval           Transfer     Bitrate         Retr
+    [  5][TX-C]   0.00-20.00  sec  1.99 GBytes   856 Mbits/sec  273    sender
+    [  5][TX-C]   0.00-20.00  sec  1.99 GBytes   855 Mbits/sec    receiver
+    [  7][RX-C]   0.00-20.00  sec  1.72 GBytes   737 Mbits/sec   15    sender
+    [  7][RX-C]   0.00-20.00  sec  1.71 GBytes   736 Mbits/sec    receiver
+    
+    Using one port for WAN and the other ports for LAN is a very popular use
+    case which is what this test emulates.
+    
+    As such, this change proposes that we retroactively modify stable kernels
+    (which don't support the modification of the CPU port assignments, so as to
+    let user space fix the problem and restore the throughput) to keep the
+    mt7530 driver preferring port 6 even with device trees where the hardware
+    is more fully described.
+    
+    Fixes: c288575f7810 ("net: dsa: mt7530: Add the support of MT7531 switch")
+    Signed-off-by: Vladimir Oltean <olteanv@gmail.com>
+    Signed-off-by: Arınç ÜNAL <arinc.unal@arinc9.com>
+    Reviewed-by: Russell King (Oracle) <rmk+kernel@armlinux.org.uk>
+    Reviewed-by: Florian Fainelli <florian.fainelli@broadcom.com>
+    Signed-off-by: David S. Miller <davem@davemloft.net>
+    Signed-off-by: Arınç ÜNAL <arinc.unal@arinc9.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 84b7f50e631aa6bdda1ba618b0e4aad4d75256d8
+Author: Arınç ÜNAL <arinc.unal@arinc9.com>
+Date:   Sat Jun 17 09:26:44 2023 +0300
+
+    net: dsa: mt7530: set all CPU ports in MT7531_CPU_PMAP
+    
+    commit ff221029a51fd54cacac66e193e0c75e4de940e7 upstream.
+    
+    MT7531_CPU_PMAP represents the destination port mask for trapped-to-CPU
+    frames (further restricted by PCR_MATRIX).
+    
+    Currently the driver sets the first CPU port as the single port in this bit
+    mask, which works fine regardless of whether the device tree defines port
+    5, 6 or 5+6 as CPU ports. This is because the logic coincides with DSA's
+    logic of picking the first CPU port as the CPU port that all user ports are
+    affine to, by default.
+    
+    An upcoming change would like to influence DSA's selection of the default
+    CPU port to no longer be the first one, and in that case, this logic needs
+    adaptation.
+    
+    Since there is no observed leakage or duplication of frames if all CPU
+    ports are defined in this bit mask, simply include them all.
+    
+    Suggested-by: Russell King (Oracle) <linux@armlinux.org.uk>
+    Suggested-by: Vladimir Oltean <olteanv@gmail.com>
+    Signed-off-by: Arınç ÜNAL <arinc.unal@arinc9.com>
+    Reviewed-by: Vladimir Oltean <olteanv@gmail.com>
+    Reviewed-by: Russell King (Oracle) <rmk+kernel@armlinux.org.uk>
+    Reviewed-by: Florian Fainelli <florian.fainelli@broadcom.com>
+    Signed-off-by: David S. Miller <davem@davemloft.net>
+    Signed-off-by: Arınç ÜNAL <arinc.unal@arinc9.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit bdbe483da21f852c93b22557b146bc4d989260f0
+Author: Jeongjun Park <aha310510@gmail.com>
+Date:   Tue Apr 16 03:20:48 2024 +0900
+
+    nilfs2: fix OOB in nilfs_set_de_type
+    
+    commit c4a7dc9523b59b3e73fd522c73e95e072f876b16 upstream.
+    
+    The size of the nilfs_type_by_mode array in the fs/nilfs2/dir.c file is
+    defined as "S_IFMT >> S_SHIFT", but the nilfs_set_de_type() function,
+    which uses this array, specifies the index to read from the array in the
+    same way as "(mode & S_IFMT) >> S_SHIFT".
+    
+    static void nilfs_set_de_type(struct nilfs_dir_entry *de, struct inode
+     *inode)
+    {
+            umode_t mode = inode->i_mode;
+    
+            de->file_type = nilfs_type_by_mode[(mode & S_IFMT)>>S_SHIFT]; // oob
+    }
+    
+    However, when the index is determined this way, an out-of-bounds (OOB)
+    error occurs by referring to an index that is 1 larger than the array size
+    when the condition "mode & S_IFMT == S_IFMT" is satisfied.  Therefore, a
+    patch to resize the nilfs_type_by_mode array should be applied to prevent
+    OOB errors.
+    
+    Link: https://lkml.kernel.org/r/20240415182048.7144-1-konishi.ryusuke@gmail.com
+    Reported-by: syzbot+2e22057de05b9f3b30d8@syzkaller.appspotmail.com
+    Closes: https://syzkaller.appspot.com/bug?extid=2e22057de05b9f3b30d8
+    Fixes: 2ba466d74ed7 ("nilfs2: directory entry operations")
+    Signed-off-by: Jeongjun Park <aha310510@gmail.com>
+    Signed-off-by: Ryusuke Konishi <konishi.ryusuke@gmail.com>
+    Tested-by: Ryusuke Konishi <konishi.ryusuke@gmail.com>
+    Cc: <stable@vger.kernel.org>
+    Signed-off-by: Andrew Morton <akpm@linux-foundation.org>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 3ab056814cd8ab84744c9a19ef51360b2271c572
+Author: Dave Airlie <airlied@redhat.com>
+Date:   Thu Apr 11 11:15:09 2024 +1000
+
+    nouveau: fix instmem race condition around ptr stores
+    
+    commit fff1386cc889d8fb4089d285f883f8cba62d82ce upstream.
+    
+    Running a lot of VK CTS in parallel against nouveau, once every
+    few hours you might see something like this crash.
+    
+    BUG: kernel NULL pointer dereference, address: 0000000000000008
+    PGD 8000000114e6e067 P4D 8000000114e6e067 PUD 109046067 PMD 0
+    Oops: 0000 [#1] PREEMPT SMP PTI
+    CPU: 7 PID: 53891 Comm: deqp-vk Not tainted 6.8.0-rc6+ #27
+    Hardware name: Gigabyte Technology Co., Ltd. Z390 I AORUS PRO WIFI/Z390 I AORUS PRO WIFI-CF, BIOS F8 11/05/2021
+    RIP: 0010:gp100_vmm_pgt_mem+0xe3/0x180 [nouveau]
+    Code: c7 48 01 c8 49 89 45 58 85 d2 0f 84 95 00 00 00 41 0f b7 46 12 49 8b 7e 08 89 da 42 8d 2c f8 48 8b 47 08 41 83 c7 01 48 89 ee <48> 8b 40 08 ff d0 0f 1f 00 49 8b 7e 08 48 89 d9 48 8d 75 04 48 c1
+    RSP: 0000:ffffac20c5857838 EFLAGS: 00010202
+    RAX: 0000000000000000 RBX: 00000000004d8001 RCX: 0000000000000001
+    RDX: 00000000004d8001 RSI: 00000000000006d8 RDI: ffffa07afe332180
+    RBP: 00000000000006d8 R08: ffffac20c5857ad0 R09: 0000000000ffff10
+    R10: 0000000000000001 R11: ffffa07af27e2de0 R12: 000000000000001c
+    R13: ffffac20c5857ad0 R14: ffffa07a96fe9040 R15: 000000000000001c
+    FS:  00007fe395eed7c0(0000) GS:ffffa07e2c980000(0000) knlGS:0000000000000000
+    CS:  0010 DS: 0000 ES: 0000 CR0: 0000000080050033
+    CR2: 0000000000000008 CR3: 000000011febe001 CR4: 00000000003706f0
+    DR0: 0000000000000000 DR1: 0000000000000000 DR2: 0000000000000000
+    DR3: 0000000000000000 DR6: 00000000fffe0ff0 DR7: 0000000000000400
+    Call Trace:
+    
+    ...
+    
+     ? gp100_vmm_pgt_mem+0xe3/0x180 [nouveau]
+     ? gp100_vmm_pgt_mem+0x37/0x180 [nouveau]
+     nvkm_vmm_iter+0x351/0xa20 [nouveau]
+     ? __pfx_nvkm_vmm_ref_ptes+0x10/0x10 [nouveau]
+     ? __pfx_gp100_vmm_pgt_mem+0x10/0x10 [nouveau]
+     ? __pfx_gp100_vmm_pgt_mem+0x10/0x10 [nouveau]
+     ? __lock_acquire+0x3ed/0x2170
+     ? __pfx_gp100_vmm_pgt_mem+0x10/0x10 [nouveau]
+     nvkm_vmm_ptes_get_map+0xc2/0x100 [nouveau]
+     ? __pfx_nvkm_vmm_ref_ptes+0x10/0x10 [nouveau]
+     ? __pfx_gp100_vmm_pgt_mem+0x10/0x10 [nouveau]
+     nvkm_vmm_map_locked+0x224/0x3a0 [nouveau]
+    
+    Adding any sort of useful debug usually makes it go away, so I hand
+    wrote the function in a line, and debugged the asm.
+    
+    Every so often pt->memory->ptrs is NULL. This ptrs ptr is set in
+    the nv50_instobj_acquire called from nvkm_kmap.
+    
+    If Thread A and Thread B both get to nv50_instobj_acquire around
+    the same time, and Thread A hits the refcount_set line, and in
+    lockstep thread B succeeds at refcount_inc_not_zero, there is a
+    chance the ptrs value won't have been stored since refcount_set
+    is unordered. Force a memory barrier here, I picked smp_mb, since
+    we want it on all CPUs and it's write followed by a read.
+    
+    v2: use paired smp_rmb/smp_wmb.
+    
+    Cc: <stable@vger.kernel.org>
+    Fixes: be55287aa5ba ("drm/nouveau/imem/nv50: embed nvkm_instobj directly into nv04_instobj")
+    Signed-off-by: Dave Airlie <airlied@redhat.com>
+    Signed-off-by: Danilo Krummrich <dakr@redhat.com>
+    Link: https://patchwork.freedesktop.org/patch/msgid/20240411011510.2546857-1-airlied@gmail.com
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 49c9958cf0a2d2b6dc35cab74babfef58e287d8b
+Author: Zack Rusin <zack.rusin@broadcom.com>
+Date:   Thu Apr 11 22:55:11 2024 -0400
+
+    drm/vmwgfx: Sort primary plane formats by order of preference
+    
+    commit d4c972bff3129a9dd4c22a3999fd8eba1a81531a upstream.
+    
+    The table of primary plane formats wasn't sorted at all, leading to
+    applications picking our least desirable formats by defaults.
+    
+    Sort the primary plane formats according to our order of preference.
+    
+    Nice side-effect of this change is that it makes IGT's kms_atomic
+    plane-invalid-params pass because the test picks the first format
+    which for vmwgfx was DRM_FORMAT_XRGB1555 and uses fb's with odd sizes
+    which make Pixman, which IGT depends on assert due to the fact that our
+    16bpp formats aren't 32 bit aligned like Pixman requires all formats
+    to be.
+    
+    Signed-off-by: Zack Rusin <zack.rusin@broadcom.com>
+    Fixes: 36cc79bc9077 ("drm/vmwgfx: Add universal plane support")
+    Cc: Broadcom internal kernel review list <bcm-kernel-feedback-list@broadcom.com>
+    Cc: dri-devel@lists.freedesktop.org
+    Cc: <stable@vger.kernel.org> # v4.12+
+    Acked-by: Pekka Paalanen <pekka.paalanen@collabora.com>
+    Link: https://patchwork.freedesktop.org/patch/msgid/20240412025511.78553-6-zack.rusin@broadcom.com
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 8b12fc7b032633539acdf7864888b0ebd49e90f2
+Author: xinhui pan <xinhui.pan@amd.com>
+Date:   Thu Apr 11 11:11:38 2024 +0800
+
+    drm/amdgpu: validate the parameters of bo mapping operations more clearly
+    
+    commit 6fef2d4c00b5b8561ad68dd2b68173f5c6af1e75 upstream.
+    
+    Verify the parameters of
+    amdgpu_vm_bo_(map/replace_map/clearing_mappings) in one common place.
+    
+    Fixes: dc54d3d1744d ("drm/amdgpu: implement AMDGPU_VA_OP_CLEAR v2")
+    Cc: stable@vger.kernel.org
+    Reported-by: Vlad Stolyarov <hexed@google.com>
+    Suggested-by: Christian König <christian.koenig@amd.com>
+    Signed-off-by: xinhui pan <xinhui.pan@amd.com>
+    Reviewed-by: Christian König <christian.koenig@amd.com>
+    Signed-off-by: Alex Deucher <alexander.deucher@amd.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit a2fd6dbc98be1105a1d8e9e31575da8873ef115c
+Author: Carlos Llamas <cmllamas@google.com>
+Date:   Sat Mar 30 19:01:14 2024 +0000
+
+    binder: check offset alignment in binder_get_object()
+    
+    commit aaef73821a3b0194a01bd23ca77774f704a04d40 upstream.
+    
+    Commit 6d98eb95b450 ("binder: avoid potential data leakage when copying
+    txn") introduced changes to how binder objects are copied. In doing so,
+    it unintentionally removed an offset alignment check done through calls
+    to binder_alloc_copy_from_buffer() -> check_buffer().
+    
+    These calls were replaced in binder_get_object() with copy_from_user(),
+    so now an explicit offset alignment check is needed here. This avoids
+    later complications when unwinding the objects gets harder.
+    
+    It is worth noting this check existed prior to commit 7a67a39320df
+    ("binder: add function to copy binder object from buffer"), likely
+    removed due to redundancy at the time.
+    
+    Fixes: 6d98eb95b450 ("binder: avoid potential data leakage when copying txn")
+    Cc: stable@vger.kernel.org
+    Signed-off-by: Carlos Llamas <cmllamas@google.com>
+    Acked-by: Todd Kjos <tkjos@google.com>
+    Link: https://lore.kernel.org/r/20240330190115.1877819-1-cmllamas@google.com
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 0dc727a4e05400205358a22c3d01ccad2c8e1fe4
+Author: Yuntao Wang <ytcoode@gmail.com>
+Date:   Fri Apr 12 16:17:32 2024 +0800
+
+    init/main.c: Fix potential static_command_line memory overflow
+    
+    commit 46dad3c1e57897ab9228332f03e1c14798d2d3b9 upstream.
+    
+    We allocate memory of size 'xlen + strlen(boot_command_line) + 1' for
+    static_command_line, but the strings copied into static_command_line are
+    extra_command_line and command_line, rather than extra_command_line and
+    boot_command_line.
+    
+    When strlen(command_line) > strlen(boot_command_line), static_command_line
+    will overflow.
+    
+    This patch just recovers strlen(command_line) which was miss-consolidated
+    with strlen(boot_command_line) in the commit f5c7310ac73e ("init/main: add
+    checks for the return value of memblock_alloc*()")
+    
+    Link: https://lore.kernel.org/all/20240412081733.35925-2-ytcoode@gmail.com/
+    
+    Fixes: f5c7310ac73e ("init/main: add checks for the return value of memblock_alloc*()")
+    Cc: stable@vger.kernel.org
+    Signed-off-by: Yuntao Wang <ytcoode@gmail.com>
+    Signed-off-by: Masami Hiramatsu (Google) <mhiramat@kernel.org>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 813f5213f2c612dc800054859aaa396ec8ad7069
+Author: Yaxiong Tian <tianyaxiong@kylinos.cn>
+Date:   Wed Apr 17 10:52:48 2024 +0800
+
+    arm64: hibernate: Fix level3 translation fault in swsusp_save()
+    
+    commit 50449ca66cc5a8cbc64749cf4b9f3d3fc5f4b457 upstream.
+    
+    On arm64 machines, swsusp_save() faults if it attempts to access
+    MEMBLOCK_NOMAP memory ranges. This can be reproduced in QEMU using UEFI
+    when booting with rodata=off debug_pagealloc=off and CONFIG_KFENCE=n:
+    
+      Unable to handle kernel paging request at virtual address ffffff8000000000
+      Mem abort info:
+        ESR = 0x0000000096000007
+        EC = 0x25: DABT (current EL), IL = 32 bits
+        SET = 0, FnV = 0
+        EA = 0, S1PTW = 0
+        FSC = 0x07: level 3 translation fault
+      Data abort info:
+        ISV = 0, ISS = 0x00000007, ISS2 = 0x00000000
+        CM = 0, WnR = 0, TnD = 0, TagAccess = 0
+        GCS = 0, Overlay = 0, DirtyBit = 0, Xs = 0
+      swapper pgtable: 4k pages, 39-bit VAs, pgdp=00000000eeb0b000
+      [ffffff8000000000] pgd=180000217fff9803, p4d=180000217fff9803, pud=180000217fff9803, pmd=180000217fff8803, pte=0000000000000000
+      Internal error: Oops: 0000000096000007 [#1] SMP
+      Internal error: Oops: 0000000096000007 [#1] SMP
+      Modules linked in: xt_multiport ipt_REJECT nf_reject_ipv4 xt_conntrack nf_conntrack nf_defrag_ipv6 nf_defrag_ipv4 libcrc32c iptable_filter bpfilter rfkill at803x snd_hda_codec_hdmi snd_hda_intel snd_intel_dspcfg dwmac_generic stmmac_platform snd_hda_codec stmmac joydev pcs_xpcs snd_hda_core phylink ppdev lp parport ramoops reed_solomon ip_tables x_tables nls_iso8859_1 vfat multipath linear amdgpu amdxcp drm_exec gpu_sched drm_buddy hid_generic usbhid hid radeon video drm_suballoc_helper drm_ttm_helper ttm i2c_algo_bit drm_display_helper cec drm_kms_helper drm
+      CPU: 0 PID: 3663 Comm: systemd-sleep Not tainted 6.6.2+ #76
+      Source Version: 4e22ed63a0a48e7a7cff9b98b7806d8d4add7dc0
+      Hardware name: Greatwall GW-XXXXXX-XXX/GW-XXXXXX-XXX, BIOS KunLun BIOS V4.0 01/19/2021
+      pstate: 600003c5 (nZCv DAIF -PAN -UAO -TCO -DIT -SSBS BTYPE=--)
+      pc : swsusp_save+0x280/0x538
+      lr : swsusp_save+0x280/0x538
+      sp : ffffffa034a3fa40
+      x29: ffffffa034a3fa40 x28: ffffff8000001000 x27: 0000000000000000
+      x26: ffffff8001400000 x25: ffffffc08113e248 x24: 0000000000000000
+      x23: 0000000000080000 x22: ffffffc08113e280 x21: 00000000000c69f2
+      x20: ffffff8000000000 x19: ffffffc081ae2500 x18: 0000000000000000
+      x17: 6666662074736420 x16: 3030303030303030 x15: 3038666666666666
+      x14: 0000000000000b69 x13: ffffff9f89088530 x12: 00000000ffffffea
+      x11: 00000000ffff7fff x10: 00000000ffff7fff x9 : ffffffc08193f0d0
+      x8 : 00000000000bffe8 x7 : c0000000ffff7fff x6 : 0000000000000001
+      x5 : ffffffa0fff09dc8 x4 : 0000000000000000 x3 : 0000000000000027
+      x2 : 0000000000000000 x1 : 0000000000000000 x0 : 000000000000004e
+      Call trace:
+       swsusp_save+0x280/0x538
+       swsusp_arch_suspend+0x148/0x190
+       hibernation_snapshot+0x240/0x39c
+       hibernate+0xc4/0x378
+       state_store+0xf0/0x10c
+       kobj_attr_store+0x14/0x24
+    
+    The reason is swsusp_save() -> copy_data_pages() -> page_is_saveable()
+    -> kernel_page_present() assuming that a page is always present when
+    can_set_direct_map() is false (all of rodata_full,
+    debug_pagealloc_enabled() and arm64_kfence_can_set_direct_map() false),
+    irrespective of the MEMBLOCK_NOMAP ranges. Such MEMBLOCK_NOMAP regions
+    should not be saved during hibernation.
+    
+    This problem was introduced by changes to the pfn_valid() logic in
+    commit a7d9f306ba70 ("arm64: drop pfn_valid_within() and simplify
+    pfn_valid()").
+    
+    Similar to other architectures, drop the !can_set_direct_map() check in
+    kernel_page_present() so that page_is_savable() skips such pages.
+    
+    Fixes: a7d9f306ba70 ("arm64: drop pfn_valid_within() and simplify pfn_valid()")
+    Cc: <stable@vger.kernel.org> # 5.14.x
+    Suggested-by: Mike Rapoport <rppt@kernel.org>
+    Suggested-by: Catalin Marinas <catalin.marinas@arm.com>
+    Co-developed-by: xiongxin <xiongxin@kylinos.cn>
+    Signed-off-by: xiongxin <xiongxin@kylinos.cn>
+    Signed-off-by: Yaxiong Tian <tianyaxiong@kylinos.cn>
+    Acked-by: Mike Rapoport (IBM) <rppt@kernel.org>
+    Link: https://lore.kernel.org/r/20240417025248.386622-1-tianyaxiong@kylinos.cn
+    [catalin.marinas@arm.com: rework commit message]
+    Signed-off-by: Catalin Marinas <catalin.marinas@arm.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit f5a55db79bf7603fcc68f7c37d2e62b6b8e96c59
+Author: Sandipan Das <sandipan.das@amd.com>
+Date:   Fri Apr 5 16:55:55 2024 -0700
+
+    KVM: x86/pmu: Do not mask LVTPC when handling a PMI on AMD platforms
+    
+    commit 49ff3b4aec51e3abfc9369997cc603319b02af9a upstream.
+    
+    On AMD and Hygon platforms, the local APIC does not automatically set
+    the mask bit of the LVTPC register when handling a PMI and there is
+    no need to clear it in the kernel's PMI handler.
+    
+    For guests, the mask bit is currently set by kvm_apic_local_deliver()
+    and unless it is cleared by the guest kernel's PMI handler, PMIs stop
+    arriving and break use-cases like sampling with perf record.
+    
+    This does not affect non-PerfMonV2 guests because PMIs are handled in
+    the guest kernel by x86_pmu_handle_irq() which always clears the LVTPC
+    mask bit irrespective of the vendor.
+    
+    Before:
+    
+      $ perf record -e cycles:u true
+      [ perf record: Woken up 1 times to write data ]
+      [ perf record: Captured and wrote 0.001 MB perf.data (1 samples) ]
+    
+    After:
+    
+      $ perf record -e cycles:u true
+      [ perf record: Woken up 1 times to write data ]
+      [ perf record: Captured and wrote 0.002 MB perf.data (19 samples) ]
+    
+    Fixes: a16eb25b09c0 ("KVM: x86: Mask LVTPC when handling a PMI")
+    Cc: stable@vger.kernel.org
+    Signed-off-by: Sandipan Das <sandipan.das@amd.com>
+    Reviewed-by: Jim Mattson <jmattson@google.com>
+    [sean: use is_intel_compatible instead of !is_amd_or_hygon()]
+    Signed-off-by: Sean Christopherson <seanjc@google.com>
+    Message-ID: <20240405235603.1173076-3-seanjc@google.com>
+    Signed-off-by: Paolo Bonzini <pbonzini@redhat.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 7169354120d83993a090ae993587345401598a0e
+Author: Sean Christopherson <seanjc@google.com>
+Date:   Fri Apr 5 16:55:54 2024 -0700
+
+    KVM: x86: Snapshot if a vCPU's vendor model is AMD vs. Intel compatible
+    
+    commit fd706c9b1674e2858766bfbf7430534c2b26fbef upstream.
+    
+    Add kvm_vcpu_arch.is_amd_compatible to cache if a vCPU's vendor model is
+    compatible with AMD, i.e. if the vCPU vendor is AMD or Hygon, along with
+    helpers to check if a vCPU is compatible AMD vs. Intel.  To handle Intel
+    vs. AMD behavior related to masking the LVTPC entry, KVM will need to
+    check for vendor compatibility on every PMI injection, i.e. querying for
+    AMD will soon be a moderately hot path.
+    
+    Note!  This subtly (or maybe not-so-subtly) makes "Intel compatible" KVM's
+    default behavior, both if userspace omits (or never sets) CPUID 0x0 and if
+    userspace sets a completely unknown vendor.  One could argue that KVM
+    should treat such vCPUs as not being compatible with Intel *or* AMD, but
+    that would add useless complexity to KVM.
+    
+    KVM needs to do *something* in the face of vendor specific behavior, and
+    so unless KVM conjured up a magic third option, choosing to treat unknown
+    vendors as neither Intel nor AMD means that checks on AMD compatibility
+    would yield Intel behavior, and checks for Intel compatibility would yield
+    AMD behavior.  And that's far worse as it would effectively yield random
+    behavior depending on whether KVM checked for AMD vs. Intel vs. !AMD vs.
+    !Intel.  And practically speaking, all x86 CPUs follow either Intel or AMD
+    architecture, i.e. "supporting" an unknown third architecture adds no
+    value.
+    
+    Deliberately don't convert any of the existing guest_cpuid_is_intel()
+    checks, as the Intel side of things is messier due to some flows explicitly
+    checking for exactly vendor==Intel, versus some flows assuming anything
+    that isn't "AMD compatible" gets Intel behavior.  The Intel code will be
+    cleaned up in the future.
+    
+    Cc: stable@vger.kernel.org
+    Signed-off-by: Sean Christopherson <seanjc@google.com>
+    Message-ID: <20240405235603.1173076-2-seanjc@google.com>
+    Signed-off-by: Paolo Bonzini <pbonzini@redhat.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 43f00210cb257bcb0387e8caeb4b46375d67f30c
+Author: Alan Stern <stern@rowland.harvard.edu>
+Date:   Wed Mar 13 17:43:41 2024 -0400
+
+    fs: sysfs: Fix reference leak in sysfs_break_active_protection()
+    
+    commit a90bca2228c0646fc29a72689d308e5fe03e6d78 upstream.
+    
+    The sysfs_break_active_protection() routine has an obvious reference
+    leak in its error path.  If the call to kernfs_find_and_get() fails then
+    kn will be NULL, so the companion sysfs_unbreak_active_protection()
+    routine won't get called (and would only cause an access violation by
+    trying to dereference kn->parent if it was called).  As a result, the
+    reference to kobj acquired at the start of the function will never be
+    released.
+    
+    Fix the leak by adding an explicit kobject_put() call when kn is NULL.
+    
+    Signed-off-by: Alan Stern <stern@rowland.harvard.edu>
+    Fixes: 2afc9166f79b ("scsi: sysfs: Introduce sysfs_{un,}break_active_protection()")
+    Cc: Bart Van Assche <bvanassche@acm.org>
+    Cc: stable@vger.kernel.org
+    Reviewed-by: Bart Van Assche <bvanassche@acm.org>
+    Acked-by: Tejun Heo <tj@kernel.org>
+    Link: https://lore.kernel.org/r/8a4d3f0f-c5e3-4b70-a188-0ca433f9e6f9@rowland.harvard.edu
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 0d130158db29f5e0b3893154908cf618896450a8
+Author: Samuel Thibault <samuel.thibault@ens-lyon.org>
+Date:   Sat Mar 23 17:48:43 2024 +0100
+
+    speakup: Avoid crash on very long word
+    
+    commit c8d2f34ea96ea3bce6ba2535f867f0d4ee3b22e1 upstream.
+    
+    In case a console is set up really large and contains a really long word
+    (> 256 characters), we have to stop before the length of the word buffer.
+    
+    Signed-off-by: Samuel Thibault <samuel.thibault@ens-lyon.org>
+    Fixes: c6e3fd22cd538 ("Staging: add speakup to the staging directory")
+    Cc: stable@vger.kernel.org
+    Link: https://lore.kernel.org/r/20240323164843.1426997-1-samuel.thibault@ens-lyon.org
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit d8a2225f7dfafc0c197053798123b64457e01cac
+Author: Alexander Usyskin <alexander.usyskin@intel.com>
+Date:   Tue Mar 12 07:19:58 2024 +0200
+
+    mei: me: disable RPL-S on SPS and IGN firmwares
+    
+    commit 0dc04112bee6fdd6eb847ccb32214703022c0269 upstream.
+    
+    Extend the quirk to disable MEI interface on Intel PCH Ignition (IGN)
+    and SPS firmwares for RPL-S devices. These firmwares do not support
+    the MEI protocol.
+    
+    Fixes: 3ed8c7d39cfe ("mei: me: add raptor lake point S DID")
+    Cc: stable@vger.kernel.org
+    Signed-off-by: Alexander Usyskin <alexander.usyskin@intel.com>
+    Signed-off-by: Tomas Winkler <tomas.winkler@intel.com>
+    Link: https://lore.kernel.org/r/20240312051958.118478-1-tomas.winkler@intel.com
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 7f67c2020cb08499c400abf0fc32c65e4d9a09ca
+Author: Norihiko Hama <Norihiko.Hama@alpsalpine.com>
+Date:   Wed Mar 27 11:35:50 2024 +0900
+
+    usb: gadget: f_ncm: Fix UAF ncm object at re-bind after usb ep transport error
+    
+    commit 6334b8e4553cc69f51e383c9de545082213d785e upstream.
+    
+    When ncm function is working and then stop usb0 interface for link down,
+    eth_stop() is called. At this piont, accidentally if usb transport error
+    should happen in usb_ep_enable(), 'in_ep' and/or 'out_ep' may not be enabled.
+    
+    After that, ncm_disable() is called to disable for ncm unbind
+    but gether_disconnect() is never called since 'in_ep' is not enabled.
+    
+    As the result, ncm object is released in ncm unbind
+    but 'dev->port_usb' associated to 'ncm->port' is not NULL.
+    
+    And when ncm bind again to recover netdev, ncm object is reallocated
+    but usb0 interface is already associated to previous released ncm object.
+    
+    Therefore, once usb0 interface is up and eth_start_xmit() is called,
+    released ncm object is dereferrenced and it might cause use-after-free memory.
+    
+    [function unlink via configfs]
+      usb0: eth_stop dev->port_usb=ffffff9b179c3200
+      --> error happens in usb_ep_enable().
+      NCM: ncm_disable: ncm=ffffff9b179c3200
+      --> no gether_disconnect() since ncm->port.in_ep->enabled is false.
+      NCM: ncm_unbind: ncm unbind ncm=ffffff9b179c3200
+      NCM: ncm_free: ncm free ncm=ffffff9b179c3200   <-- released ncm
+    
+    [function link via configfs]
+      NCM: ncm_alloc: ncm alloc ncm=ffffff9ac4f8a000
+      NCM: ncm_bind: ncm bind ncm=ffffff9ac4f8a000
+      NCM: ncm_set_alt: ncm=ffffff9ac4f8a000 alt=0
+      usb0: eth_open dev->port_usb=ffffff9b179c3200  <-- previous released ncm
+      usb0: eth_start dev->port_usb=ffffff9b179c3200 <--
+      eth_start_xmit()
+      --> dev->wrap()
+      Unable to handle kernel paging request at virtual address dead00000000014f
+    
+    This patch addresses the issue by checking if 'ncm->netdev' is not NULL at
+    ncm_disable() to call gether_disconnect() to deassociate 'dev->port_usb'.
+    It's more reasonable to check 'ncm->netdev' to call gether_connect/disconnect
+    rather than check 'ncm->port.in_ep->enabled' since it might not be enabled
+    but the gether connection might be established.
+    
+    Signed-off-by: Norihiko Hama <Norihiko.Hama@alpsalpine.com>
+    Cc: stable <stable@kernel.org>
+    Link: https://lore.kernel.org/r/20240327023550.51214-1-Norihiko.Hama@alpsalpine.com
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 75ceeadfab1c933ce56a9817ab191a80268a2173
+Author: Kai-Heng Feng <kai.heng.feng@canonical.com>
+Date:   Tue Mar 5 14:51:38 2024 +0800
+
+    usb: Disable USB3 LPM at shutdown
+    
+    commit d920a2ed8620be04a3301e1a9c2b7cc1de65f19d upstream.
+    
+    SanDisks USB3 storage may disapper after system reboot:
+    
+    usb usb2-port3: link state change
+    xhci_hcd 0000:00:14.0: clear port3 link state change, portsc: 0x2c0
+    usb usb2-port3: do warm reset, port only
+    xhci_hcd 0000:00:14.0: xhci_hub_status_data: stopping usb2 port polling
+    xhci_hcd 0000:00:14.0: Get port status 2-3 read: 0x2b0, return 0x2b0
+    usb usb2-port3: not warm reset yet, waiting 50ms
+    xhci_hcd 0000:00:14.0: Get port status 2-3 read: 0x2f0, return 0x2f0
+    usb usb2-port3: not warm reset yet, waiting 200ms
+    ...
+    xhci_hcd 0000:00:14.0: Get port status 2-3 read: 0x6802c0, return 0x7002c0
+    usb usb2-port3: not warm reset yet, waiting 200ms
+    xhci_hcd 0000:00:14.0: clear port3 reset change, portsc: 0x4802c0
+    xhci_hcd 0000:00:14.0: clear port3 warm(BH) reset change, portsc: 0x4002c0
+    xhci_hcd 0000:00:14.0: clear port3 link state change, portsc: 0x2c0
+    xhci_hcd 0000:00:14.0: Get port status 2-3 read: 0x2c0, return 0x2c0
+    usb usb2-port3: not enabled, trying warm reset again...
+    
+    This is due to the USB device still cause port change event after xHCI is
+    shuted down:
+    
+    xhci_hcd 0000:38:00.0: // Setting command ring address to 0xffffe001
+    xhci_hcd 0000:38:00.0: xhci_resume: starting usb3 port polling.
+    xhci_hcd 0000:38:00.0: xhci_hub_status_data: stopping usb4 port polling
+    xhci_hcd 0000:38:00.0: xhci_hub_status_data: stopping usb3 port polling
+    xhci_hcd 0000:38:00.0: hcd_pci_runtime_resume: 0
+    xhci_hcd 0000:38:00.0: xhci_shutdown: stopping usb3 port polling.
+    xhci_hcd 0000:38:00.0: // Halt the HC
+    xhci_hcd 0000:38:00.0: xhci_shutdown completed - status = 1
+    xhci_hcd 0000:00:14.0: xhci_shutdown: stopping usb1 port polling.
+    xhci_hcd 0000:00:14.0: // Halt the HC
+    xhci_hcd 0000:00:14.0: xhci_shutdown completed - status = 1
+    xhci_hcd 0000:00:14.0: Get port status 2-3 read: 0x1203, return 0x203
+    xhci_hcd 0000:00:14.0: set port reset, actual port 2-3 status  = 0x1311
+    xhci_hcd 0000:00:14.0: Get port status 2-3 read: 0x201203, return 0x100203
+    xhci_hcd 0000:00:14.0: clear port3 reset change, portsc: 0x1203
+    xhci_hcd 0000:00:14.0: clear port3 warm(BH) reset change, portsc: 0x1203
+    xhci_hcd 0000:00:14.0: clear port3 link state change, portsc: 0x1203
+    xhci_hcd 0000:00:14.0: clear port3 connect change, portsc: 0x1203
+    xhci_hcd 0000:00:14.0: Get port status 2-3 read: 0x1203, return 0x203
+    usb 2-3: device not accepting address 2, error -108
+    xhci_hcd 0000:00:14.0: xHCI dying or halted, can't queue_command
+    xhci_hcd 0000:00:14.0: Set port 2-3 link state, portsc: 0x1203, write 0x11261
+    xhci_hcd 0000:00:14.0: Get port status 2-3 read: 0x1263, return 0x263
+    xhci_hcd 0000:00:14.0: set port reset, actual port 2-3 status  = 0x1271
+    xhci_hcd 0000:00:14.0: Get port status 2-3 read: 0x12b1, return 0x2b1
+    usb usb2-port3: not reset yet, waiting 60ms
+    ACPI: PM: Preparing to enter system sleep state S5
+    xhci_hcd 0000:00:14.0: Get port status 2-3 read: 0x12f1, return 0x2f1
+    usb usb2-port3: not reset yet, waiting 200ms
+    reboot: Restarting system
+    
+    The port change event is caused by LPM transition, so disabling LPM at shutdown
+    to make sure the device is in U0 for warmboot.
+    
+    Signed-off-by: Kai-Heng Feng <kai.heng.feng@canonical.com>
+    Cc: stable <stable@kernel.org>
+    Link: https://lore.kernel.org/r/20240305065140.66801-1-kai.heng.feng@canonical.com
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 8aa5c28ac65cb5e7f1b9c0c3238c00b661dd2b8c
+Author: Minas Harutyunyan <Minas.Harutyunyan@synopsys.com>
+Date:   Tue Apr 9 12:27:54 2024 +0000
+
+    usb: dwc2: host: Fix dereference issue in DDMA completion flow.
+    
+    commit eed04fa96c48790c1cce73c8a248e9d460b088f8 upstream.
+    
+    Fixed variable dereference issue in DDMA completion flow.
+    
+    Fixes: b258e4268850 ("usb: dwc2: host: Fix ISOC flow in DDMA mode")
+    CC: stable@vger.kernel.org
+    Reported-by: Dan Carpenter <dan.carpenter@linaro.org>
+    Closes: https://lore.kernel.org/linux-usb/2024040834-ethically-rumble-701f@gregkh/T/#m4c4b83bef0ebb4b67fe2e0a7d6466cbb6f416e39
+    Signed-off-by: Minas Harutyunyan <Minas.Harutyunyan@synopsys.com>
+    Link: https://lore.kernel.org/r/cc826d3ef53c934d8e6d98870f17f3cdc3d2755d.1712665387.git.Minas.Harutyunyan@synopsys.com
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 7182175f565ffffa2ba1911726c5656bfc7a1bae
+Author: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+Date:   Thu Apr 18 16:33:28 2024 +0200
+
+    Revert "usb: cdc-wdm: close race between read and workqueue"
+    
+    commit 1607830dadeefc407e4956336d9fcd9e9defd810 upstream.
+    
+    This reverts commit 339f83612f3a569b194680768b22bf113c26a29d.
+    
+    It has been found to cause problems in a number of Chromebook devices,
+    so revert the change until it can be brought back in a safe way.
+    
+    Link: https://lore.kernel.org/r/385a3519-b45d-48c5-a6fd-a3fdb6bec92f@chromium.org
+    Reported-by:: Aleksander Morgado <aleksandermj@chromium.org>
+    Fixes: 339f83612f3a ("usb: cdc-wdm: close race between read and workqueue")
+    Cc: stable <stable@kernel.org>
+    Cc: Oliver Neukum <oneukum@suse.com>
+    Cc: Bjørn Mork <bjorn@mork.no>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit def039849617ffd92f1d8f824c7626b6e8d25bdd
+Author: Daniele Palmas <dnlplm@gmail.com>
+Date:   Thu Apr 18 13:34:30 2024 +0200
+
+    USB: serial: option: add Telit FN920C04 rmnet compositions
+    
+    commit 582ee2f9d268d302595db3e36b985e5cbb93284d upstream.
+    
+    Add the following Telit FN920C04 compositions:
+    
+    0x10a0: rmnet + tty (AT/NMEA) + tty (AT) + tty (diag)
+    T:  Bus=03 Lev=01 Prnt=03 Port=06 Cnt=01 Dev#=  5 Spd=480  MxCh= 0
+    D:  Ver= 2.01 Cls=00(>ifc ) Sub=00 Prot=00 MxPS=64 #Cfgs=  1
+    P:  Vendor=1bc7 ProdID=10a0 Rev=05.15
+    S:  Manufacturer=Telit Cinterion
+    S:  Product=FN920
+    S:  SerialNumber=92c4c4d8
+    C:  #Ifs= 4 Cfg#= 1 Atr=e0 MxPwr=500mA
+    I:  If#= 0 Alt= 0 #EPs= 3 Cls=ff(vend.) Sub=ff Prot=50 Driver=qmi_wwan
+    E:  Ad=01(O) Atr=02(Bulk) MxPS= 512 Ivl=0ms
+    E:  Ad=81(I) Atr=02(Bulk) MxPS= 512 Ivl=0ms
+    E:  Ad=82(I) Atr=03(Int.) MxPS=   8 Ivl=32ms
+    I:  If#= 1 Alt= 0 #EPs= 3 Cls=ff(vend.) Sub=ff Prot=60 Driver=option
+    E:  Ad=02(O) Atr=02(Bulk) MxPS= 512 Ivl=0ms
+    E:  Ad=83(I) Atr=02(Bulk) MxPS= 512 Ivl=0ms
+    E:  Ad=84(I) Atr=03(Int.) MxPS=  10 Ivl=32ms
+    I:  If#= 2 Alt= 0 #EPs= 3 Cls=ff(vend.) Sub=ff Prot=40 Driver=option
+    E:  Ad=03(O) Atr=02(Bulk) MxPS= 512 Ivl=0ms
+    E:  Ad=85(I) Atr=02(Bulk) MxPS= 512 Ivl=0ms
+    E:  Ad=86(I) Atr=03(Int.) MxPS=  10 Ivl=32ms
+    I:  If#= 3 Alt= 0 #EPs= 2 Cls=ff(vend.) Sub=ff Prot=30 Driver=option
+    E:  Ad=04(O) Atr=02(Bulk) MxPS= 512 Ivl=0ms
+    E:  Ad=87(I) Atr=02(Bulk) MxPS= 512 Ivl=0ms
+    
+    0x10a4: rmnet + tty (AT) + tty (AT) + tty (diag)
+    T:  Bus=03 Lev=01 Prnt=03 Port=06 Cnt=01 Dev#=  8 Spd=480  MxCh= 0
+    D:  Ver= 2.01 Cls=00(>ifc ) Sub=00 Prot=00 MxPS=64 #Cfgs=  1
+    P:  Vendor=1bc7 ProdID=10a4 Rev=05.15
+    S:  Manufacturer=Telit Cinterion
+    S:  Product=FN920
+    S:  SerialNumber=92c4c4d8
+    C:  #Ifs= 4 Cfg#= 1 Atr=e0 MxPwr=500mA
+    I:  If#= 0 Alt= 0 #EPs= 3 Cls=ff(vend.) Sub=ff Prot=50 Driver=qmi_wwan
+    E:  Ad=01(O) Atr=02(Bulk) MxPS= 512 Ivl=0ms
+    E:  Ad=81(I) Atr=02(Bulk) MxPS= 512 Ivl=0ms
+    E:  Ad=82(I) Atr=03(Int.) MxPS=   8 Ivl=32ms
+    I:  If#= 1 Alt= 0 #EPs= 3 Cls=ff(vend.) Sub=ff Prot=40 Driver=option
+    E:  Ad=02(O) Atr=02(Bulk) MxPS= 512 Ivl=0ms
+    E:  Ad=83(I) Atr=02(Bulk) MxPS= 512 Ivl=0ms
+    E:  Ad=84(I) Atr=03(Int.) MxPS=  10 Ivl=32ms
+    I:  If#= 2 Alt= 0 #EPs= 3 Cls=ff(vend.) Sub=ff Prot=40 Driver=option
+    E:  Ad=03(O) Atr=02(Bulk) MxPS= 512 Ivl=0ms
+    E:  Ad=85(I) Atr=02(Bulk) MxPS= 512 Ivl=0ms
+    E:  Ad=86(I) Atr=03(Int.) MxPS=  10 Ivl=32ms
+    I:  If#= 3 Alt= 0 #EPs= 2 Cls=ff(vend.) Sub=ff Prot=30 Driver=option
+    E:  Ad=04(O) Atr=02(Bulk) MxPS= 512 Ivl=0ms
+    E:  Ad=87(I) Atr=02(Bulk) MxPS= 512 Ivl=0ms
+    
+    0x10a9: rmnet + tty (AT) + tty (diag) + DPL (data packet logging) + adb
+    T:  Bus=03 Lev=01 Prnt=03 Port=06 Cnt=01 Dev#=  9 Spd=480  MxCh= 0
+    D:  Ver= 2.01 Cls=00(>ifc ) Sub=00 Prot=00 MxPS=64 #Cfgs=  1
+    P:  Vendor=1bc7 ProdID=10a9 Rev=05.15
+    S:  Manufacturer=Telit Cinterion
+    S:  Product=FN920
+    S:  SerialNumber=92c4c4d8
+    C:  #Ifs= 5 Cfg#= 1 Atr=e0 MxPwr=500mA
+    I:  If#= 0 Alt= 0 #EPs= 3 Cls=ff(vend.) Sub=ff Prot=50 Driver=qmi_wwan
+    E:  Ad=01(O) Atr=02(Bulk) MxPS= 512 Ivl=0ms
+    E:  Ad=81(I) Atr=02(Bulk) MxPS= 512 Ivl=0ms
+    E:  Ad=82(I) Atr=03(Int.) MxPS=   8 Ivl=32ms
+    I:  If#= 1 Alt= 0 #EPs= 3 Cls=ff(vend.) Sub=ff Prot=40 Driver=option
+    E:  Ad=02(O) Atr=02(Bulk) MxPS= 512 Ivl=0ms
+    E:  Ad=83(I) Atr=02(Bulk) MxPS= 512 Ivl=0ms
+    E:  Ad=84(I) Atr=03(Int.) MxPS=  10 Ivl=32ms
+    I:  If#= 2 Alt= 0 #EPs= 2 Cls=ff(vend.) Sub=ff Prot=30 Driver=option
+    E:  Ad=03(O) Atr=02(Bulk) MxPS= 512 Ivl=0ms
+    E:  Ad=85(I) Atr=02(Bulk) MxPS= 512 Ivl=0ms
+    I:  If#= 3 Alt= 0 #EPs= 1 Cls=ff(vend.) Sub=ff Prot=80 Driver=(none)
+    E:  Ad=86(I) Atr=02(Bulk) MxPS= 512 Ivl=0ms
+    I:  If#= 4 Alt= 0 #EPs= 2 Cls=ff(vend.) Sub=42 Prot=01 Driver=(none)
+    E:  Ad=04(O) Atr=02(Bulk) MxPS= 512 Ivl=0ms
+    E:  Ad=87(I) Atr=02(Bulk) MxPS= 512 Ivl=0ms
+    
+    Signed-off-by: Daniele Palmas <dnlplm@gmail.com>
+    Cc: stable@vger.kernel.org
+    Signed-off-by: Johan Hovold <johan@kernel.org>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit cd27cf1ec66d7eba380c92d8f144dec1f9b240c0
+Author: Vanillan Wang <vanillanwang@163.com>
+Date:   Tue Apr 16 18:02:55 2024 +0800
+
+    USB: serial: option: add Rolling RW101-GL and RW135-GL support
+    
+    commit 311f97a4c7c22a01f8897bddf00428dfd0668e79 upstream.
+    
+    Update the USB serial option driver support for the Rolling
+    LTE modules.
+    
+    - VID:PID 33f8:01a2, RW101-GL for laptop debug M.2 cards(with MBIM
+    interface for /Linux/Chrome OS)
+    0x01a2: mbim, diag, at, pipe
+    - VID:PID 33f8:01a3, RW101-GL for laptop debug M.2 cards(with MBIM
+    interface for /Linux/Chrome OS)
+    0x01a3: mbim, pipe
+    - VID:PID 33f8:01a4, RW101-GL for laptop debug M.2 cards(with MBIM
+    interface for /Linux/Chrome OS)
+    0x01a4: mbim, diag, at, pipe
+    - VID:PID 33f8:0104, RW101-GL for laptop debug M.2 cards(with RMNET
+    interface for /Linux/Chrome OS)
+    0x0104: RMNET, diag, at, pipe
+    - VID:PID 33f8:0115, RW135-GL for laptop debug M.2 cards(with MBIM
+    interface for /Linux/Chrome OS)
+    0x0115: MBIM, diag, at, pipe
+    
+    Here are the outputs of usb-devices:
+    T:  Bus=01 Lev=01 Prnt=01 Port=02 Cnt=01 Dev#=  5 Spd=480 MxCh= 0
+    D:  Ver= 2.01 Cls=00(>ifc ) Sub=00 Prot=00 MxPS=64 #Cfgs=  1
+    P:  Vendor=33f8 ProdID=01a2 Rev=05.15
+    S:  Manufacturer=Rolling Wireless S.a.r.l.
+    S:  Product=Rolling Module
+    S:  SerialNumber=12345678
+    C:  #Ifs= 5 Cfg#= 1 Atr=a0 MxPwr=500mA
+    I:  If#= 0 Alt= 0 #EPs= 1 Cls=02(commc) Sub=0e Prot=00 Driver=cdc_mbim
+    E:  Ad=82(I) Atr=03(Int.) MxPS=  64 Ivl=32ms
+    I:  If#= 1 Alt= 1 #EPs= 2 Cls=0a(data ) Sub=00 Prot=02 Driver=cdc_mbim
+    E:  Ad=01(O) Atr=02(Bulk) MxPS= 512 Ivl=0ms
+    E:  Ad=81(I) Atr=02(Bulk) MxPS= 512 Ivl=0ms
+    I:  If#= 2 Alt= 0 #EPs= 3 Cls=ff(vend.) Sub=ff Prot=40 Driver=option
+    E:  Ad=02(O) Atr=02(Bulk) MxPS= 512 Ivl=0ms
+    E:  Ad=83(I) Atr=02(Bulk) MxPS= 512 Ivl=0ms
+    E:  Ad=84(I) Atr=03(Int.) MxPS=  10 Ivl=32ms
+    I:  If#= 3 Alt= 0 #EPs= 2 Cls=ff(vend.) Sub=ff Prot=30 Driver=option
+    E:  Ad=03(O) Atr=02(Bulk) MxPS= 512 Ivl=0ms
+    E:  Ad=85(I) Atr=02(Bulk) MxPS= 512 Ivl=0ms
+    I:  If#= 4 Alt= 0 #EPs= 2 Cls=ff(vend.) Sub=00 Prot=00 Driver=option
+    E:  Ad=04(O) Atr=02(Bulk) MxPS= 512 Ivl=0ms
+    E:  Ad=86(I) Atr=02(Bulk) MxPS= 512 Ivl=0ms
+    
+    T:  Bus=01 Lev=01 Prnt=01 Port=02 Cnt=01 Dev#=  8 Spd=480 MxCh= 0
+    D:  Ver= 2.01 Cls=00(>ifc ) Sub=00 Prot=00 MxPS=64 #Cfgs=  1
+    P:  Vendor=33f8 ProdID=01a3 Rev=05.15
+    S:  Manufacturer=Rolling Wireless S.a.r.l.
+    S:  Product=Rolling Module
+    S:  SerialNumber=12345678
+    C:  #Ifs= 3 Cfg#= 1 Atr=a0 MxPwr=500mA
+    I:  If#= 0 Alt= 0 #EPs= 1 Cls=02(commc) Sub=0e Prot=00 Driver=cdc_mbim
+    E:  Ad=82(I) Atr=03(Int.) MxPS=  64 Ivl=32ms
+    I:  If#= 1 Alt= 1 #EPs= 2 Cls=0a(data ) Sub=00 Prot=02 Driver=cdc_mbim
+    E:  Ad=01(O) Atr=02(Bulk) MxPS= 512 Ivl=0ms
+    E:  Ad=81(I) Atr=02(Bulk) MxPS= 512 Ivl=0ms
+    I:  If#= 2 Alt= 0 #EPs= 2 Cls=ff(vend.) Sub=00 Prot=00 Driver=option
+    E:  Ad=02(O) Atr=02(Bulk) MxPS= 512 Ivl=0ms
+    E:  Ad=83(I) Atr=02(Bulk) MxPS= 512 Ivl=0ms
+    
+    T:  Bus=01 Lev=01 Prnt=01 Port=02 Cnt=01 Dev#= 17 Spd=480 MxCh= 0
+    D:  Ver= 2.01 Cls=00(>ifc ) Sub=00 Prot=00 MxPS=64 #Cfgs=  1
+    P:  Vendor=33f8 ProdID=01a4 Rev=05.15
+    S:  Manufacturer=Rolling Wireless S.a.r.l.
+    S:  Product=Rolling Module
+    S:  SerialNumber=12345678
+    C:  #Ifs= 6 Cfg#= 1 Atr=a0 MxPwr=500mA
+    I:  If#= 0 Alt= 0 #EPs= 1 Cls=02(commc) Sub=0e Prot=00 Driver=cdc_mbim
+    E:  Ad=82(I) Atr=03(Int.) MxPS=  64 Ivl=32ms
+    I:  If#= 1 Alt= 1 #EPs= 2 Cls=0a(data ) Sub=00 Prot=02 Driver=cdc_mbim
+    E:  Ad=01(O) Atr=02(Bulk) MxPS= 512 Ivl=0ms
+    E:  Ad=81(I) Atr=02(Bulk) MxPS= 512 Ivl=0ms
+    I:  If#= 2 Alt= 0 #EPs= 2 Cls=ff(vend.) Sub=ff Prot=30 Driver=option
+    E:  Ad=02(O) Atr=02(Bulk) MxPS= 512 Ivl=0ms
+    E:  Ad=83(I) Atr=02(Bulk) MxPS= 512 Ivl=0ms
+    I:  If#= 3 Alt= 0 #EPs= 3 Cls=ff(vend.) Sub=ff Prot=40 Driver=option
+    E:  Ad=03(O) Atr=02(Bulk) MxPS= 512 Ivl=0ms
+    E:  Ad=84(I) Atr=02(Bulk) MxPS= 512 Ivl=0ms
+    E:  Ad=85(I) Atr=03(Int.) MxPS=  10 Ivl=32ms
+    I:  If#= 4 Alt= 0 #EPs= 2 Cls=ff(vend.) Sub=42 Prot=01 Driver=usbfs
+    E:  Ad=04(O) Atr=02(Bulk) MxPS= 512 Ivl=0ms
+    E:  Ad=86(I) Atr=02(Bulk) MxPS= 512 Ivl=0ms
+    I:  If#= 5 Alt= 0 #EPs= 2 Cls=ff(vend.) Sub=00 Prot=00 Driver=option
+    E:  Ad=05(O) Atr=02(Bulk) MxPS= 512 Ivl=0ms
+    E:  Ad=87(I) Atr=02(Bulk) MxPS= 512 Ivl=0ms
+    
+    T:  Bus=04 Lev=01 Prnt=01 Port=00 Cnt=01 Dev#=  2 Spd=5000 MxCh= 0
+    D:  Ver= 3.20 Cls=00(>ifc ) Sub=00 Prot=00 MxPS= 9 #Cfgs=  1
+    P:  Vendor=33f8 ProdID=0104 Rev=05.04
+    S:  Manufacturer=Rolling Wireless S.a.r.l.
+    S:  Product=Rolling Module
+    S:  SerialNumber=ba2eb033
+    C:  #Ifs= 6 Cfg#= 1 Atr=a0 MxPwr=896mA
+    I:  If#= 0 Alt= 0 #EPs= 2 Cls=ff(vend.) Sub=ff Prot=30 Driver=option
+    E:  Ad=01(O) Atr=02(Bulk) MxPS=1024 Ivl=0ms
+    E:  Ad=81(I) Atr=02(Bulk) MxPS=1024 Ivl=0ms
+    I:  If#= 1 Alt= 0 #EPs= 3 Cls=ff(vend.) Sub=ff Prot=40 Driver=option
+    E:  Ad=02(O) Atr=02(Bulk) MxPS=1024 Ivl=0ms
+    E:  Ad=82(I) Atr=02(Bulk) MxPS=1024 Ivl=0ms
+    E:  Ad=83(I) Atr=03(Int.) MxPS=  10 Ivl=32ms
+    I:  If#= 2 Alt= 0 #EPs= 3 Cls=ff(vend.) Sub=ff Prot=40 Driver=option
+    E:  Ad=03(O) Atr=02(Bulk) MxPS=1024 Ivl=0ms
+    E:  Ad=84(I) Atr=02(Bulk) MxPS=1024 Ivl=0ms
+    E:  Ad=85(I) Atr=03(Int.) MxPS=  10 Ivl=32ms
+    I:  If#= 3 Alt= 0 #EPs= 3 Cls=ff(vend.) Sub=00 Prot=40 Driver=option
+    E:  Ad=04(O) Atr=02(Bulk) MxPS=1024 Ivl=0ms
+    E:  Ad=86(I) Atr=02(Bulk) MxPS=1024 Ivl=0ms
+    E:  Ad=87(I) Atr=03(Int.) MxPS=  10 Ivl=32ms
+    I:  If#= 4 Alt= 0 #EPs= 3 Cls=ff(vend.) Sub=ff Prot=50 Driver=qmi_wwan
+    E:  Ad=0f(O) Atr=02(Bulk) MxPS=1024 Ivl=0ms
+    E:  Ad=88(I) Atr=03(Int.) MxPS=   8 Ivl=32ms
+    E:  Ad=8e(I) Atr=02(Bulk) MxPS=1024 Ivl=0ms
+    I:  If#= 5 Alt= 0 #EPs= 2 Cls=ff(vend.) Sub=42 Prot=01 Driver=usbfs
+    E:  Ad=05(O) Atr=02(Bulk) MxPS=1024 Ivl=0ms
+    E:  Ad=89(I) Atr=02(Bulk) MxPS=1024 Ivl=0ms
+    
+    T:  Bus=01 Lev=01 Prnt=01 Port=02 Cnt=01 Dev#= 16 Spd=480 MxCh= 0
+    D:  Ver= 2.01 Cls=00(>ifc ) Sub=00 Prot=00 MxPS=64 #Cfgs=  1
+    P:  Vendor=33f8 ProdID=0115 Rev=05.15
+    S:  Manufacturer=Rolling Wireless S.a.r.l.
+    S:  Product=Rolling Module
+    S:  SerialNumber=12345678
+    C:  #Ifs= 6 Cfg#= 1 Atr=a0 MxPwr=500mA
+    I:  If#= 0 Alt= 0 #EPs= 1 Cls=02(commc) Sub=0e Prot=00 Driver=cdc_mbim
+    E:  Ad=82(I) Atr=03(Int.) MxPS=  64 Ivl=32ms
+    I:  If#= 1 Alt= 1 #EPs= 2 Cls=0a(data ) Sub=00 Prot=02 Driver=cdc_mbim
+    E:  Ad=01(O) Atr=02(Bulk) MxPS= 512 Ivl=0ms
+    E:  Ad=81(I) Atr=02(Bulk) MxPS= 512 Ivl=0ms
+    I:  If#= 2 Alt= 0 #EPs= 2 Cls=ff(vend.) Sub=ff Prot=30 Driver=option
+    E:  Ad=02(O) Atr=02(Bulk) MxPS= 512 Ivl=0ms
+    E:  Ad=83(I) Atr=02(Bulk) MxPS= 512 Ivl=0ms
+    I:  If#= 3 Alt= 0 #EPs= 3 Cls=ff(vend.) Sub=ff Prot=40 Driver=option
+    E:  Ad=03(O) Atr=02(Bulk) MxPS= 512 Ivl=0ms
+    E:  Ad=84(I) Atr=02(Bulk) MxPS= 512 Ivl=0ms
+    E:  Ad=85(I) Atr=03(Int.) MxPS=  10 Ivl=32ms
+    I:  If#= 4 Alt= 0 #EPs= 2 Cls=ff(vend.) Sub=00 Prot=00 Driver=option
+    E:  Ad=04(O) Atr=02(Bulk) MxPS= 512 Ivl=0ms
+    E:  Ad=86(I) Atr=02(Bulk) MxPS= 512 Ivl=0ms
+    I:  If#= 5 Alt= 0 #EPs= 2 Cls=ff(vend.) Sub=42 Prot=01 Driver=usbfs
+    E:  Ad=05(O) Atr=02(Bulk) MxPS= 512 Ivl=0ms
+    E:  Ad=87(I) Atr=02(Bulk) MxPS= 512 Ivl=0ms
+    
+    Signed-off-by: Vanillan Wang <vanillanwang@163.com>
+    Cc: stable@vger.kernel.org
+    Signed-off-by: Johan Hovold <johan@kernel.org>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit c48d624bbbadde3540ddef69329ead0cbedf5392
+Author: Jerry Meng <jerry-meng@foxmail.com>
+Date:   Mon Apr 15 15:04:29 2024 +0800
+
+    USB: serial: option: support Quectel EM060K sub-models
+    
+    commit c840244aba7ad2b83ed904378b36bd6aef25511c upstream.
+    
+    EM060K_129, EM060K_12a, EM060K_12b and EM0060K_12c are EM060K's sub-models,
+    having the same name "Quectel EM060K-GL" and the same interface layout.
+    
+    MBIM + GNSS + DIAG + NMEA + AT + QDSS + DPL
+    
+    T:  Bus=03 Lev=01 Prnt=01 Port=01 Cnt=02 Dev#=  8 Spd=480  MxCh= 0
+    D:  Ver= 2.00 Cls=00(>ifc ) Sub=00 Prot=00 MxPS=64 #Cfgs=  1
+    P:  Vendor=2c7c ProdID=0129 Rev= 5.04
+    S:  Manufacturer=Quectel
+    S:  Product=Quectel EM060K-GL
+    S:  SerialNumber=f6fa08b6
+    C:* #Ifs= 8 Cfg#= 1 Atr=a0 MxPwr=500mA
+    A:  FirstIf#= 0 IfCount= 2 Cls=02(comm.) Sub=0e Prot=00
+    I:* If#= 0 Alt= 0 #EPs= 1 Cls=02(comm.) Sub=0e Prot=00 Driver=cdc_mbim
+    E:  Ad=81(I) Atr=03(Int.) MxPS=  64 Ivl=32ms
+    I:  If#= 1 Alt= 0 #EPs= 0 Cls=0a(data ) Sub=00 Prot=02 Driver=cdc_mbim
+    I:* If#= 1 Alt= 1 #EPs= 2 Cls=0a(data ) Sub=00 Prot=02 Driver=cdc_mbim
+    E:  Ad=8e(I) Atr=02(Bulk) MxPS= 512 Ivl=0ms
+    E:  Ad=0f(O) Atr=02(Bulk) MxPS= 512 Ivl=0ms
+    I:* If#= 2 Alt= 0 #EPs= 1 Cls=ff(vend.) Sub=ff Prot=ff Driver=(none)
+    E:  Ad=82(I) Atr=03(Int.) MxPS=  64 Ivl=32ms
+    I:* If#= 3 Alt= 0 #EPs= 2 Cls=ff(vend.) Sub=ff Prot=30 Driver=option
+    E:  Ad=01(O) Atr=02(Bulk) MxPS= 512 Ivl=0ms
+    E:  Ad=83(I) Atr=02(Bulk) MxPS= 512 Ivl=0ms
+    I:* If#= 4 Alt= 0 #EPs= 3 Cls=ff(vend.) Sub=00 Prot=40 Driver=option
+    E:  Ad=85(I) Atr=03(Int.) MxPS=  10 Ivl=32ms
+    E:  Ad=84(I) Atr=02(Bulk) MxPS= 512 Ivl=0ms
+    E:  Ad=02(O) Atr=02(Bulk) MxPS= 512 Ivl=0ms
+    I:* If#= 5 Alt= 0 #EPs= 3 Cls=ff(vend.) Sub=ff Prot=40 Driver=option
+    E:  Ad=87(I) Atr=03(Int.) MxPS=  10 Ivl=32ms
+    E:  Ad=86(I) Atr=02(Bulk) MxPS= 512 Ivl=0ms
+    E:  Ad=03(O) Atr=02(Bulk) MxPS= 512 Ivl=0ms
+    I:* If#= 6 Alt= 0 #EPs= 1 Cls=ff(vend.) Sub=ff Prot=70 Driver=(none)
+    E:  Ad=88(I) Atr=02(Bulk) MxPS= 512 Ivl=0ms
+    I:* If#= 7 Alt= 0 #EPs= 1 Cls=ff(vend.) Sub=ff Prot=80 Driver=(none)
+    E:  Ad=8f(I) Atr=02(Bulk) MxPS= 512 Ivl=0ms
+    
+    Signed-off-by: Jerry Meng <jerry-meng@foxmail.com>
+    Cc: stable@vger.kernel.org
+    Signed-off-by: Johan Hovold <johan@kernel.org>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 3338a967ca08337c3149fc0da02be436a46e3ad7
+Author: Coia Prant <coiaprant@gmail.com>
+Date:   Mon Apr 15 07:26:25 2024 -0700
+
+    USB: serial: option: add Lonsung U8300/U9300 product
+    
+    commit cf16ffa17c398434a77b8a373e69287c95b60de2 upstream.
+    
+    Update the USB serial option driver to support Longsung U8300/U9300.
+    
+    For U8300
+    
+    Interface 4 is used by for QMI interface in stock firmware of U8300, the
+    router which uses U8300 modem.
+    Interface 5 is used by for ADB interface in stock firmware of U8300, the
+    router which uses U8300 modem.
+    
+    Interface mapping is:
+    0: unknown (Debug), 1: AT (Modem), 2: AT, 3: PPP (NDIS / Pipe), 4: QMI, 5: ADB
+    
+    T:  Bus=05 Lev=01 Prnt=03 Port=02 Cnt=01 Dev#=  4 Spd=480 MxCh= 0
+    D:  Ver= 2.00 Cls=00(>ifc ) Sub=00 Prot=00 MxPS=64 #Cfgs=  1
+    P:  Vendor=1c9e ProdID=9b05 Rev=03.18
+    S:  Manufacturer=Android
+    S:  Product=Android
+    C:  #Ifs= 6 Cfg#= 1 Atr=80 MxPwr=500mA
+    I:  If#= 0 Alt= 0 #EPs= 2 Cls=ff(vend.) Sub=ff Prot=ff Driver=option
+    E:  Ad=01(O) Atr=02(Bulk) MxPS= 512 Ivl=0ms
+    E:  Ad=81(I) Atr=02(Bulk) MxPS= 512 Ivl=0ms
+    I:  If#= 1 Alt= 0 #EPs= 3 Cls=ff(vend.) Sub=00 Prot=00 Driver=option
+    E:  Ad=02(O) Atr=02(Bulk) MxPS= 512 Ivl=0ms
+    E:  Ad=82(I) Atr=02(Bulk) MxPS= 512 Ivl=0ms
+    E:  Ad=83(I) Atr=03(Int.) MxPS=  10 Ivl=32ms
+    I:  If#= 2 Alt= 0 #EPs= 3 Cls=ff(vend.) Sub=00 Prot=00 Driver=option
+    E:  Ad=03(O) Atr=02(Bulk) MxPS= 512 Ivl=0ms
+    E:  Ad=84(I) Atr=02(Bulk) MxPS= 512 Ivl=0ms
+    E:  Ad=85(I) Atr=03(Int.) MxPS=  10 Ivl=32ms
+    I:  If#= 3 Alt= 0 #EPs= 3 Cls=ff(vend.) Sub=00 Prot=00 Driver=option
+    E:  Ad=04(O) Atr=02(Bulk) MxPS= 512 Ivl=0ms
+    E:  Ad=86(I) Atr=02(Bulk) MxPS= 512 Ivl=0ms
+    E:  Ad=87(I) Atr=03(Int.) MxPS=  10 Ivl=32ms
+    I:  If#= 4 Alt= 0 #EPs= 3 Cls=ff(vend.) Sub=ff Prot=ff Driver=qmi_wwan
+    E:  Ad=05(O) Atr=02(Bulk) MxPS= 512 Ivl=0ms
+    E:  Ad=88(I) Atr=02(Bulk) MxPS= 512 Ivl=0ms
+    E:  Ad=89(I) Atr=03(Int.) MxPS=   8 Ivl=32ms
+    I:  If#= 5 Alt= 0 #EPs= 2 Cls=ff(vend.) Sub=42 Prot=01 Driver=(none)
+    E:  Ad=06(O) Atr=02(Bulk) MxPS= 512 Ivl=0ms
+    E:  Ad=8a(I) Atr=02(Bulk) MxPS= 512 Ivl=0ms
+    
+    For U9300
+    
+    Interface 1 is used by for ADB interface in stock firmware of U9300, the
+    router which uses U9300 modem.
+    Interface 4 is used by for QMI interface in stock firmware of U9300, the
+    router which uses U9300 modem.
+    
+    Interface mapping is:
+    0: ADB, 1: AT (Modem), 2: AT, 3: PPP (NDIS / Pipe), 4: QMI
+    
+    Note: Interface 3 of some models of the U9300 series can send AT commands.
+    
+    T:  Bus=05 Lev=01 Prnt=05 Port=04 Cnt=01 Dev#=  6 Spd=480 MxCh= 0
+    D:  Ver= 2.00 Cls=00(>ifc ) Sub=00 Prot=00 MxPS=64 #Cfgs=  1
+    P:  Vendor=1c9e ProdID=9b3c Rev=03.18
+    S:  Manufacturer=Android
+    S:  Product=Android
+    C:  #Ifs= 5 Cfg#= 1 Atr=80 MxPwr=500mA
+    I:  If#= 0 Alt= 0 #EPs= 2 Cls=ff(vend.) Sub=42 Prot=01 Driver=(none)
+    E:  Ad=01(O) Atr=02(Bulk) MxPS= 512 Ivl=0ms
+    E:  Ad=81(I) Atr=02(Bulk) MxPS= 512 Ivl=0ms
+    I:  If#= 1 Alt= 0 #EPs= 3 Cls=ff(vend.) Sub=00 Prot=00 Driver=option
+    E:  Ad=02(O) Atr=02(Bulk) MxPS= 512 Ivl=0ms
+    E:  Ad=82(I) Atr=02(Bulk) MxPS= 512 Ivl=0ms
+    E:  Ad=83(I) Atr=03(Int.) MxPS=  10 Ivl=32ms
+    I:  If#= 2 Alt= 0 #EPs= 3 Cls=ff(vend.) Sub=00 Prot=00 Driver=option
+    E:  Ad=03(O) Atr=02(Bulk) MxPS= 512 Ivl=0ms
+    E:  Ad=84(I) Atr=02(Bulk) MxPS= 512 Ivl=0ms
+    E:  Ad=85(I) Atr=03(Int.) MxPS=  10 Ivl=32ms
+    I:  If#= 3 Alt= 0 #EPs= 3 Cls=ff(vend.) Sub=00 Prot=00 Driver=option
+    E:  Ad=04(O) Atr=02(Bulk) MxPS= 512 Ivl=0ms
+    E:  Ad=86(I) Atr=02(Bulk) MxPS= 512 Ivl=0ms
+    E:  Ad=87(I) Atr=03(Int.) MxPS=  10 Ivl=32ms
+    I:  If#= 4 Alt= 0 #EPs= 3 Cls=ff(vend.) Sub=ff Prot=ff Driver=qmi_wwan
+    E:  Ad=05(O) Atr=02(Bulk) MxPS= 512 Ivl=0ms
+    E:  Ad=88(I) Atr=02(Bulk) MxPS= 512 Ivl=0ms
+    E:  Ad=89(I) Atr=03(Int.) MxPS=   8 Ivl=32ms
+    
+    Tested successfully using Modem Manager on U9300.
+    Tested successfully AT commands using If=1, If=2 and If=3 on U9300.
+    
+    Signed-off-by: Coia Prant <coiaprant@gmail.com>
+    Reviewed-by: Lars Melin <larsm17@gmail.com>
+    [ johan: drop product defines, trim commit message ]
+    Cc: stable@vger.kernel.org
+    Signed-off-by: Johan Hovold <johan@kernel.org>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit e94566d88701da6c30b3c96c75e9992f6c6c3bb9
+Author: Chuanhong Guo <gch981213@gmail.com>
+Date:   Tue Mar 12 14:29:12 2024 +0800
+
+    USB: serial: option: add support for Fibocom FM650/FG650
+    
+    commit fb1f4584b1215e8c209f6b3a4028ed8351a0e961 upstream.
+    
+    Fibocom FM650/FG650 are 5G modems with ECM/NCM/RNDIS/MBIM modes.
+    This patch adds support to all 4 modes.
+    
+    In all 4 modes, the first serial port is the AT console while the other
+    3 appear to be diagnostic interfaces for dumping modem logs.
+    
+    usb-devices output for all modes:
+    
+    ECM:
+    T:  Bus=04 Lev=01 Prnt=01 Port=00 Cnt=01 Dev#=  5 Spd=5000 MxCh= 0
+    D:  Ver= 3.10 Cls=00(>ifc ) Sub=00 Prot=00 MxPS= 9 #Cfgs=  1
+    P:  Vendor=2cb7 ProdID=0a04 Rev=04.04
+    S:  Manufacturer=Fibocom Wireless Inc.
+    S:  Product=FG650 Module
+    S:  SerialNumber=0123456789ABCDEF
+    C:  #Ifs= 5 Cfg#= 1 Atr=c0 MxPwr=504mA
+    I:  If#= 0 Alt= 0 #EPs= 1 Cls=02(commc) Sub=06 Prot=00 Driver=cdc_ether
+    E:  Ad=82(I) Atr=03(Int.) MxPS=  16 Ivl=32ms
+    I:  If#= 1 Alt= 1 #EPs= 2 Cls=0a(data ) Sub=00 Prot=00 Driver=cdc_ether
+    E:  Ad=01(O) Atr=02(Bulk) MxPS=1024 Ivl=0ms
+    E:  Ad=81(I) Atr=02(Bulk) MxPS=1024 Ivl=0ms
+    I:  If#= 2 Alt= 0 #EPs= 2 Cls=ff(vend.) Sub=00 Prot=00 Driver=option
+    E:  Ad=02(O) Atr=02(Bulk) MxPS=1024 Ivl=0ms
+    E:  Ad=83(I) Atr=02(Bulk) MxPS=1024 Ivl=0ms
+    I:  If#= 3 Alt= 0 #EPs= 2 Cls=ff(vend.) Sub=00 Prot=00 Driver=option
+    E:  Ad=03(O) Atr=02(Bulk) MxPS=1024 Ivl=0ms
+    E:  Ad=84(I) Atr=02(Bulk) MxPS=1024 Ivl=0ms
+    I:  If#= 4 Alt= 0 #EPs= 2 Cls=ff(vend.) Sub=00 Prot=00 Driver=option
+    E:  Ad=04(O) Atr=02(Bulk) MxPS=1024 Ivl=0ms
+    E:  Ad=85(I) Atr=02(Bulk) MxPS=1024 Ivl=0ms
+    
+    NCM:
+    T:  Bus=04 Lev=01 Prnt=01 Port=00 Cnt=01 Dev#=  6 Spd=5000 MxCh= 0
+    D:  Ver= 3.10 Cls=00(>ifc ) Sub=00 Prot=00 MxPS= 9 #Cfgs=  1
+    P:  Vendor=2cb7 ProdID=0a05 Rev=04.04
+    S:  Manufacturer=Fibocom Wireless Inc.
+    S:  Product=FG650 Module
+    S:  SerialNumber=0123456789ABCDEF
+    C:  #Ifs= 6 Cfg#= 1 Atr=c0 MxPwr=504mA
+    I:  If#= 0 Alt= 0 #EPs= 1 Cls=02(commc) Sub=0d Prot=00 Driver=cdc_ncm
+    E:  Ad=82(I) Atr=03(Int.) MxPS=  16 Ivl=32ms
+    I:  If#= 1 Alt= 1 #EPs= 2 Cls=0a(data ) Sub=00 Prot=01 Driver=cdc_ncm
+    E:  Ad=01(O) Atr=02(Bulk) MxPS=1024 Ivl=0ms
+    E:  Ad=81(I) Atr=02(Bulk) MxPS=1024 Ivl=0ms
+    I:  If#= 2 Alt= 0 #EPs= 2 Cls=ff(vend.) Sub=00 Prot=00 Driver=option
+    E:  Ad=02(O) Atr=02(Bulk) MxPS=1024 Ivl=0ms
+    E:  Ad=83(I) Atr=02(Bulk) MxPS=1024 Ivl=0ms
+    I:  If#= 3 Alt= 0 #EPs= 2 Cls=ff(vend.) Sub=00 Prot=00 Driver=option
+    E:  Ad=03(O) Atr=02(Bulk) MxPS=1024 Ivl=0ms
+    E:  Ad=84(I) Atr=02(Bulk) MxPS=1024 Ivl=0ms
+    I:  If#= 4 Alt= 0 #EPs= 2 Cls=ff(vend.) Sub=00 Prot=00 Driver=option
+    E:  Ad=04(O) Atr=02(Bulk) MxPS=1024 Ivl=0ms
+    E:  Ad=85(I) Atr=02(Bulk) MxPS=1024 Ivl=0ms
+    I:  If#= 5 Alt= 0 #EPs= 2 Cls=ff(vend.) Sub=00 Prot=00 Driver=option
+    E:  Ad=05(O) Atr=02(Bulk) MxPS=1024 Ivl=0ms
+    E:  Ad=86(I) Atr=02(Bulk) MxPS=1024 Ivl=0ms
+    
+    RNDIS:
+    T:  Bus=04 Lev=01 Prnt=01 Port=00 Cnt=01 Dev#=  4 Spd=5000 MxCh= 0
+    D:  Ver= 3.10 Cls=00(>ifc ) Sub=00 Prot=00 MxPS= 9 #Cfgs=  1
+    P:  Vendor=2cb7 ProdID=0a06 Rev=04.04
+    S:  Manufacturer=Fibocom Wireless Inc.
+    S:  Product=FG650 Module
+    S:  SerialNumber=0123456789ABCDEF
+    C:  #Ifs= 6 Cfg#= 1 Atr=c0 MxPwr=504mA
+    I:  If#= 0 Alt= 0 #EPs= 1 Cls=e0(wlcon) Sub=01 Prot=03 Driver=rndis_host
+    E:  Ad=82(I) Atr=03(Int.) MxPS=   8 Ivl=32ms
+    I:  If#= 1 Alt= 0 #EPs= 2 Cls=0a(data ) Sub=00 Prot=00 Driver=rndis_host
+    E:  Ad=01(O) Atr=02(Bulk) MxPS=1024 Ivl=0ms
+    E:  Ad=81(I) Atr=02(Bulk) MxPS=1024 Ivl=0ms
+    I:  If#= 2 Alt= 0 #EPs= 2 Cls=ff(vend.) Sub=00 Prot=00 Driver=option
+    E:  Ad=02(O) Atr=02(Bulk) MxPS=1024 Ivl=0ms
+    E:  Ad=83(I) Atr=02(Bulk) MxPS=1024 Ivl=0ms
+    I:  If#= 3 Alt= 0 #EPs= 2 Cls=ff(vend.) Sub=00 Prot=00 Driver=option
+    E:  Ad=03(O) Atr=02(Bulk) MxPS=1024 Ivl=0ms
+    E:  Ad=84(I) Atr=02(Bulk) MxPS=1024 Ivl=0ms
+    I:  If#= 4 Alt= 0 #EPs= 2 Cls=ff(vend.) Sub=00 Prot=00 Driver=option
+    E:  Ad=04(O) Atr=02(Bulk) MxPS=1024 Ivl=0ms
+    E:  Ad=85(I) Atr=02(Bulk) MxPS=1024 Ivl=0ms
+    I:  If#= 5 Alt= 0 #EPs= 2 Cls=ff(vend.) Sub=00 Prot=00 Driver=option
+    E:  Ad=05(O) Atr=02(Bulk) MxPS=1024 Ivl=0ms
+    E:  Ad=86(I) Atr=02(Bulk) MxPS=1024 Ivl=0ms
+    
+    MBIM:
+    T:  Bus=04 Lev=01 Prnt=01 Port=00 Cnt=01 Dev#=  7 Spd=5000 MxCh= 0
+    D:  Ver= 3.10 Cls=00(>ifc ) Sub=00 Prot=00 MxPS= 9 #Cfgs=  1
+    P:  Vendor=2cb7 ProdID=0a07 Rev=04.04
+    S:  Manufacturer=Fibocom Wireless Inc.
+    S:  Product=FG650 Module
+    S:  SerialNumber=0123456789ABCDEF
+    C:  #Ifs= 6 Cfg#= 1 Atr=c0 MxPwr=504mA
+    I:  If#= 0 Alt= 0 #EPs= 1 Cls=02(commc) Sub=0e Prot=00 Driver=cdc_mbim
+    E:  Ad=82(I) Atr=03(Int.) MxPS=  64 Ivl=32ms
+    I:  If#= 1 Alt= 1 #EPs= 2 Cls=0a(data ) Sub=00 Prot=02 Driver=cdc_mbim
+    E:  Ad=01(O) Atr=02(Bulk) MxPS=1024 Ivl=0ms
+    E:  Ad=81(I) Atr=02(Bulk) MxPS=1024 Ivl=0ms
+    I:  If#= 2 Alt= 0 #EPs= 2 Cls=ff(vend.) Sub=00 Prot=00 Driver=option
+    E:  Ad=02(O) Atr=02(Bulk) MxPS=1024 Ivl=0ms
+    E:  Ad=83(I) Atr=02(Bulk) MxPS=1024 Ivl=0ms
+    I:  If#= 3 Alt= 0 #EPs= 2 Cls=ff(vend.) Sub=00 Prot=00 Driver=option
+    E:  Ad=03(O) Atr=02(Bulk) MxPS=1024 Ivl=0ms
+    E:  Ad=84(I) Atr=02(Bulk) MxPS=1024 Ivl=0ms
+    I:  If#= 4 Alt= 0 #EPs= 2 Cls=ff(vend.) Sub=00 Prot=00 Driver=option
+    E:  Ad=04(O) Atr=02(Bulk) MxPS=1024 Ivl=0ms
+    E:  Ad=85(I) Atr=02(Bulk) MxPS=1024 Ivl=0ms
+    I:  If#= 5 Alt= 0 #EPs= 2 Cls=ff(vend.) Sub=00 Prot=00 Driver=option
+    E:  Ad=05(O) Atr=02(Bulk) MxPS=1024 Ivl=0ms
+    E:  Ad=86(I) Atr=02(Bulk) MxPS=1024 Ivl=0ms
+    
+    Signed-off-by: Chuanhong Guo <gch981213@gmail.com>
+    Cc: stable@vger.kernel.org
+    Signed-off-by: Johan Hovold <johan@kernel.org>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 6b5043463619f06a310e8e2334d4e552c88e643d
+Author: bolan wang <bolan.wang@fibocom.com>
+Date:   Wed Mar 6 19:03:39 2024 +0800
+
+    USB: serial: option: add Fibocom FM135-GL variants
+    
+    commit 356952b13af5b2c338df1e06889fd1b5e12cbbf4 upstream.
+    
+    Update the USB serial option driver support for the Fibocom
+    FM135-GL LTE modules.
+    - VID:PID 2cb7:0115, FM135-GL for laptop debug M.2 cards(with MBIM
+    interface for /Linux/Chrome OS)
+    
+    0x0115: mbim, diag, at, pipe
+    
+    Here are the outputs of usb-devices:
+    T:  Bus=01 Lev=01 Prnt=01 Port=02 Cnt=01 Dev#= 16 Spd=480 MxCh= 0
+    D:  Ver= 2.01 Cls=00(>ifc ) Sub=00 Prot=00 MxPS=64 #Cfgs=  1
+    P:  Vendor=2cb7 ProdID=0115 Rev=05.15
+    S:  Manufacturer=Fibocom Wireless Inc.
+    S:  Product=Fibocom Module
+    S:  SerialNumber=12345678
+    C:  #Ifs= 6 Cfg#= 1 Atr=a0 MxPwr=500mA
+    I:  If#= 0 Alt= 0 #EPs= 1 Cls=02(commc) Sub=0e Prot=00 Driver=cdc_mbim
+    E:  Ad=82(I) Atr=03(Int.) MxPS=  64 Ivl=32ms
+    I:  If#= 1 Alt= 1 #EPs= 2 Cls=0a(data ) Sub=00 Prot=02 Driver=cdc_mbim
+    E:  Ad=01(O) Atr=02(Bulk) MxPS= 512 Ivl=0ms
+    E:  Ad=81(I) Atr=02(Bulk) MxPS= 512 Ivl=0ms
+    I:  If#= 2 Alt= 0 #EPs= 2 Cls=ff(vend.) Sub=ff Prot=30 Driver=option
+    E:  Ad=02(O) Atr=02(Bulk) MxPS= 512 Ivl=0ms
+    E:  Ad=83(I) Atr=02(Bulk) MxPS= 512 Ivl=0ms
+    I:  If#= 3 Alt= 0 #EPs= 3 Cls=ff(vend.) Sub=ff Prot=40 Driver=option
+    E:  Ad=03(O) Atr=02(Bulk) MxPS= 512 Ivl=0ms
+    E:  Ad=84(I) Atr=02(Bulk) MxPS= 512 Ivl=0ms
+    E:  Ad=85(I) Atr=03(Int.) MxPS=  10 Ivl=32ms
+    I:  If#= 4 Alt= 0 #EPs= 2 Cls=ff(vend.) Sub=00 Prot=00 Driver=option
+    E:  Ad=04(O) Atr=02(Bulk) MxPS= 512 Ivl=0ms
+    E:  Ad=86(I) Atr=02(Bulk) MxPS= 512 Ivl=0ms
+    I:  If#= 5 Alt= 0 #EPs= 2 Cls=ff(vend.) Sub=42 Prot=01 Driver=usbfs
+    E:  Ad=05(O) Atr=02(Bulk) MxPS= 512 Ivl=0ms
+    E:  Ad=87(I) Atr=02(Bulk) MxPS= 512 Ivl=0ms
+    
+    Signed-off-by: bolan wang <bolan.wang@fibocom.com>
+    Cc: stable@vger.kernel.org
+    Signed-off-by: Johan Hovold <johan@kernel.org>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 7a3bbe41efa55323b6ea3c35fa15941d4dbecdef
+Author: Finn Thain <fthain@linux-m68k.org>
+Date:   Mon Apr 8 19:23:43 2024 +1000
+
+    serial/pmac_zilog: Remove flawed mitigation for rx irq flood
+    
+    commit 1be3226445362bfbf461c92a5bcdb1723f2e4907 upstream.
+    
+    The mitigation was intended to stop the irq completely. That may be
+    better than a hard lock-up but it turns out that you get a crash anyway
+    if you're using pmac_zilog as a serial console:
+    
+    ttyPZ0: pmz: rx irq flood !
+    BUG: spinlock recursion on CPU#0, swapper/0
+    
+    That's because the pr_err() call in pmz_receive_chars() results in
+    pmz_console_write() attempting to lock a spinlock already locked in
+    pmz_interrupt(). With CONFIG_DEBUG_SPINLOCK=y, this produces a fatal
+    BUG splat. The spinlock in question is the one in struct uart_port.
+    
+    Even when it's not fatal, the serial port rx function ceases to work.
+    Also, the iteration limit doesn't play nicely with QEMU, as can be
+    seen in the bug report linked below.
+    
+    A web search for other reports of the error message "pmz: rx irq flood"
+    didn't produce anything. So I don't think this code is needed any more.
+    Remove it.
+    
+    Cc: Benjamin Herrenschmidt <benh@kernel.crashing.org>
+    Cc: Michael Ellerman <mpe@ellerman.id.au>
+    Cc: Nicholas Piggin <npiggin@gmail.com>
+    Cc: Christophe Leroy <christophe.leroy@csgroup.eu>
+    Cc: Aneesh Kumar K.V <aneesh.kumar@kernel.org>
+    Cc: Naveen N. Rao <naveen.n.rao@linux.ibm.com>
+    Cc: Andy Shevchenko <andy.shevchenko@gmail.com>
+    Cc: stable@kernel.org
+    Cc: linux-m68k@lists.linux-m68k.org
+    Link: https://github.com/vivier/qemu-m68k/issues/44
+    Link: https://lore.kernel.org/all/1078874617.9746.36.camel@gaston/
+    Acked-by: Michael Ellerman <mpe@ellerman.id.au>
+    Fixes: 1da177e4c3f4 ("Linux-2.6.12-rc2")
+    Cc: stable <stable@kernel.org>
+    Signed-off-by: Finn Thain <fthain@linux-m68k.org>
+    Link: https://lore.kernel.org/r/e853cf2c762f23101cd2ddec0cc0c2be0e72685f.1712568223.git.fthain@linux-m68k.org
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit b0b268eeb087e324ef3ea71f8e6cabd07630517f
+Author: Nikita Zhandarovich <n.zhandarovich@fintech.ru>
+Date:   Mon Apr 8 10:16:33 2024 -0700
+
+    comedi: vmk80xx: fix incomplete endpoint checking
+    
+    commit d1718530e3f640b7d5f0050e725216eab57a85d8 upstream.
+    
+    While vmk80xx does have endpoint checking implemented, some things
+    can fall through the cracks. Depending on the hardware model,
+    URBs can have either bulk or interrupt type, and current version
+    of vmk80xx_find_usb_endpoints() function does not take that fully
+    into account. While this warning does not seem to be too harmful,
+    at the very least it will crash systems with 'panic_on_warn' set on
+    them.
+    
+    Fix the issue found by Syzkaller [1] by somewhat simplifying the
+    endpoint checking process with usb_find_common_endpoints() and
+    ensuring that only expected endpoint types are present.
+    
+    This patch has not been tested on real hardware.
+    
+    [1] Syzkaller report:
+    usb 1-1: BOGUS urb xfer, pipe 1 != type 3
+    WARNING: CPU: 0 PID: 781 at drivers/usb/core/urb.c:504 usb_submit_urb+0xc4e/0x18c0 drivers/usb/core/urb.c:503
+    ...
+    Call Trace:
+     <TASK>
+     usb_start_wait_urb+0x113/0x520 drivers/usb/core/message.c:59
+     vmk80xx_reset_device drivers/comedi/drivers/vmk80xx.c:227 [inline]
+     vmk80xx_auto_attach+0xa1c/0x1a40 drivers/comedi/drivers/vmk80xx.c:818
+     comedi_auto_config+0x238/0x380 drivers/comedi/drivers.c:1067
+     usb_probe_interface+0x5cd/0xb00 drivers/usb/core/driver.c:399
+    ...
+    
+    Similar issue also found by Syzkaller:
+    Link: https://syzkaller.appspot.com/bug?extid=5205eb2f17de3e01946e
+    
+    Reported-and-tested-by: syzbot+5f29dc6a889fc42bd896@syzkaller.appspotmail.com
+    Cc: stable <stable@kernel.org>
+    Fixes: 49253d542cc0 ("staging: comedi: vmk80xx: factor out usb endpoint detection")
+    Reviewed-by: Ian Abbott <abbotti@mev.co.uk>
+    Signed-off-by: Nikita Zhandarovich <n.zhandarovich@fintech.ru>
+    Link: https://lore.kernel.org/r/20240408171633.31649-1-n.zhandarovich@fintech.ru
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit e39fae579d17dafe235e1117698a174920e58678
+Author: Gil Fine <gil.fine@linux.intel.com>
+Date:   Fri Mar 1 15:22:53 2024 +0200
+
+    thunderbolt: Fix wake configurations after device unplug
+    
+    commit c38fa07dc69f0b9e6f43ecab96dc7861a70c827c upstream.
+    
+    Currently we don't configure correctly the wake events after unplug of device
+    router. What can happen is that the downstream ports of host router will be
+    configured to wake on: USB4-wake and wake-on-disconnect, but not on
+    wake-on-connect. This may cause the later plugged device not to wake the
+    domain and fail in enumeration. Fix this by clearing downstream port's "USB4
+    Port is Configured" bit, after unplug of a device router.
+    
+    Signed-off-by: Gil Fine <gil.fine@linux.intel.com>
+    Cc: stable@vger.kernel.org
+    Signed-off-by: Mika Westerberg <mika.westerberg@linux.intel.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 62e0a5d4d4de1cf5723419b94a153e2d8f1f1fea
+Author: Gil Fine <gil.fine@linux.intel.com>
+Date:   Fri Mar 1 15:11:18 2024 +0200
+
+    thunderbolt: Avoid notify PM core about runtime PM resume
+    
+    commit dcd12acaf384c30437fa5a9a1f71df06fc9835fd upstream.
+    
+    Currently we notify PM core about occurred wakes after any resume. This
+    is not actually needed after resume from runtime suspend. Hence, notify
+    PM core about occurred wakes only after resume from system sleep. Also,
+    if the wake occurred in USB4 router upstream port, we don't notify the
+    PM core about it since it is not actually needed and can cause
+    unexpected autowake (e.g. if /sys/power/wakeup_count is used).
+    
+    While there add the missing kernel-doc for tb_switch_resume().
+    
+    Signed-off-by: Gil Fine <gil.fine@linux.intel.com>
+    Cc: stable@vger.kernel.org
+    Signed-off-by: Mika Westerberg <mika.westerberg@linux.intel.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 4291a6233ba829fea171ac096023e8e6df152b14
+Author: Eric Biggers <ebiggers@google.com>
+Date:   Tue Apr 16 23:04:34 2024 -0700
+
+    x86/cpufeatures: Fix dependencies for GFNI, VAES, and VPCLMULQDQ
+    
+    [ Upstream commit 9543f6e26634537997b6e909c20911b7bf4876de ]
+    
+    Fix cpuid_deps[] to list the correct dependencies for GFNI, VAES, and
+    VPCLMULQDQ.  These features don't depend on AVX512, and there exist CPUs
+    that support these features but not AVX512.  GFNI actually doesn't even
+    depend on AVX.
+    
+    This prevents GFNI from being unnecessarily disabled if AVX is disabled
+    to mitigate the GDS vulnerability.
+    
+    This also prevents all three features from being unnecessarily disabled
+    if AVX512VL (or its dependency AVX512F) were to be disabled, but it
+    looks like there isn't any case where this happens anyway.
+    
+    Fixes: c128dbfa0f87 ("x86/cpufeatures: Enable new SSE/AVX/AVX512 CPU features")
+    Signed-off-by: Eric Biggers <ebiggers@google.com>
+    Signed-off-by: Borislav Petkov (AMD) <bp@alien8.de>
+    Acked-by: Dave Hansen <dave.hansen@linux.intel.com>
+    Link: https://lore.kernel.org/r/20240417060434.47101-1-ebiggers@kernel.org
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 0be237b6b75346202a3cc0b0987dc814ab5be047
+Author: Josh Poimboeuf <jpoimboe@kernel.org>
+Date:   Fri Apr 12 11:10:33 2024 -0700
+
+    x86/bugs: Fix BHI retpoline check
+    
+    [ Upstream commit 69129794d94c544810e68b2b4eaa7e44063f9bf2 ]
+    
+    Confusingly, X86_FEATURE_RETPOLINE doesn't mean retpolines are enabled,
+    as it also includes the original "AMD retpoline" which isn't a retpoline
+    at all.
+    
+    Also replace cpu_feature_enabled() with boot_cpu_has() because this is
+    before alternatives are patched and cpu_feature_enabled()'s fallback
+    path is slower than plain old boot_cpu_has().
+    
+    Fixes: ec9404e40e8f ("x86/bhi: Add BHI mitigation knob")
+    Signed-off-by: Josh Poimboeuf <jpoimboe@kernel.org>
+    Signed-off-by: Ingo Molnar <mingo@kernel.org>
+    Reviewed-by: Pawan Gupta <pawan.kumar.gupta@linux.intel.com>
+    Cc: Borislav Petkov <bp@alien8.de>
+    Cc: Linus Torvalds <torvalds@linux-foundation.org>
+    Link: https://lore.kernel.org/r/ad3807424a3953f0323c011a643405619f2a4927.1712944776.git.jpoimboe@kernel.org
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit a29ec0465dce0b871003698698ac6fa92c9a5034
+Author: Stephen Boyd <sboyd@kernel.org>
+Date:   Mon Mar 25 11:41:58 2024 -0700
+
+    clk: Get runtime PM before walking tree during disable_unused
+    
+    [ Upstream commit e581cf5d216289ef292d1a4036d53ce90e122469 ]
+    
+    Doug reported [1] the following hung task:
+    
+     INFO: task swapper/0:1 blocked for more than 122 seconds.
+           Not tainted 5.15.149-21875-gf795ebc40eb8 #1
+     "echo 0 > /proc/sys/kernel/hung_task_timeout_secs" disables this message.
+     task:swapper/0       state:D stack:    0 pid:    1 ppid:     0 flags:0x00000008
+     Call trace:
+      __switch_to+0xf4/0x1f4
+      __schedule+0x418/0xb80
+      schedule+0x5c/0x10c
+      rpm_resume+0xe0/0x52c
+      rpm_resume+0x178/0x52c
+      __pm_runtime_resume+0x58/0x98
+      clk_pm_runtime_get+0x30/0xb0
+      clk_disable_unused_subtree+0x58/0x208
+      clk_disable_unused_subtree+0x38/0x208
+      clk_disable_unused_subtree+0x38/0x208
+      clk_disable_unused_subtree+0x38/0x208
+      clk_disable_unused_subtree+0x38/0x208
+      clk_disable_unused+0x4c/0xe4
+      do_one_initcall+0xcc/0x2d8
+      do_initcall_level+0xa4/0x148
+      do_initcalls+0x5c/0x9c
+      do_basic_setup+0x24/0x30
+      kernel_init_freeable+0xec/0x164
+      kernel_init+0x28/0x120
+      ret_from_fork+0x10/0x20
+     INFO: task kworker/u16:0:9 blocked for more than 122 seconds.
+           Not tainted 5.15.149-21875-gf795ebc40eb8 #1
+     "echo 0 > /proc/sys/kernel/hung_task_timeout_secs" disables this message.
+     task:kworker/u16:0   state:D stack:    0 pid:    9 ppid:     2 flags:0x00000008
+     Workqueue: events_unbound deferred_probe_work_func
+     Call trace:
+      __switch_to+0xf4/0x1f4
+      __schedule+0x418/0xb80
+      schedule+0x5c/0x10c
+      schedule_preempt_disabled+0x2c/0x48
+      __mutex_lock+0x238/0x488
+      __mutex_lock_slowpath+0x1c/0x28
+      mutex_lock+0x50/0x74
+      clk_prepare_lock+0x7c/0x9c
+      clk_core_prepare_lock+0x20/0x44
+      clk_prepare+0x24/0x30
+      clk_bulk_prepare+0x40/0xb0
+      mdss_runtime_resume+0x54/0x1c8
+      pm_generic_runtime_resume+0x30/0x44
+      __genpd_runtime_resume+0x68/0x7c
+      genpd_runtime_resume+0x108/0x1f4
+      __rpm_callback+0x84/0x144
+      rpm_callback+0x30/0x88
+      rpm_resume+0x1f4/0x52c
+      rpm_resume+0x178/0x52c
+      __pm_runtime_resume+0x58/0x98
+      __device_attach+0xe0/0x170
+      device_initial_probe+0x1c/0x28
+      bus_probe_device+0x3c/0x9c
+      device_add+0x644/0x814
+      mipi_dsi_device_register_full+0xe4/0x170
+      devm_mipi_dsi_device_register_full+0x28/0x70
+      ti_sn_bridge_probe+0x1dc/0x2c0
+      auxiliary_bus_probe+0x4c/0x94
+      really_probe+0xcc/0x2c8
+      __driver_probe_device+0xa8/0x130
+      driver_probe_device+0x48/0x110
+      __device_attach_driver+0xa4/0xcc
+      bus_for_each_drv+0x8c/0xd8
+      __device_attach+0xf8/0x170
+      device_initial_probe+0x1c/0x28
+      bus_probe_device+0x3c/0x9c
+      deferred_probe_work_func+0x9c/0xd8
+      process_one_work+0x148/0x518
+      worker_thread+0x138/0x350
+      kthread+0x138/0x1e0
+      ret_from_fork+0x10/0x20
+    
+    The first thread is walking the clk tree and calling
+    clk_pm_runtime_get() to power on devices required to read the clk
+    hardware via struct clk_ops::is_enabled(). This thread holds the clk
+    prepare_lock, and is trying to runtime PM resume a device, when it finds
+    that the device is in the process of resuming so the thread schedule()s
+    away waiting for the device to finish resuming before continuing. The
+    second thread is runtime PM resuming the same device, but the runtime
+    resume callback is calling clk_prepare(), trying to grab the
+    prepare_lock waiting on the first thread.
+    
+    This is a classic ABBA deadlock. To properly fix the deadlock, we must
+    never runtime PM resume or suspend a device with the clk prepare_lock
+    held. Actually doing that is near impossible today because the global
+    prepare_lock would have to be dropped in the middle of the tree, the
+    device runtime PM resumed/suspended, and then the prepare_lock grabbed
+    again to ensure consistency of the clk tree topology. If anything
+    changes with the clk tree in the meantime, we've lost and will need to
+    start the operation all over again.
+    
+    Luckily, most of the time we're simply incrementing or decrementing the
+    runtime PM count on an active device, so we don't have the chance to
+    schedule away with the prepare_lock held. Let's fix this immediate
+    problem that can be triggered more easily by simply booting on Qualcomm
+    sc7180.
+    
+    Introduce a list of clk_core structures that have been registered, or
+    are in the process of being registered, that require runtime PM to
+    operate. Iterate this list and call clk_pm_runtime_get() on each of them
+    without holding the prepare_lock during clk_disable_unused(). This way
+    we can be certain that the runtime PM state of the devices will be
+    active and resumed so we can't schedule away while walking the clk tree
+    with the prepare_lock held. Similarly, call clk_pm_runtime_put() without
+    the prepare_lock held to properly drop the runtime PM reference. We
+    remove the calls to clk_pm_runtime_{get,put}() in this path because
+    they're superfluous now that we know the devices are runtime resumed.
+    
+    Reported-by: Douglas Anderson <dianders@chromium.org>
+    Closes: https://lore.kernel.org/all/20220922084322.RFC.2.I375b6b9e0a0a5348962f004beb3dafee6a12dfbb@changeid/ [1]
+    Closes: https://issuetracker.google.com/328070191
+    Cc: Marek Szyprowski <m.szyprowski@samsung.com>
+    Cc: Ulf Hansson <ulf.hansson@linaro.org>
+    Cc: Krzysztof Kozlowski <krzk@kernel.org>
+    Fixes: 9a34b45397e5 ("clk: Add support for runtime PM")
+    Signed-off-by: Stephen Boyd <sboyd@kernel.org>
+    Link: https://lore.kernel.org/r/20240325184204.745706-5-sboyd@kernel.org
+    Reviewed-by: Douglas Anderson <dianders@chromium.org>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit db7c0ef4afeaae44312d0b8decdc8ec27e8eea7a
+Author: Stephen Boyd <sboyd@kernel.org>
+Date:   Mon Mar 25 11:41:57 2024 -0700
+
+    clk: Initialize struct clk_core kref earlier
+    
+    [ Upstream commit 9d05ae531c2cff20d5d527f04e28d28e04379929 ]
+    
+    Initialize this kref once we allocate memory for the struct clk_core so
+    that we can reuse the release function to free any memory associated
+    with the structure. This mostly consolidates code, but also clarifies
+    that the kref lifetime exists once the container structure (struct
+    clk_core) is allocated instead of leaving it in a half-baked state for
+    most of __clk_core_init().
+    
+    Reviewed-by: Douglas Anderson <dianders@chromium.org>
+    Signed-off-by: Stephen Boyd <sboyd@kernel.org>
+    Link: https://lore.kernel.org/r/20240325184204.745706-4-sboyd@kernel.org
+    Stable-dep-of: e581cf5d2162 ("clk: Get runtime PM before walking tree during disable_unused")
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit bc6d766991e1456b54118b7391e4c13b22a616c1
+Author: Konrad Dybcio <konrad.dybcio@linaro.org>
+Date:   Tue Mar 7 14:29:28 2023 +0100
+
+    clk: Print an info line before disabling unused clocks
+    
+    [ Upstream commit 12ca59b91d04df32e41be5a52f0cabba912c11de ]
+    
+    Currently, the regulator framework informs us before calling into
+    their unused cleanup paths, which eases at least some debugging. The
+    same could be beneficial for clocks, so that random shutdowns shortly
+    after most initcalls are done can be less of a guess.
+    
+    Add a pr_info before disabling unused clocks to do so.
+    
+    Reviewed-by: Marijn Suijten <marijn.suijten@somainline.org>
+    Signed-off-by: Konrad Dybcio <konrad.dybcio@linaro.org>
+    Link: https://lore.kernel.org/r/20230307132928.3887737-1-konrad.dybcio@linaro.org
+    Signed-off-by: Stephen Boyd <sboyd@kernel.org>
+    Stable-dep-of: e581cf5d2162 ("clk: Get runtime PM before walking tree during disable_unused")
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit f3d89bc7dd65a0cb5fe908ca60cf8c0972d61946
+Author: Claudiu Beznea <claudiu.beznea@tuxon.dev>
+Date:   Thu Jun 30 18:12:04 2022 +0300
+
+    clk: remove extra empty line
+    
+    [ Upstream commit 79806d338829b2bf903480428d8ce5aab8e2d24b ]
+    
+    Remove extra empty line.
+    
+    Signed-off-by: Claudiu Beznea <claudiu.beznea@microchip.com>
+    Link: https://lore.kernel.org/r/20220630151205.3935560-1-claudiu.beznea@microchip.com
+    Signed-off-by: Stephen Boyd <sboyd@kernel.org>
+    Stable-dep-of: e581cf5d2162 ("clk: Get runtime PM before walking tree during disable_unused")
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit bdd70c8b02e705b6498b816fdc5fe3c1d16d3a70
+Author: Stephen Boyd <sboyd@kernel.org>
+Date:   Thu Feb 17 14:05:53 2022 -0800
+
+    clk: Mark 'all_lists' as const
+    
+    [ Upstream commit 75061a6ff49ba3482c6319ded0c26e6a526b0967 ]
+    
+    This list array doesn't change at runtime. Mark it const to move to RO
+    memory.
+    
+    Signed-off-by: Stephen Boyd <sboyd@kernel.org>
+    Link: https://lore.kernel.org/r/20220217220554.2711696-2-sboyd@kernel.org
+    Stable-dep-of: e581cf5d2162 ("clk: Get runtime PM before walking tree during disable_unused")
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 3254a1f2795235f3457cf47a7ea72429cf371b39
+Author: Stephen Boyd <sboyd@kernel.org>
+Date:   Mon Mar 25 11:41:55 2024 -0700
+
+    clk: Remove prepare_lock hold assertion in __clk_release()
+    
+    [ Upstream commit 8358a76cfb47c9a5af627a0c4e7168aa14fa25f6 ]
+    
+    Removing this assertion lets us move the kref_put() call outside the
+    prepare_lock section. We don't need to hold the prepare_lock here to
+    free memory and destroy the clk_core structure. We've already unlinked
+    the clk from the clk tree and by the time the release function runs
+    nothing holds a reference to the clk_core anymore so anything with the
+    pointer can't access the memory that's being freed anyway. Way back in
+    commit 496eadf821c2 ("clk: Use lockdep asserts to find missing hold of
+    prepare_lock") we didn't need to have this assertion either.
+    
+    Fixes: 496eadf821c2 ("clk: Use lockdep asserts to find missing hold of prepare_lock")
+    Cc: Krzysztof Kozlowski <krzk@kernel.org>
+    Reviewed-by: Douglas Anderson <dianders@chromium.org>
+    Signed-off-by: Stephen Boyd <sboyd@kernel.org>
+    Link: https://lore.kernel.org/r/20240325184204.745706-2-sboyd@kernel.org
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit ce77f3beed0263c6c960cf0694b52cef97557a39
+Author: Dmitry Baryshkov <dmitry.baryshkov@linaro.org>
+Date:   Thu Apr 4 13:07:59 2024 +0300
+
+    drm/panel: visionox-rm69299: don't unregister DSI device
+    
+    [ Upstream commit 9e4d3f4f34455abbaa9930bf6b7575a5cd081496 ]
+    
+    The DSI device for the panel was registered by the DSI host, so it is an
+    error to unregister it from the panel driver. Drop the call to
+    mipi_dsi_device_unregister().
+    
+    Fixes: c7f66d32dd43 ("drm/panel: add support for rm69299 visionox panel")
+    Reviewed-by: Jessica Zhang <quic_jesszhan@quicinc.com>
+    Signed-off-by: Dmitry Baryshkov <dmitry.baryshkov@linaro.org>
+    Link: https://patchwork.freedesktop.org/patch/msgid/20240404-drop-panel-unregister-v1-1-9f56953c5fb9@linaro.org
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit df0991da7db846f7fa4ec6740350f743d3b69b04
+Author: Mikhail Kobuk <m.kobuk@ispras.ru>
+Date:   Thu Apr 11 14:08:52 2024 +0300
+
+    drm: nv04: Fix out of bounds access
+    
+    [ Upstream commit cf92bb778eda7830e79452c6917efa8474a30c1e ]
+    
+    When Output Resource (dcb->or) value is assigned in
+    fabricate_dcb_output(), there may be out of bounds access to
+    dac_users array in case dcb->or is zero because ffs(dcb->or) is
+    used as index there.
+    The 'or' argument of fabricate_dcb_output() must be interpreted as a
+    number of bit to set, not value.
+    
+    Utilize macros from 'enum nouveau_or' in calls instead of hardcoding.
+    
+    Found by Linux Verification Center (linuxtesting.org) with SVACE.
+    
+    Fixes: 2e5702aff395 ("drm/nouveau: fabricate DCB encoder table for iMac G4")
+    Fixes: 670820c0e6a9 ("drm/nouveau: Workaround incorrect DCB entry on a GeForce3 Ti 200.")
+    Signed-off-by: Mikhail Kobuk <m.kobuk@ispras.ru>
+    Signed-off-by: Danilo Krummrich <dakr@redhat.com>
+    Link: https://patchwork.freedesktop.org/patch/msgid/20240411110854.16701-1-m.kobuk@ispras.ru
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 3076b3c38a704e10df5e143c213653309d532538
+Author: Peter Oberparleiter <oberpar@linux.ibm.com>
+Date:   Wed Apr 10 11:46:19 2024 +0200
+
+    s390/cio: fix race condition during online processing
+    
+    [ Upstream commit 2d8527f2f911fab84aec04df4788c0c23af3df48 ]
+    
+    A race condition exists in ccw_device_set_online() that can cause the
+    online process to fail, leaving the affected device in an inconsistent
+    state. As a result, subsequent attempts to set that device online fail
+    with return code ENODEV.
+    
+    The problem occurs when a path verification request arrives after
+    a wait for final device state completed, but before the result state
+    is evaluated.
+    
+    Fix this by ensuring that the CCW-device lock is held between
+    determining final state and checking result state.
+    
+    Note that since:
+    
+    commit 2297791c92d0 ("s390/cio: dont unregister subchannel from child-drivers")
+    
+    path verification requests are much more likely to occur during boot,
+    resulting in an increased chance of this race condition occurring.
+    
+    Fixes: 2297791c92d0 ("s390/cio: dont unregister subchannel from child-drivers")
+    Reviewed-by: Alexandra Winter <wintera@linux.ibm.com>
+    Reviewed-by: Vineeth Vijayan <vneethv@linux.ibm.com>
+    Signed-off-by: Peter Oberparleiter <oberpar@linux.ibm.com>
+    Signed-off-by: Alexander Gordeev <agordeev@linux.ibm.com>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 498f7b8037da2dafa67ed080a7f18d078ceaef2a
+Author: Peter Oberparleiter <oberpar@linux.ibm.com>
+Date:   Wed Apr 10 11:46:18 2024 +0200
+
+    s390/qdio: handle deferred cc1
+    
+    [ Upstream commit 607638faf2ff1cede37458111496e7cc6c977f6f ]
+    
+    A deferred condition code 1 response indicates that I/O was not started
+    and should be retried. The current QDIO implementation handles a cc1
+    response as I/O error, resulting in a failed QDIO setup. This can happen
+    for example when a path verification request arrives at the same time
+    as QDIO setup I/O is started.
+    
+    Fix this by retrying the QDIO setup I/O when a cc1 response is received.
+    
+    Note that since
+    
+    commit 2297791c92d0 ("s390/cio: dont unregister subchannel from child-drivers")
+    commit 5ef1dc40ffa6 ("s390/cio: fix invalid -EBUSY on ccw_device_start")
+    
+    deferred cc1 responses are much more likely to occur. See the commit
+    message of the latter for more background information.
+    
+    Fixes: 2297791c92d0 ("s390/cio: dont unregister subchannel from child-drivers")
+    Reviewed-by: Alexandra Winter <wintera@linux.ibm.com>
+    Signed-off-by: Peter Oberparleiter <oberpar@linux.ibm.com>
+    Signed-off-by: Alexander Gordeev <agordeev@linux.ibm.com>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 45d70025006c8c6fe6d5bd9526058f682962d1a4
+Author: Michael Guralnik <michaelgur@nvidia.com>
+Date:   Wed Apr 3 12:03:46 2024 +0300
+
+    RDMA/mlx5: Fix port number for counter query in multi-port configuration
+    
+    [ Upstream commit be121ffb384f53e966ee7299ffccc6eeb61bc73d ]
+    
+    Set the correct port when querying PPCNT in multi-port configuration.
+    Distinguish between cases where switchdev mode was enabled to multi-port
+    configuration and don't overwrite the queried port to 1 in multi-port
+    case.
+    
+    Fixes: 74b30b3ad5ce ("RDMA/mlx5: Set local port to one when accessing counters")
+    Signed-off-by: Michael Guralnik <michaelgur@nvidia.com>
+    Link: https://lore.kernel.org/r/9bfcc8ade958b760a51408c3ad654a01b11f7d76.1712134988.git.leon@kernel.org
+    Signed-off-by: Leon Romanovsky <leon@kernel.org>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 8261489de3afbaa53773121eb420b66dc8750936
+Author: Mark Zhang <markzhang@nvidia.com>
+Date:   Fri Mar 22 13:20:49 2024 +0200
+
+    RDMA/cm: Print the old state when cm_destroy_id gets timeout
+    
+    [ Upstream commit b68e1acb5834ed1a2ad42d9d002815a8bae7c0b6 ]
+    
+    The old state is helpful for debugging, as the current state is always
+    IB_CM_IDLE when timeout happens.
+    
+    Fixes: 96d9cbe2f2ff ("RDMA/cm: add timeout to cm_destroy_id wait")
+    Signed-off-by: Mark Zhang <markzhang@nvidia.com>
+    Link: https://lore.kernel.org/r/20240322112049.2022994-1-markzhang@nvidia.com
+    Signed-off-by: Leon Romanovsky <leon@kernel.org>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 2973b4a5eae75a8d5e10e4f225b971db263ca445
+Author: Yanjun.Zhu <yanjun.zhu@linux.dev>
+Date:   Thu Mar 14 07:51:40 2024 +0100
+
+    RDMA/rxe: Fix the problem "mutex_destroy missing"
+    
+    [ Upstream commit 481047d7e8391d3842ae59025806531cdad710d9 ]
+    
+    When a mutex lock is not used any more, the function mutex_destroy
+    should be called to mark the mutex lock uninitialized.
+    
+    Fixes: 8700e3e7c485 ("Soft RoCE driver")
+    Signed-off-by: Yanjun.Zhu <yanjun.zhu@linux.dev>
+    Link: https://lore.kernel.org/r/20240314065140.27468-1-yanjun.zhu@linux.dev
+    Reviewed-by: Daisuke Matsuda <matsuda-daisuke@fujitsu.com>
+    Signed-off-by: Leon Romanovsky <leon@kernel.org>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 831157756e3ce29f64019041eaeb5d4e8a131fbb
+Author: Siddharth Vadapalli <s-vadapalli@ti.com>
+Date:   Wed Apr 17 15:24:25 2024 +0530
+
+    net: ethernet: ti: am65-cpsw-nuss: cleanup DMA Channels before using them
+    
+    [ Upstream commit c24cd679b075b0e953ea167b0aa2b2d59e4eba7f ]
+    
+    The TX and RX DMA Channels used by the driver to exchange data with CPSW
+    are not guaranteed to be in a clean state during driver initialization.
+    The Bootloader could have used the same DMA Channels without cleaning them
+    up in the event of failure. Thus, reset and disable the DMA Channels to
+    ensure that they are in a clean state before using them.
+    
+    Fixes: 93a76530316a ("net: ethernet: ti: introduce am65x/j721e gigabit eth subsystem driver")
+    Reported-by: Schuyler Patton <spatton@ti.com>
+    Signed-off-by: Siddharth Vadapalli <s-vadapalli@ti.com>
+    Reviewed-by: Roger Quadros <rogerq@kernel.org>
+    Link: https://lore.kernel.org/r/20240417095425.2253876-1-s-vadapalli@ti.com
+    Signed-off-by: Jakub Kicinski <kuba@kernel.org>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 9495b7a412e30249360db191b4350c3829d6a781
+Author: Arınç ÜNAL <arinc.unal@arinc9.com>
+Date:   Sat Apr 13 16:01:39 2024 +0300
+
+    net: dsa: mt7530: fix mirroring frames received on local port
+    
+    [ Upstream commit d59cf049c8378677053703e724808836f180888e ]
+    
+    This switch intellectual property provides a bit on the ARL global control
+    register which controls allowing mirroring frames which are received on the
+    local port (monitor port). This bit is unset after reset.
+    
+    This ability must be enabled to fully support the port mirroring feature on
+    this switch intellectual property.
+    
+    Therefore, this patch fixes the traffic not being reflected on a port,
+    which would be configured like below:
+    
+      tc qdisc add dev swp0 clsact
+    
+      tc filter add dev swp0 ingress matchall skip_sw \
+      action mirred egress mirror dev swp0
+    
+    As a side note, this configuration provides the hairpinning feature for a
+    single port.
+    
+    Fixes: 37feab6076aa ("net: dsa: mt7530: add support for port mirroring")
+    Signed-off-by: Arınç ÜNAL <arinc.unal@arinc9.com>
+    Signed-off-by: David S. Miller <davem@davemloft.net>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit a50dbeca28acf7051dfa92786b85f704c75db6eb
+Author: Lei Chen <lei.chen@smartx.com>
+Date:   Sun Apr 14 22:02:46 2024 -0400
+
+    tun: limit printing rate when illegal packet received by tun dev
+    
+    [ Upstream commit f8bbc07ac535593139c875ffa19af924b1084540 ]
+    
+    vhost_worker will call tun call backs to receive packets. If too many
+    illegal packets arrives, tun_do_read will keep dumping packet contents.
+    When console is enabled, it will costs much more cpu time to dump
+    packet and soft lockup will be detected.
+    
+    net_ratelimit mechanism can be used to limit the dumping rate.
+    
+    PID: 33036    TASK: ffff949da6f20000  CPU: 23   COMMAND: "vhost-32980"
+     #0 [fffffe00003fce50] crash_nmi_callback at ffffffff89249253
+     #1 [fffffe00003fce58] nmi_handle at ffffffff89225fa3
+     #2 [fffffe00003fceb0] default_do_nmi at ffffffff8922642e
+     #3 [fffffe00003fced0] do_nmi at ffffffff8922660d
+     #4 [fffffe00003fcef0] end_repeat_nmi at ffffffff89c01663
+        [exception RIP: io_serial_in+20]
+        RIP: ffffffff89792594  RSP: ffffa655314979e8  RFLAGS: 00000002
+        RAX: ffffffff89792500  RBX: ffffffff8af428a0  RCX: 0000000000000000
+        RDX: 00000000000003fd  RSI: 0000000000000005  RDI: ffffffff8af428a0
+        RBP: 0000000000002710   R8: 0000000000000004   R9: 000000000000000f
+        R10: 0000000000000000  R11: ffffffff8acbf64f  R12: 0000000000000020
+        R13: ffffffff8acbf698  R14: 0000000000000058  R15: 0000000000000000
+        ORIG_RAX: ffffffffffffffff  CS: 0010  SS: 0018
+     #5 [ffffa655314979e8] io_serial_in at ffffffff89792594
+     #6 [ffffa655314979e8] wait_for_xmitr at ffffffff89793470
+     #7 [ffffa65531497a08] serial8250_console_putchar at ffffffff897934f6
+     #8 [ffffa65531497a20] uart_console_write at ffffffff8978b605
+     #9 [ffffa65531497a48] serial8250_console_write at ffffffff89796558
+     #10 [ffffa65531497ac8] console_unlock at ffffffff89316124
+     #11 [ffffa65531497b10] vprintk_emit at ffffffff89317c07
+     #12 [ffffa65531497b68] printk at ffffffff89318306
+     #13 [ffffa65531497bc8] print_hex_dump at ffffffff89650765
+     #14 [ffffa65531497ca8] tun_do_read at ffffffffc0b06c27 [tun]
+     #15 [ffffa65531497d38] tun_recvmsg at ffffffffc0b06e34 [tun]
+     #16 [ffffa65531497d68] handle_rx at ffffffffc0c5d682 [vhost_net]
+     #17 [ffffa65531497ed0] vhost_worker at ffffffffc0c644dc [vhost]
+     #18 [ffffa65531497f10] kthread at ffffffff892d2e72
+     #19 [ffffa65531497f50] ret_from_fork at ffffffff89c0022f
+    
+    Fixes: ef3db4a59542 ("tun: avoid BUG, dump packet on GSO errors")
+    Signed-off-by: Lei Chen <lei.chen@smartx.com>
+    Reviewed-by: Willem de Bruijn <willemb@google.com>
+    Acked-by: Jason Wang <jasowang@redhat.com>
+    Reviewed-by: Eric Dumazet <edumazet@google.com>
+    Acked-by: Michael S. Tsirkin <mst@redhat.com>
+    Link: https://lore.kernel.org/r/20240415020247.2207781-1-lei.chen@smartx.com
+    Signed-off-by: Jakub Kicinski <kuba@kernel.org>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit ae3f9e1221b31b18dbd4c4b85d08574996bbd973
+Author: Kuniyuki Iwashima <kuniyu@amazon.com>
+Date:   Wed Apr 10 10:10:16 2024 -0700
+
+    af_unix: Don't peek OOB data without MSG_OOB.
+    
+    [ Upstream commit 22dd70eb2c3d754862964377a75abafd3167346b ]
+    
+    Currently, we can read OOB data without MSG_OOB by using MSG_PEEK
+    when OOB data is sitting on the front row, which is apparently
+    wrong.
+    
+      >>> from socket import *
+      >>> c1, c2 = socketpair(AF_UNIX, SOCK_STREAM)
+      >>> c1.send(b'a', MSG_OOB)
+      1
+      >>> c2.recv(1, MSG_PEEK | MSG_DONTWAIT)
+      b'a'
+    
+    If manage_oob() is called when no data has been copied, we only
+    check if the socket enables SO_OOBINLINE or MSG_PEEK is not used.
+    Otherwise, the skb is returned as is.
+    
+    However, here we should return NULL if MSG_PEEK is set and no data
+    has been copied.
+    
+    Also, in such a case, we should not jump to the redo label because
+    we will be caught in the loop and hog the CPU until normal data
+    comes in.
+    
+    Then, we need to handle skb == NULL case with the if-clause below
+    the manage_oob() block.
+    
+    With this patch:
+    
+      >>> from socket import *
+      >>> c1, c2 = socketpair(AF_UNIX, SOCK_STREAM)
+      >>> c1.send(b'a', MSG_OOB)
+      1
+      >>> c2.recv(1, MSG_PEEK | MSG_DONTWAIT)
+      Traceback (most recent call last):
+        File "<stdin>", line 1, in <module>
+      BlockingIOError: [Errno 11] Resource temporarily unavailable
+    
+    Fixes: 314001f0bf92 ("af_unix: Add OOB support")
+    Signed-off-by: Kuniyuki Iwashima <kuniyu@amazon.com>
+    Link: https://lore.kernel.org/r/20240410171016.7621-3-kuniyu@amazon.com
+    Signed-off-by: Jakub Kicinski <kuba@kernel.org>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 1738dfe72c52d6bb43ecc8b0daacfd67f651e93b
+Author: Kuniyuki Iwashima <kuniyu@amazon.com>
+Date:   Wed Apr 10 10:10:15 2024 -0700
+
+    af_unix: Call manage_oob() for every skb in unix_stream_read_generic().
+    
+    [ Upstream commit 283454c8a123072e5c386a5a2b5fc576aa455b6f ]
+    
+    When we call recv() for AF_UNIX socket, we first peek one skb and
+    calls manage_oob() to check if the skb is sent with MSG_OOB.
+    
+    However, when we fetch the next (and the following) skb, manage_oob()
+    is not called now, leading a wrong behaviour.
+    
+    Let's say a socket send()s "hello" with MSG_OOB and the peer tries
+    to recv() 5 bytes with MSG_PEEK.  Here, we should get only "hell"
+    without 'o', but actually not:
+    
+      >>> from socket import *
+      >>> c1, c2 = socketpair(AF_UNIX, SOCK_STREAM)
+      >>> c1.send(b'hello', MSG_OOB)
+      5
+      >>> c2.recv(5, MSG_PEEK)
+      b'hello'
+    
+    The first skb fills 4 bytes, and the next skb is peeked but not
+    properly checked by manage_oob().
+    
+    Let's move up the again label to call manage_oob() for evry skb.
+    
+    With this patch:
+    
+      >>> from socket import *
+      >>> c1, c2 = socketpair(AF_UNIX, SOCK_STREAM)
+      >>> c1.send(b'hello', MSG_OOB)
+      5
+      >>> c2.recv(5, MSG_PEEK)
+      b'hell'
+    
+    Fixes: 314001f0bf92 ("af_unix: Add OOB support")
+    Signed-off-by: Kuniyuki Iwashima <kuniyu@amazon.com>
+    Link: https://lore.kernel.org/r/20240410171016.7621-2-kuniyu@amazon.com
+    Signed-off-by: Jakub Kicinski <kuba@kernel.org>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit e719b52d0c56989b0f3475a03a6d64f182c85b56
+Author: Pablo Neira Ayuso <pablo@netfilter.org>
+Date:   Thu Apr 11 00:09:00 2024 +0200
+
+    netfilter: flowtable: incorrect pppoe tuple
+    
+    [ Upstream commit 6db5dc7b351b9569940cd1cf445e237c42cd6d27 ]
+    
+    pppoe traffic reaching ingress path does not match the flowtable entry
+    because the pppoe header is expected to be at the network header offset.
+    This bug causes a mismatch in the flow table lookup, so pppoe packets
+    enter the classical forwarding path.
+    
+    Fixes: 72efd585f714 ("netfilter: flowtable: add pppoe support")
+    Signed-off-by: Pablo Neira Ayuso <pablo@netfilter.org>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit d06977b9a4109f8738bb276125eb6a0b772bc433
+Author: Pablo Neira Ayuso <pablo@netfilter.org>
+Date:   Tue Apr 9 13:47:33 2024 +0200
+
+    netfilter: flowtable: validate pppoe header
+    
+    [ Upstream commit 87b3593bed1868b2d9fe096c01bcdf0ea86cbebf ]
+    
+    Ensure there is sufficient room to access the protocol field of the
+    PPPoe header. Validate it once before the flowtable lookup, then use a
+    helper function to access protocol field.
+    
+    Reported-by: syzbot+b6f07e1c07ef40199081@syzkaller.appspotmail.com
+    Fixes: 72efd585f714 ("netfilter: flowtable: add pppoe support")
+    Signed-off-by: Pablo Neira Ayuso <pablo@netfilter.org>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 5345d78ae64d5a760c211cd2da995dc71c5b29e4
+Author: Vlad Buslov <vladbu@nvidia.com>
+Date:   Wed Jun 15 12:43:55 2022 +0200
+
+    netfilter: nf_flow_table: count pending offload workqueue tasks
+    
+    [ Upstream commit b038177636f83bbf87c2b238706474145dd2cd04 ]
+    
+    To improve hardware offload debuggability count pending 'add', 'del' and
+    'stats' flow_table offload workqueue tasks. Counters are incremented before
+    scheduling new task and decremented when workqueue handler finishes
+    executing. These counters allow user to diagnose congestion on hardware
+    offload workqueues that can happen when either CPU is starved and workqueue
+    jobs are executed at lower rate than new ones are added or when
+    hardware/driver can't keep up with the rate.
+    
+    Implement the described counters as percpu counters inside new struct
+    netns_ft which is stored inside struct net. Expose them via new procfs file
+    '/proc/net/stats/nf_flowtable' that is similar to existing 'nf_conntrack'
+    file.
+    
+    Signed-off-by: Vlad Buslov <vladbu@nvidia.com>
+    Signed-off-by: Oz Shlomo <ozsh@nvidia.com>
+    Signed-off-by: Pablo Neira Ayuso <pablo@netfilter.org>
+    Stable-dep-of: 87b3593bed18 ("netfilter: flowtable: validate pppoe header")
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 7a1679e2d9bfa3b5f8755c2c7113e54b7d42bd46
+Author: Florian Westphal <fw@strlen.de>
+Date:   Wed Apr 10 21:05:13 2024 +0200
+
+    netfilter: nft_set_pipapo: do not free live element
+    
+    [ Upstream commit 3cfc9ec039af60dbd8965ae085b2c2ccdcfbe1cc ]
+    
+    Pablo reports a crash with large batches of elements with a
+    back-to-back add/remove pattern.  Quoting Pablo:
+    
+      add_elem("00000000") timeout 100 ms
+      ...
+      add_elem("0000000X") timeout 100 ms
+      del_elem("0000000X") <---------------- delete one that was just added
+      ...
+      add_elem("00005000") timeout 100 ms
+    
+      1) nft_pipapo_remove() removes element 0000000X
+      Then, KASAN shows a splat.
+    
+    Looking at the remove function there is a chance that we will drop a
+    rule that maps to a non-deactivated element.
+    
+    Removal happens in two steps, first we do a lookup for key k and return the
+    to-be-removed element and mark it as inactive in the next generation.
+    Then, in a second step, the element gets removed from the set/map.
+    
+    The _remove function does not work correctly if we have more than one
+    element that share the same key.
+    
+    This can happen if we insert an element into a set when the set already
+    holds an element with same key, but the element mapping to the existing
+    key has timed out or is not active in the next generation.
+    
+    In such case its possible that removal will unmap the wrong element.
+    If this happens, we will leak the non-deactivated element, it becomes
+    unreachable.
+    
+    The element that got deactivated (and will be freed later) will
+    remain reachable in the set data structure, this can result in
+    a crash when such an element is retrieved during lookup (stale
+    pointer).
+    
+    Add a check that the fully matching key does in fact map to the element
+    that we have marked as inactive in the deactivation step.
+    If not, we need to continue searching.
+    
+    Add a bug/warn trap at the end of the function as well, the remove
+    function must not ever be called with an invisible/unreachable/non-existent
+    element.
+    
+    v2: avoid uneeded temporary variable (Stefano)
+    
+    Fixes: 3c4287f62044 ("nf_tables: Add set type for arbitrary concatenation of ranges")
+    Reported-by: Pablo Neira Ayuso <pablo@netfilter.org>
+    Reviewed-by: Stefano Brivio <sbrivio@redhat.com>
+    Signed-off-by: Florian Westphal <fw@strlen.de>
+    Signed-off-by: Pablo Neira Ayuso <pablo@netfilter.org>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit dceb683ab87ca3666a9bb5c0158528b646faedc4
+Author: Pablo Neira Ayuso <pablo@netfilter.org>
+Date:   Tue Apr 9 11:24:59 2024 +0200
+
+    netfilter: br_netfilter: skip conntrack input hook for promisc packets
+    
+    [ Upstream commit 751de2012eafa4d46d8081056761fa0e9cc8a178 ]
+    
+    For historical reasons, when bridge device is in promisc mode, packets
+    that are directed to the taps follow bridge input hook path. This patch
+    adds a workaround to reset conntrack for these packets.
+    
+    Jianbo Liu reports warning splats in their test infrastructure where
+    cloned packets reach the br_netfilter input hook to confirm the
+    conntrack object.
+    
+    Scratch one bit from BR_INPUT_SKB_CB to annotate that this packet has
+    reached the input hook because it is passed up to the bridge device to
+    reach the taps.
+    
+    [   57.571874] WARNING: CPU: 1 PID: 0 at net/bridge/br_netfilter_hooks.c:616 br_nf_local_in+0x157/0x180 [br_netfilter]
+    [   57.572749] Modules linked in: xt_MASQUERADE nf_conntrack_netlink nfnetlink iptable_nat xt_addrtype xt_conntrack nf_nat br_netfilter rpcsec_gss_krb5 auth_rpcgss oid_registry overlay rpcrdma rdma_ucm ib_iser libiscsi scsi_transport_isc si ib_umad rdma_cm ib_ipoib iw_cm ib_cm mlx5_ib ib_uverbs ib_core mlx5ctl mlx5_core
+    [   57.575158] CPU: 1 PID: 0 Comm: swapper/1 Not tainted 6.8.0+ #19
+    [   57.575700] Hardware name: QEMU Standard PC (Q35 + ICH9, 2009), BIOS rel-1.13.0-0-gf21b5a4aeb02-prebuilt.qemu.org 04/01/2014
+    [   57.576662] RIP: 0010:br_nf_local_in+0x157/0x180 [br_netfilter]
+    [   57.577195] Code: fe ff ff 41 bd 04 00 00 00 be 04 00 00 00 e9 4a ff ff ff be 04 00 00 00 48 89 ef e8 f3 a9 3c e1 66 83 ad b4 00 00 00 04 eb 91 <0f> 0b e9 f1 fe ff ff 0f 0b e9 df fe ff ff 48 89 df e8 b3 53 47 e1
+    [   57.578722] RSP: 0018:ffff88885f845a08 EFLAGS: 00010202
+    [   57.579207] RAX: 0000000000000002 RBX: ffff88812dfe8000 RCX: 0000000000000000
+    [   57.579830] RDX: ffff88885f845a60 RSI: ffff8881022dc300 RDI: 0000000000000000
+    [   57.580454] RBP: ffff88885f845a60 R08: 0000000000000001 R09: 0000000000000003
+    [   57.581076] R10: 00000000ffff1300 R11: 0000000000000002 R12: 0000000000000000
+    [   57.581695] R13: ffff8881047ffe00 R14: ffff888108dbee00 R15: ffff88814519b800
+    [   57.582313] FS:  0000000000000000(0000) GS:ffff88885f840000(0000) knlGS:0000000000000000
+    [   57.583040] CS:  0010 DS: 0000 ES: 0000 CR0: 0000000080050033
+    [   57.583564] CR2: 000000c4206aa000 CR3: 0000000103847001 CR4: 0000000000370eb0
+    [   57.584194] DR0: 0000000000000000 DR1: 0000000000000000 DR2:
+    0000000000000000
+    [   57.584820] DR3: 0000000000000000 DR6: 00000000fffe0ff0 DR7:
+    0000000000000400
+    [   57.585440] Call Trace:
+    [   57.585721]  <IRQ>
+    [   57.585976]  ? __warn+0x7d/0x130
+    [   57.586323]  ? br_nf_local_in+0x157/0x180 [br_netfilter]
+    [   57.586811]  ? report_bug+0xf1/0x1c0
+    [   57.587177]  ? handle_bug+0x3f/0x70
+    [   57.587539]  ? exc_invalid_op+0x13/0x60
+    [   57.587929]  ? asm_exc_invalid_op+0x16/0x20
+    [   57.588336]  ? br_nf_local_in+0x157/0x180 [br_netfilter]
+    [   57.588825]  nf_hook_slow+0x3d/0xd0
+    [   57.589188]  ? br_handle_vlan+0x4b/0x110
+    [   57.589579]  br_pass_frame_up+0xfc/0x150
+    [   57.589970]  ? br_port_flags_change+0x40/0x40
+    [   57.590396]  br_handle_frame_finish+0x346/0x5e0
+    [   57.590837]  ? ipt_do_table+0x32e/0x430
+    [   57.591221]  ? br_handle_local_finish+0x20/0x20
+    [   57.591656]  br_nf_hook_thresh+0x4b/0xf0 [br_netfilter]
+    [   57.592286]  ? br_handle_local_finish+0x20/0x20
+    [   57.592802]  br_nf_pre_routing_finish+0x178/0x480 [br_netfilter]
+    [   57.593348]  ? br_handle_local_finish+0x20/0x20
+    [   57.593782]  ? nf_nat_ipv4_pre_routing+0x25/0x60 [nf_nat]
+    [   57.594279]  br_nf_pre_routing+0x24c/0x550 [br_netfilter]
+    [   57.594780]  ? br_nf_hook_thresh+0xf0/0xf0 [br_netfilter]
+    [   57.595280]  br_handle_frame+0x1f3/0x3d0
+    [   57.595676]  ? br_handle_local_finish+0x20/0x20
+    [   57.596118]  ? br_handle_frame_finish+0x5e0/0x5e0
+    [   57.596566]  __netif_receive_skb_core+0x25b/0xfc0
+    [   57.597017]  ? __napi_build_skb+0x37/0x40
+    [   57.597418]  __netif_receive_skb_list_core+0xfb/0x220
+    
+    Fixes: 62e7151ae3eb ("netfilter: bridge: confirm multicast packets before passing them up the stack")
+    Reported-by: Jianbo Liu <jianbol@nvidia.com>
+    Signed-off-by: Pablo Neira Ayuso <pablo@netfilter.org>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 379bf7257bc5f2a1b1ca8514e08a871b7bf6d920
+Author: Ziyang Xuan <william.xuanziyang@huawei.com>
+Date:   Sun Apr 7 14:56:05 2024 +0800
+
+    netfilter: nf_tables: Fix potential data-race in __nft_obj_type_get()
+    
+    [ Upstream commit d78d867dcea69c328db30df665be5be7d0148484 ]
+    
+    nft_unregister_obj() can concurrent with __nft_obj_type_get(),
+    and there is not any protection when iterate over nf_tables_objects
+    list in __nft_obj_type_get(). Therefore, there is potential data-race
+    of nf_tables_objects list entry.
+    
+    Use list_for_each_entry_rcu() to iterate over nf_tables_objects
+    list in __nft_obj_type_get(), and use rcu_read_lock() in the caller
+    nft_obj_type_get() to protect the entire type query process.
+    
+    Fixes: e50092404c1b ("netfilter: nf_tables: add stateful objects")
+    Signed-off-by: Ziyang Xuan <william.xuanziyang@huawei.com>
+    Signed-off-by: Pablo Neira Ayuso <pablo@netfilter.org>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 0b6de00206adbbfc6373b3ae38d2a6f197987907
+Author: Ziyang Xuan <william.xuanziyang@huawei.com>
+Date:   Sun Apr 7 14:56:04 2024 +0800
+
+    netfilter: nf_tables: Fix potential data-race in __nft_expr_type_get()
+    
+    [ Upstream commit f969eb84ce482331a991079ab7a5c4dc3b7f89bf ]
+    
+    nft_unregister_expr() can concurrent with __nft_expr_type_get(),
+    and there is not any protection when iterate over nf_tables_expressions
+    list in __nft_expr_type_get(). Therefore, there is potential data-race
+    of nf_tables_expressions list entry.
+    
+    Use list_for_each_entry_rcu() to iterate over nf_tables_expressions
+    list in __nft_expr_type_get(), and use rcu_read_lock() in the caller
+    nft_expr_type_get() to protect the entire type query process.
+    
+    Fixes: ef1f7df9170d ("netfilter: nf_tables: expression ops overloading")
+    Signed-off-by: Ziyang Xuan <william.xuanziyang@huawei.com>
+    Signed-off-by: Pablo Neira Ayuso <pablo@netfilter.org>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit fc1021337e59595488d53d7a20a0cbb684e387fd
+Author: Chuck Lever <chuck.lever@oracle.com>
+Date:   Fri Apr 19 13:18:36 2024 +0200
+
+    Revert "lockd: introduce safe async lock op"
+    
+    This reverts commit 2267b2e84593bd3d61a1188e68fba06307fa9dab.
+    
+    ltp test fcntl17 fails on v5.15.154. This was bisected to commit
+    2267b2e84593 ("lockd: introduce safe async lock op").
+    
+    Reported-by: Harshit Mogalapalli <harshit.m.mogalapalli@oracle.com>
+    Cc: stable@vger.kernel.org
+    Signed-off-by: Chuck Lever <chuck.lever@oracle.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 2a3073d58382157ab396734ed4e421ba9e969db1
+Author: Siddh Raman Pant <siddh.raman.pant@oracle.com>
+Date:   Thu Apr 18 18:58:06 2024 +0530
+
+    Revert "tracing/trigger: Fix to return error if failed to alloc snapshot"
+    
+    This reverts commit b5085b5ac1d96ea2a8a6240f869655176ce44197 which is
+    commit 0958b33ef5a04ed91f61cef4760ac412080c4e08 upstream.
+    
+    The change has an incorrect assumption about the return value because
+    in the current stable trees for versions 5.15 and before, the following
+    commit responsible for making 0 a success value is not present:
+    b8cc44a4d3c1 ("tracing: Remove logic for registering multiple event triggers at a time")
+    
+    The return value should be 0 on failure in the current tree, because in
+    the functions event_trigger_callback() and event_enable_trigger_func(),
+    we have:
+    
+            ret = cmd_ops->reg(glob, trigger_ops, trigger_data, file);
+            /*
+             * The above returns on success the # of functions enabled,
+             * but if it didn't find any functions it returns zero.
+             * Consider no functions a failure too.
+             */
+            if (!ret) {
+                    ret = -ENOENT;
+    
+    Cc: stable@kernel.org # 5.15, 5.10, 5.4, 4.19
+    Signed-off-by: Siddh Raman Pant <siddh.raman.pant@oracle.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 2df2dd27066cdba8041e46a64362325626bdfb2e
+Author: Zheng Yejian <zhengyejian1@huawei.com>
+Date:   Wed Apr 10 09:58:02 2024 +0800
+
+    kprobes: Fix possible use-after-free issue on kprobe registration
+    
+    commit 325f3fb551f8cd672dbbfc4cf58b14f9ee3fc9e8 upstream.
+    
+    When unloading a module, its state is changing MODULE_STATE_LIVE ->
+     MODULE_STATE_GOING -> MODULE_STATE_UNFORMED. Each change will take
+    a time. `is_module_text_address()` and `__module_text_address()`
+    works with MODULE_STATE_LIVE and MODULE_STATE_GOING.
+    If we use `is_module_text_address()` and `__module_text_address()`
+    separately, there is a chance that the first one is succeeded but the
+    next one is failed because module->state becomes MODULE_STATE_UNFORMED
+    between those operations.
+    
+    In `check_kprobe_address_safe()`, if the second `__module_text_address()`
+    is failed, that is ignored because it expected a kernel_text address.
+    But it may have failed simply because module->state has been changed
+    to MODULE_STATE_UNFORMED. In this case, arm_kprobe() will try to modify
+    non-exist module text address (use-after-free).
+    
+    To fix this problem, we should not use separated `is_module_text_address()`
+    and `__module_text_address()`, but use only `__module_text_address()`
+    once and do `try_module_get(module)` which is only available with
+    MODULE_STATE_LIVE.
+    
+    Link: https://lore.kernel.org/all/20240410015802.265220-1-zhengyejian1@huawei.com/
+    
+    Fixes: 28f6c37a2910 ("kprobes: Forbid probing on trampoline and BPF code areas")
+    Cc: stable@vger.kernel.org
+    Signed-off-by: Zheng Yejian <zhengyejian1@huawei.com>
+    Signed-off-by: Masami Hiramatsu (Google) <mhiramat@kernel.org>
+    [Fix conflict due to lack dependency
+    commit 223a76b268c9 ("kprobes: Fix coding style issues")]
+    Signed-off-by: Zheng Yejian <zhengyejian1@huawei.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 1253e34a548fcf978191f8749ba97318b0920a40
+Author: Daniel Borkmann <daniel@iogearbox.net>
+Date:   Thu Jan 13 11:11:30 2022 +0000
+
+    bpf: Fix ringbuf memory type confusion when passing to helpers
+    
+    commit a672b2e36a648afb04ad3bda93b6bda947a479a5 upstream.
+    
+    The bpf_ringbuf_submit() and bpf_ringbuf_discard() have ARG_PTR_TO_ALLOC_MEM
+    in their bpf_func_proto definition as their first argument, and thus both expect
+    the result from a prior bpf_ringbuf_reserve() call which has a return type of
+    RET_PTR_TO_ALLOC_MEM_OR_NULL.
+    
+    While the non-NULL memory from bpf_ringbuf_reserve() can be passed to other
+    helpers, the two sinks (bpf_ringbuf_submit(), bpf_ringbuf_discard()) right now
+    only enforce a register type of PTR_TO_MEM.
+    
+    This can lead to potential type confusion since it would allow other PTR_TO_MEM
+    memory to be passed into the two sinks which did not come from bpf_ringbuf_reserve().
+    
+    Add a new MEM_ALLOC composable type attribute for PTR_TO_MEM, and enforce that:
+    
+     - bpf_ringbuf_reserve() returns NULL or PTR_TO_MEM | MEM_ALLOC
+     - bpf_ringbuf_submit() and bpf_ringbuf_discard() only take PTR_TO_MEM | MEM_ALLOC
+       but not plain PTR_TO_MEM arguments via ARG_PTR_TO_ALLOC_MEM
+     - however, other helpers might treat PTR_TO_MEM | MEM_ALLOC as plain PTR_TO_MEM
+       to populate the memory area when they use ARG_PTR_TO_{UNINIT_,}MEM in their
+       func proto description
+    
+    Fixes: 457f44363a88 ("bpf: Implement BPF ring buffer and verifier support for it")
+    Reported-by: Alexei Starovoitov <ast@kernel.org>
+    Signed-off-by: Daniel Borkmann <daniel@iogearbox.net>
+    Acked-by: John Fastabend <john.fastabend@gmail.com>
+    Acked-by: Alexei Starovoitov <ast@kernel.org>
+    Signed-off-by: Edward Liaw <edliaw@google.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit cc9ac419351b5cb3fcf21603e7c0697a93245305
+Author: Daniel Borkmann <daniel@iogearbox.net>
+Date:   Tue Jan 11 14:43:41 2022 +0000
+
+    bpf: Fix out of bounds access for ringbuf helpers
+    
+    commit 64620e0a1e712a778095bd35cbb277dc2259281f upstream.
+    
+    Both bpf_ringbuf_submit() and bpf_ringbuf_discard() have ARG_PTR_TO_ALLOC_MEM
+    in their bpf_func_proto definition as their first argument. They both expect
+    the result from a prior bpf_ringbuf_reserve() call which has a return type of
+    RET_PTR_TO_ALLOC_MEM_OR_NULL.
+    
+    Meaning, after a NULL check in the code, the verifier will promote the register
+    type in the non-NULL branch to a PTR_TO_MEM and in the NULL branch to a known
+    zero scalar. Generally, pointer arithmetic on PTR_TO_MEM is allowed, so the
+    latter could have an offset.
+    
+    The ARG_PTR_TO_ALLOC_MEM expects a PTR_TO_MEM register type. However, the non-
+    zero result from bpf_ringbuf_reserve() must be fed into either bpf_ringbuf_submit()
+    or bpf_ringbuf_discard() but with the original offset given it will then read
+    out the struct bpf_ringbuf_hdr mapping.
+    
+    The verifier missed to enforce a zero offset, so that out of bounds access
+    can be triggered which could be used to escalate privileges if unprivileged
+    BPF was enabled (disabled by default in kernel).
+    
+    Fixes: 457f44363a88 ("bpf: Implement BPF ring buffer and verifier support for it")
+    Reported-by: <tr3e.wang@gmail.com> (SecCoder Security Lab)
+    Signed-off-by: Daniel Borkmann <daniel@iogearbox.net>
+    Acked-by: John Fastabend <john.fastabend@gmail.com>
+    Acked-by: Alexei Starovoitov <ast@kernel.org>
+    Signed-off-by: Edward Liaw <edliaw@google.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit adc2d11b86ea4f5fe6dc6beba17fbddeb7efb036
+Author: Daniel Borkmann <daniel@iogearbox.net>
+Date:   Mon Jan 10 14:40:40 2022 +0000
+
+    bpf: Generally fix helper register offset check
+    
+    commit 6788ab23508bddb0a9d88e104284922cb2c22b77 upstream.
+    
+    Right now the assertion on check_ptr_off_reg() is only enforced for register
+    types PTR_TO_CTX (and open coded also for PTR_TO_BTF_ID), however, this is
+    insufficient since many other PTR_TO_* register types such as PTR_TO_FUNC do
+    not handle/expect register offsets when passed to helper functions.
+    
+    Given this can slip-through easily when adding new types, make this an explicit
+    allow-list and reject all other current and future types by default if this is
+    encountered.
+    
+    Also, extend check_ptr_off_reg() to handle PTR_TO_BTF_ID as well instead of
+    duplicating it. For PTR_TO_BTF_ID, reg->off is used for BTF to match expected
+    BTF ids if struct offset is used. This part still needs to be allowed, but the
+    dynamic off from the tnum must be rejected.
+    
+    Fixes: 69c087ba6225 ("bpf: Add bpf_for_each_map_elem() helper")
+    Fixes: eaa6bcb71ef6 ("bpf: Introduce bpf_per_cpu_ptr()")
+    Signed-off-by: Daniel Borkmann <daniel@iogearbox.net>
+    Acked-by: John Fastabend <john.fastabend@gmail.com>
+    Acked-by: Alexei Starovoitov <ast@kernel.org>
+    Signed-off-by: Edward Liaw <edliaw@google.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 0c261cbc29a682e3a530a3d7172fdf203e6bc18d
+Author: Daniel Borkmann <daniel@iogearbox.net>
+Date:   Mon Jan 10 14:05:49 2022 +0000
+
+    bpf: Generalize check_ctx_reg for reuse with other types
+    
+    commit be80a1d3f9dbe5aee79a325964f7037fe2d92f30 upstream.
+    
+    Generalize the check_ctx_reg() helper function into a more generic named one
+    so that it can be reused for other register types as well to check whether
+    their offset is non-zero. No functional change.
+    
+    Signed-off-by: Daniel Borkmann <daniel@iogearbox.net>
+    Acked-by: John Fastabend <john.fastabend@gmail.com>
+    Acked-by: Alexei Starovoitov <ast@kernel.org>
+    Signed-off-by: Edward Liaw <edliaw@google.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 1b661661642d0211bf4786f8a5de206e17a9ab2a
+Author: Kumar Kartikeya Dwivedi <memxor@gmail.com>
+Date:   Fri Dec 17 07:20:24 2021 +0530
+
+    bpf: Extend kfunc with PTR_TO_CTX, PTR_TO_MEM argument support
+    
+    commit 3363bd0cfbb80dfcd25003cd3815b0ad8b68d0ff upstream.
+    
+    Allow passing PTR_TO_CTX, if the kfunc expects a matching struct type,
+    and punt to PTR_TO_MEM block if reg->type does not fall in one of
+    PTR_TO_BTF_ID or PTR_TO_SOCK* types. This will be used by future commits
+    to get access to XDP and TC PTR_TO_CTX, and pass various data (flags,
+    l4proto, netns_id, etc.) encoded in opts struct passed as pointer to
+    kfunc.
+    
+    For PTR_TO_MEM support, arguments are currently limited to pointer to
+    scalar, or pointer to struct composed of scalars. This is done so that
+    unsafe scenarios (like passing PTR_TO_MEM where PTR_TO_BTF_ID of
+    in-kernel valid structure is expected, which may have pointers) are
+    avoided. Since the argument checking happens basd on argument register
+    type, it is not easy to ascertain what the expected type is. In the
+    future, support for PTR_TO_MEM for kfunc can be extended to serve other
+    usecases. The struct type whose pointer is passed in may have maximum
+    nesting depth of 4, all recursively composed of scalars or struct with
+    scalars.
+    
+    Future commits will add negative tests that check whether these
+    restrictions imposed for kfunc arguments are duly rejected by BPF
+    verifier or not.
+    
+    Signed-off-by: Kumar Kartikeya Dwivedi <memxor@gmail.com>
+    Signed-off-by: Alexei Starovoitov <ast@kernel.org>
+    Link: https://lore.kernel.org/bpf/20211217015031.1278167-4-memxor@gmail.com
+    Signed-off-by: Edward Liaw <edliaw@google.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 621bbe924c68116d6aa67af86bc74cfecfed38da
+Author: Yuanhe Shu <xiangzao@linux.alibaba.com>
+Date:   Mon Feb 26 11:18:16 2024 +0800
+
+    selftests/ftrace: Limit length in subsystem-enable tests
+    
+    commit 1a4ea83a6e67f1415a1f17c1af5e9c814c882bb5 upstream.
+    
+    While sched* events being traced and sched* events continuously happen,
+    "[xx] event tracing - enable/disable with subsystem level files" would
+    not stop as on some slower systems it seems to take forever.
+    Select the first 100 lines of output would be enough to judge whether
+    there are more than 3 types of sched events.
+    
+    Fixes: 815b18ea66d6 ("ftracetest: Add basic event tracing test cases")
+    Cc: stable@vger.kernel.org
+    Signed-off-by: Yuanhe Shu <xiangzao@linux.alibaba.com>
+    Acked-by: Masami Hiramatsu (Google) <mhiramat@kernel.org>
+    Acked-by: Steven Rostedt (Google) <rostedt@goodmis.org>
+    Signed-off-by: Shuah Khan <skhan@linuxfoundation.org>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit edfaf679b7c3e4dcd1244938c3813f0e2daab6f0
+Author: Steven Rostedt (Google) <rostedt@goodmis.org>
+Date:   Wed Apr 10 12:38:13 2024 -0400
+
+    SUNRPC: Fix rpcgss_context trace event acceptor field
+    
+    commit a4833e3abae132d613ce7da0e0c9a9465d1681fa upstream.
+    
+    The rpcgss_context trace event acceptor field is a dynamically sized
+    string that records the "data" parameter. But this parameter is also
+    dependent on the "len" field to determine the size of the data.
+    
+    It needs to use __string_len() helper macro where the length can be passed
+    in. It also incorrectly uses strncpy() to save it instead of
+    __assign_str(). As these macros can change, it is not wise to open code
+    them in trace events.
+    
+    As of commit c759e609030c ("tracing: Remove __assign_str_len()"),
+    __assign_str() can be used for both __string() and __string_len() fields.
+    Before that commit, __assign_str_len() is required to be used. This needs
+    to be noted for backporting. (In actuality, commit c1fa617caeb0 ("tracing:
+    Rework __assign_str() and __string() to not duplicate getting the string")
+    is the commit that makes __string_str_len() obsolete).
+    
+    Cc: stable@vger.kernel.org
+    Fixes: 0c77668ddb4e ("SUNRPC: Introduce trace points in rpc_auth_gss.ko")
+    Signed-off-by: Steven Rostedt (Google) <rostedt@goodmis.org>
+    Signed-off-by: Chuck Lever <chuck.lever@oracle.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 2364d0278fe1b41d8cfd2bb81cbd4978d169fd99
+Author: Boris Burkov <boris@bur.io>
+Date:   Thu Mar 21 10:14:24 2024 -0700
+
+    btrfs: record delayed inode root in transaction
+    
+    [ Upstream commit 71537e35c324ea6fbd68377a4f26bb93a831ae35 ]
+    
+    When running delayed inode updates, we do not record the inode's root in
+    the transaction, but we do allocate PREALLOC and thus converted PERTRANS
+    space for it. To be sure we free that PERTRANS meta rsv, we must ensure
+    that we record the root in the transaction.
+    
+    Fixes: 4f5427ccce5d ("btrfs: delayed-inode: Use new qgroup meta rsv for delayed inode and item")
+    CC: stable@vger.kernel.org # 6.1+
+    Reviewed-by: Qu Wenruo <wqu@suse.com>
+    Signed-off-by: Boris Burkov <boris@bur.io>
+    Signed-off-by: David Sterba <dsterba@suse.com>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 747228929b32ae633629b8dbfb87b838e28ca68e
+Author: Namjae Jeon <linkinjeon@kernel.org>
+Date:   Tue Apr 2 09:31:22 2024 +0900
+
+    ksmbd: do not set SMB2_GLOBAL_CAP_ENCRYPTION for SMB 3.1.1
+    
+    [ Upstream commit 5ed11af19e56f0434ce0959376d136005745a936 ]
+    
+    SMB2_GLOBAL_CAP_ENCRYPTION flag should be used only for 3.0 and
+    3.0.2 dialects. This flags set cause compatibility problems with
+    other SMB clients.
+    
+    Reported-by: James Christopher Adduono <jc@adduono.com>
+    Tested-by: James Christopher Adduono <jc@adduono.com>
+    Cc: stable@vger.kernel.org
+    Signed-off-by: Namjae Jeon <linkinjeon@kernel.org>
+    Signed-off-by: Steve French <stfrench@microsoft.com>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 88b7f1143b15b29cccb8392b4f38e75b7bb3e300
+Author: Namjae Jeon <linkinjeon@kernel.org>
+Date:   Sun Mar 31 21:59:10 2024 +0900
+
+    ksmbd: validate payload size in ipc response
+    
+    [ Upstream commit a677ebd8ca2f2632ccdecbad7b87641274e15aac ]
+    
+    If installing malicious ksmbd-tools, ksmbd.mountd can return invalid ipc
+    response to ksmbd kernel server. ksmbd should validate payload size of
+    ipc response from ksmbd.mountd to avoid memory overrun or
+    slab-out-of-bounds. This patch validate 3 ipc response that has payload.
+    
+    Cc: stable@vger.kernel.org
+    Reported-by: Chao Ma <machao2019@gmail.com>
+    Signed-off-by: Namjae Jeon <linkinjeon@kernel.org>
+    Signed-off-by: Steve French <stfrench@microsoft.com>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 044b3d6c94c66c92c538cf53a1cc5c555bbe2fec
+Author: Namjae Jeon <linkinjeon@kernel.org>
+Date:   Sun Mar 31 21:58:26 2024 +0900
+
+    ksmbd: don't send oplock break if rename fails
+    
+    [ Upstream commit c1832f67035dc04fb89e6b591b64e4d515843cda ]
+    
+    Don't send oplock break if rename fails. This patch fix
+    smb2.oplock.batch20 test.
+    
+    Cc: stable@vger.kernel.org
+    Signed-off-by: Namjae Jeon <linkinjeon@kernel.org>
+    Signed-off-by: Steve French <stfrench@microsoft.com>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>

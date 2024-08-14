@@ -1,0 +1,1244 @@
+commit 4bf7f350c1638def0caa1835ad92948c15853916
+Author: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+Date:   Sun May 1 17:22:35 2022 +0200
+
+    Linux 5.15.37
+    
+    Link: https://lore.kernel.org/r/20220429104052.345760505@linuxfoundation.org
+    Tested-by: Florian Fainelli <f.fainelli@gmail.com>
+    Tested-by: Jon Hunter <jonathanh@nvidia.com>
+    Tested-by: Shuah Khan <skhan@linuxfoundation.org>
+    Tested-by: Linux Kernel Functional Testing <lkft@linaro.org>
+    Tested-by: Guenter Roeck <linux@roeck-us.net>
+    Tested-by: Ron Economos <re@w6rz.net>
+    Tested-by: Sudip Mukherjee <sudip.mukherjee@codethink.co.uk>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit f59e6886cafbd83ead79745f66ce6b7b3d47b2bc
+Author: Kumar Kartikeya Dwivedi <memxor@gmail.com>
+Date:   Sun Feb 20 08:01:38 2022 +0530
+
+    selftests/bpf: Add test for reg2btf_ids out of bounds access
+    
+    commit 13c6a37d409db9abc9c0bfc6d0a2f07bf0fff60e upstream.
+    
+    This test tries to pass a PTR_TO_BTF_ID_OR_NULL to the release function,
+    which would trigger a out of bounds access without the fix in commit
+    45ce4b4f9009 ("bpf: Fix crash due to out of bounds access into reg2btf_ids.")
+    but after the fix, it should only index using base_type(reg->type),
+    which should be less than __BPF_REG_TYPE_MAX, and also not permit any
+    type flags to be set for the reg->type.
+    
+    Signed-off-by: Kumar Kartikeya Dwivedi <memxor@gmail.com>
+    Signed-off-by: Alexei Starovoitov <ast@kernel.org>
+    Link: https://lore.kernel.org/bpf/20220220023138.2224652-1-memxor@gmail.com
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit dcecd95a135704b56b1b6b8a0e62136a99db712c
+Author: Linus Torvalds <torvalds@linux-foundation.org>
+Date:   Fri Apr 15 06:28:56 2022 +0800
+
+    mm: gup: make fault_in_safe_writeable() use fixup_user_fault()
+    
+    commit fe673d3f5bf1fc50cdc4b754831db91a2ec10126 upstream
+    
+    Instead of using GUP, make fault_in_safe_writeable() actually force a
+    'handle_mm_fault()' using the same fixup_user_fault() machinery that
+    futexes already use.
+    
+    Using the GUP machinery meant that fault_in_safe_writeable() did not do
+    everything that a real fault would do, ranging from not auto-expanding
+    the stack segment, to not updating accessed or dirty flags in the page
+    tables (GUP sets those flags on the pages themselves).
+    
+    The latter causes problems on architectures (like s390) that do accessed
+    bit handling in software, which meant that fault_in_safe_writeable()
+    didn't actually do all the fault handling it needed to, and trying to
+    access the user address afterwards would still cause faults.
+    
+    Reported-and-tested-by: Andreas Gruenbacher <agruenba@redhat.com>
+    Fixes: cdd591fc86e3 ("iov_iter: Introduce fault_in_iov_iter_writeable")
+    Link: https://lore.kernel.org/all/CAHc6FU5nP+nziNGG0JAF1FUx-GV7kKFvM7aZuU_XD2_1v4vnvg@mail.gmail.com/
+    Acked-by: David Hildenbrand <david@redhat.com>
+    Signed-off-by: Linus Torvalds <torvalds@linux-foundation.org>
+    Signed-off-by: Anand Jain <anand.jain@oracle.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 4a0123bdb064e1ed58ab5e7df3cdbff840b2194a
+Author: Filipe Manana <fdmanana@suse.com>
+Date:   Fri Apr 15 06:28:55 2022 +0800
+
+    btrfs: fallback to blocking mode when doing async dio over multiple extents
+    
+    commit ca93e44bfb5fd7996b76f0f544999171f647f93b upstream
+    
+    Some users recently reported that MariaDB was getting a read corruption
+    when using io_uring on top of btrfs. This started to happen in 5.16,
+    after commit 51bd9563b6783d ("btrfs: fix deadlock due to page faults
+    during direct IO reads and writes"). That changed btrfs to use the new
+    iomap flag IOMAP_DIO_PARTIAL and to disable page faults before calling
+    iomap_dio_rw(). This was necessary to fix deadlocks when the iovector
+    corresponds to a memory mapped file region. That type of scenario is
+    exercised by test case generic/647 from fstests.
+    
+    For this MariaDB scenario, we attempt to read 16K from file offset X
+    using IOCB_NOWAIT and io_uring. In that range we have 4 extents, each
+    with a size of 4K, and what happens is the following:
+    
+    1) btrfs_direct_read() disables page faults and calls iomap_dio_rw();
+    
+    2) iomap creates a struct iomap_dio object, its reference count is
+       initialized to 1 and its ->size field is initialized to 0;
+    
+    3) iomap calls btrfs_dio_iomap_begin() with file offset X, which finds
+       the first 4K extent, and setups an iomap for this extent consisting
+       of a single page;
+    
+    4) At iomap_dio_bio_iter(), we are able to access the first page of the
+       buffer (struct iov_iter) with bio_iov_iter_get_pages() without
+       triggering a page fault;
+    
+    5) iomap submits a bio for this 4K extent
+       (iomap_dio_submit_bio() -> btrfs_submit_direct()) and increments
+       the refcount on the struct iomap_dio object to 2; The ->size field
+       of the struct iomap_dio object is incremented to 4K;
+    
+    6) iomap calls btrfs_iomap_begin() again, this time with a file
+       offset of X + 4K. There we setup an iomap for the next extent
+       that also has a size of 4K;
+    
+    7) Then at iomap_dio_bio_iter() we call bio_iov_iter_get_pages(),
+       which tries to access the next page (2nd page) of the buffer.
+       This triggers a page fault and returns -EFAULT;
+    
+    8) At __iomap_dio_rw() we see the -EFAULT, but we reset the error
+       to 0 because we passed the flag IOMAP_DIO_PARTIAL to iomap and
+       the struct iomap_dio object has a ->size value of 4K (we submitted
+       a bio for an extent already). The 'wait_for_completion' variable
+       is not set to true, because our iocb has IOCB_NOWAIT set;
+    
+    9) At the bottom of __iomap_dio_rw(), we decrement the reference count
+       of the struct iomap_dio object from 2 to 1. Because we were not
+       the only ones holding a reference on it and 'wait_for_completion' is
+       set to false, -EIOCBQUEUED is returned to btrfs_direct_read(), which
+       just returns it up the callchain, up to io_uring;
+    
+    10) The bio submitted for the first extent (step 5) completes and its
+        bio endio function, iomap_dio_bio_end_io(), decrements the last
+        reference on the struct iomap_dio object, resulting in calling
+        iomap_dio_complete_work() -> iomap_dio_complete().
+    
+    11) At iomap_dio_complete() we adjust the iocb->ki_pos from X to X + 4K
+        and return 4K (the amount of io done) to iomap_dio_complete_work();
+    
+    12) iomap_dio_complete_work() calls the iocb completion callback,
+        iocb->ki_complete() with a second argument value of 4K (total io
+        done) and the iocb with the adjust ki_pos of X + 4K. This results
+        in completing the read request for io_uring, leaving it with a
+        result of 4K bytes read, and only the first page of the buffer
+        filled in, while the remaining 3 pages, corresponding to the other
+        3 extents, were not filled;
+    
+    13) For the application, the result is unexpected because if we ask
+        to read N bytes, it expects to get N bytes read as long as those
+        N bytes don't cross the EOF (i_size).
+    
+    MariaDB reports this as an error, as it's not expecting a short read,
+    since it knows it's asking for read operations fully within the i_size
+    boundary. This is typical in many applications, but it may also be
+    questionable if they should react to such short reads by issuing more
+    read calls to get the remaining data. Nevertheless, the short read
+    happened due to a change in btrfs regarding how it deals with page
+    faults while in the middle of a read operation, and there's no reason
+    why btrfs can't have the previous behaviour of returning the whole data
+    that was requested by the application.
+    
+    The problem can also be triggered with the following simple program:
+    
+      /* Get O_DIRECT */
+      #ifndef _GNU_SOURCE
+      #define _GNU_SOURCE
+      #endif
+    
+      #include <stdio.h>
+      #include <stdlib.h>
+      #include <unistd.h>
+      #include <fcntl.h>
+      #include <errno.h>
+      #include <string.h>
+      #include <liburing.h>
+    
+      int main(int argc, char *argv[])
+      {
+          char *foo_path;
+          struct io_uring ring;
+          struct io_uring_sqe *sqe;
+          struct io_uring_cqe *cqe;
+          struct iovec iovec;
+          int fd;
+          long pagesize;
+          void *write_buf;
+          void *read_buf;
+          ssize_t ret;
+          int i;
+    
+          if (argc != 2) {
+              fprintf(stderr, "Use: %s <directory>\n", argv[0]);
+              return 1;
+          }
+    
+          foo_path = malloc(strlen(argv[1]) + 5);
+          if (!foo_path) {
+              fprintf(stderr, "Failed to allocate memory for file path\n");
+              return 1;
+          }
+          strcpy(foo_path, argv[1]);
+          strcat(foo_path, "/foo");
+    
+          /*
+           * Create file foo with 2 extents, each with a size matching
+           * the page size. Then allocate a buffer to read both extents
+           * with io_uring, using O_DIRECT and IOCB_NOWAIT. Before doing
+           * the read with io_uring, access the first page of the buffer
+           * to fault it in, so that during the read we only trigger a
+           * page fault when accessing the second page of the buffer.
+           */
+           fd = open(foo_path, O_CREAT | O_TRUNC | O_WRONLY |
+                    O_DIRECT, 0666);
+           if (fd == -1) {
+               fprintf(stderr,
+                       "Failed to create file 'foo': %s (errno %d)",
+                       strerror(errno), errno);
+               return 1;
+           }
+    
+           pagesize = sysconf(_SC_PAGE_SIZE);
+           ret = posix_memalign(&write_buf, pagesize, 2 * pagesize);
+           if (ret) {
+               fprintf(stderr, "Failed to allocate write buffer\n");
+               return 1;
+           }
+    
+           memset(write_buf, 0xab, pagesize);
+           memset(write_buf + pagesize, 0xcd, pagesize);
+    
+           /* Create 2 extents, each with a size matching page size. */
+           for (i = 0; i < 2; i++) {
+               ret = pwrite(fd, write_buf + i * pagesize, pagesize,
+                            i * pagesize);
+               if (ret != pagesize) {
+                   fprintf(stderr,
+                         "Failed to write to file, ret = %ld errno %d (%s)\n",
+                          ret, errno, strerror(errno));
+                   return 1;
+               }
+               ret = fsync(fd);
+               if (ret != 0) {
+                   fprintf(stderr, "Failed to fsync file\n");
+                   return 1;
+               }
+           }
+    
+           close(fd);
+           fd = open(foo_path, O_RDONLY | O_DIRECT);
+           if (fd == -1) {
+               fprintf(stderr,
+                       "Failed to open file 'foo': %s (errno %d)",
+                       strerror(errno), errno);
+               return 1;
+           }
+    
+           ret = posix_memalign(&read_buf, pagesize, 2 * pagesize);
+           if (ret) {
+               fprintf(stderr, "Failed to allocate read buffer\n");
+               return 1;
+           }
+    
+           /*
+            * Fault in only the first page of the read buffer.
+            * We want to trigger a page fault for the 2nd page of the
+            * read buffer during the read operation with io_uring
+            * (O_DIRECT and IOCB_NOWAIT).
+            */
+           memset(read_buf, 0, 1);
+    
+           ret = io_uring_queue_init(1, &ring, 0);
+           if (ret != 0) {
+               fprintf(stderr, "Failed to create io_uring queue\n");
+               return 1;
+           }
+    
+           sqe = io_uring_get_sqe(&ring);
+           if (!sqe) {
+               fprintf(stderr, "Failed to get io_uring sqe\n");
+               return 1;
+           }
+    
+           iovec.iov_base = read_buf;
+           iovec.iov_len = 2 * pagesize;
+           io_uring_prep_readv(sqe, fd, &iovec, 1, 0);
+    
+           ret = io_uring_submit_and_wait(&ring, 1);
+           if (ret != 1) {
+               fprintf(stderr,
+                       "Failed at io_uring_submit_and_wait()\n");
+               return 1;
+           }
+    
+           ret = io_uring_wait_cqe(&ring, &cqe);
+           if (ret < 0) {
+               fprintf(stderr, "Failed at io_uring_wait_cqe()\n");
+               return 1;
+           }
+    
+           printf("io_uring read result for file foo:\n\n");
+           printf("  cqe->res == %d (expected %d)\n", cqe->res, 2 * pagesize);
+           printf("  memcmp(read_buf, write_buf) == %d (expected 0)\n",
+                  memcmp(read_buf, write_buf, 2 * pagesize));
+    
+           io_uring_cqe_seen(&ring, cqe);
+           io_uring_queue_exit(&ring);
+    
+           return 0;
+      }
+    
+    When running it on an unpatched kernel:
+    
+      $ gcc io_uring_test.c -luring
+      $ mkfs.btrfs -f /dev/sda
+      $ mount /dev/sda /mnt/sda
+      $ ./a.out /mnt/sda
+      io_uring read result for file foo:
+    
+        cqe->res == 4096 (expected 8192)
+        memcmp(read_buf, write_buf) == -205 (expected 0)
+    
+    After this patch, the read always returns 8192 bytes, with the buffer
+    filled with the correct data. Although that reproducer always triggers
+    the bug in my test vms, it's possible that it will not be so reliable
+    on other environments, as that can happen if the bio for the first
+    extent completes and decrements the reference on the struct iomap_dio
+    object before we do the atomic_dec_and_test() on the reference at
+    __iomap_dio_rw().
+    
+    Fix this in btrfs by having btrfs_dio_iomap_begin() return -EAGAIN
+    whenever we try to satisfy a non blocking IO request (IOMAP_NOWAIT flag
+    set) over a range that spans multiple extents (or a mix of extents and
+    holes). This avoids returning success to the caller when we only did
+    partial IO, which is not optimal for writes and for reads it's actually
+    incorrect, as the caller doesn't expect to get less bytes read than it has
+    requested (unless EOF is crossed), as previously mentioned. This is also
+    the type of behaviour that xfs follows (xfs_direct_write_iomap_begin()),
+    even though it doesn't use IOMAP_DIO_PARTIAL.
+    
+    A test case for fstests will follow soon.
+    
+    Link: https://lore.kernel.org/linux-btrfs/CABVffEM0eEWho+206m470rtM0d9J8ue85TtR-A_oVTuGLWFicA@mail.gmail.com/
+    Link: https://lore.kernel.org/linux-btrfs/CAHF2GV6U32gmqSjLe=XKgfcZAmLCiH26cJ2OnHGp5x=VAH4OHQ@mail.gmail.com/
+    CC: stable@vger.kernel.org # 5.16+
+    Reviewed-by: Josef Bacik <josef@toxicpanda.com>
+    Signed-off-by: Filipe Manana <fdmanana@suse.com>
+    Signed-off-by: David Sterba <dsterba@suse.com>
+    Signed-off-by: Anand Jain <anand.jain@oracle.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit c81c4f566660ba66714e0c939dd0c397c7519109
+Author: Filipe Manana <fdmanana@suse.com>
+Date:   Fri Apr 15 06:28:54 2022 +0800
+
+    btrfs: fix deadlock due to page faults during direct IO reads and writes
+    
+    commit 51bd9563b6783de8315f38f7baed949e77c42311 upstream
+    
+    If we do a direct IO read or write when the buffer given by the user is
+    memory mapped to the file range we are going to do IO, we end up ending
+    in a deadlock. This is triggered by the new test case generic/647 from
+    fstests.
+    
+    For a direct IO read we get a trace like this:
+    
+      [967.872718] INFO: task mmap-rw-fault:12176 blocked for more than 120 seconds.
+      [967.874161]       Not tainted 5.14.0-rc7-btrfs-next-95 #1
+      [967.874909] "echo 0 > /proc/sys/kernel/hung_task_timeout_secs" disables this message.
+      [967.875983] task:mmap-rw-fault   state:D stack:    0 pid:12176 ppid: 11884 flags:0x00000000
+      [967.875992] Call Trace:
+      [967.875999]  __schedule+0x3ca/0xe10
+      [967.876015]  schedule+0x43/0xe0
+      [967.876020]  wait_extent_bit.constprop.0+0x1eb/0x260 [btrfs]
+      [967.876109]  ? do_wait_intr_irq+0xb0/0xb0
+      [967.876118]  lock_extent_bits+0x37/0x90 [btrfs]
+      [967.876150]  btrfs_lock_and_flush_ordered_range+0xa9/0x120 [btrfs]
+      [967.876184]  ? extent_readahead+0xa7/0x530 [btrfs]
+      [967.876214]  extent_readahead+0x32d/0x530 [btrfs]
+      [967.876253]  ? lru_cache_add+0x104/0x220
+      [967.876255]  ? kvm_sched_clock_read+0x14/0x40
+      [967.876258]  ? sched_clock_cpu+0xd/0x110
+      [967.876263]  ? lock_release+0x155/0x4a0
+      [967.876271]  read_pages+0x86/0x270
+      [967.876274]  ? lru_cache_add+0x125/0x220
+      [967.876281]  page_cache_ra_unbounded+0x1a3/0x220
+      [967.876291]  filemap_fault+0x626/0xa20
+      [967.876303]  __do_fault+0x36/0xf0
+      [967.876308]  __handle_mm_fault+0x83f/0x15f0
+      [967.876322]  handle_mm_fault+0x9e/0x260
+      [967.876327]  __get_user_pages+0x204/0x620
+      [967.876332]  ? get_user_pages_unlocked+0x69/0x340
+      [967.876340]  get_user_pages_unlocked+0xd3/0x340
+      [967.876349]  internal_get_user_pages_fast+0xbca/0xdc0
+      [967.876366]  iov_iter_get_pages+0x8d/0x3a0
+      [967.876374]  bio_iov_iter_get_pages+0x82/0x4a0
+      [967.876379]  ? lock_release+0x155/0x4a0
+      [967.876387]  iomap_dio_bio_actor+0x232/0x410
+      [967.876396]  iomap_apply+0x12a/0x4a0
+      [967.876398]  ? iomap_dio_rw+0x30/0x30
+      [967.876414]  __iomap_dio_rw+0x29f/0x5e0
+      [967.876415]  ? iomap_dio_rw+0x30/0x30
+      [967.876420]  ? lock_acquired+0xf3/0x420
+      [967.876429]  iomap_dio_rw+0xa/0x30
+      [967.876431]  btrfs_file_read_iter+0x10b/0x140 [btrfs]
+      [967.876460]  new_sync_read+0x118/0x1a0
+      [967.876472]  vfs_read+0x128/0x1b0
+      [967.876477]  __x64_sys_pread64+0x90/0xc0
+      [967.876483]  do_syscall_64+0x3b/0xc0
+      [967.876487]  entry_SYSCALL_64_after_hwframe+0x44/0xae
+      [967.876490] RIP: 0033:0x7fb6f2c038d6
+      [967.876493] RSP: 002b:00007fffddf586b8 EFLAGS: 00000246 ORIG_RAX: 0000000000000011
+      [967.876496] RAX: ffffffffffffffda RBX: 0000000000001000 RCX: 00007fb6f2c038d6
+      [967.876498] RDX: 0000000000001000 RSI: 00007fb6f2c17000 RDI: 0000000000000003
+      [967.876499] RBP: 0000000000001000 R08: 0000000000000003 R09: 0000000000000000
+      [967.876501] R10: 0000000000001000 R11: 0000000000000246 R12: 0000000000000003
+      [967.876502] R13: 0000000000000000 R14: 00007fb6f2c17000 R15: 0000000000000000
+    
+    This happens because at btrfs_dio_iomap_begin() we lock the extent range
+    and return with it locked - we only unlock in the endio callback, at
+    end_bio_extent_readpage() -> endio_readpage_release_extent(). Then after
+    iomap called the btrfs_dio_iomap_begin() callback, it triggers the page
+    faults that resulting in reading the pages, through the readahead callback
+    btrfs_readahead(), and through there we end to attempt to lock again the
+    same extent range (or a subrange of what we locked before), resulting in
+    the deadlock.
+    
+    For a direct IO write, the scenario is a bit different, and it results in
+    trace like this:
+    
+      [1132.442520] run fstests generic/647 at 2021-08-31 18:53:35
+      [1330.349355] INFO: task mmap-rw-fault:184017 blocked for more than 120 seconds.
+      [1330.350540]       Not tainted 5.14.0-rc7-btrfs-next-95 #1
+      [1330.351158] "echo 0 > /proc/sys/kernel/hung_task_timeout_secs" disables this message.
+      [1330.351900] task:mmap-rw-fault   state:D stack:    0 pid:184017 ppid:183725 flags:0x00000000
+      [1330.351906] Call Trace:
+      [1330.351913]  __schedule+0x3ca/0xe10
+      [1330.351930]  schedule+0x43/0xe0
+      [1330.351935]  btrfs_start_ordered_extent+0x108/0x1c0 [btrfs]
+      [1330.352020]  ? do_wait_intr_irq+0xb0/0xb0
+      [1330.352028]  btrfs_lock_and_flush_ordered_range+0x8c/0x120 [btrfs]
+      [1330.352064]  ? extent_readahead+0xa7/0x530 [btrfs]
+      [1330.352094]  extent_readahead+0x32d/0x530 [btrfs]
+      [1330.352133]  ? lru_cache_add+0x104/0x220
+      [1330.352135]  ? kvm_sched_clock_read+0x14/0x40
+      [1330.352138]  ? sched_clock_cpu+0xd/0x110
+      [1330.352143]  ? lock_release+0x155/0x4a0
+      [1330.352151]  read_pages+0x86/0x270
+      [1330.352155]  ? lru_cache_add+0x125/0x220
+      [1330.352162]  page_cache_ra_unbounded+0x1a3/0x220
+      [1330.352172]  filemap_fault+0x626/0xa20
+      [1330.352176]  ? filemap_map_pages+0x18b/0x660
+      [1330.352184]  __do_fault+0x36/0xf0
+      [1330.352189]  __handle_mm_fault+0x1253/0x15f0
+      [1330.352203]  handle_mm_fault+0x9e/0x260
+      [1330.352208]  __get_user_pages+0x204/0x620
+      [1330.352212]  ? get_user_pages_unlocked+0x69/0x340
+      [1330.352220]  get_user_pages_unlocked+0xd3/0x340
+      [1330.352229]  internal_get_user_pages_fast+0xbca/0xdc0
+      [1330.352246]  iov_iter_get_pages+0x8d/0x3a0
+      [1330.352254]  bio_iov_iter_get_pages+0x82/0x4a0
+      [1330.352259]  ? lock_release+0x155/0x4a0
+      [1330.352266]  iomap_dio_bio_actor+0x232/0x410
+      [1330.352275]  iomap_apply+0x12a/0x4a0
+      [1330.352278]  ? iomap_dio_rw+0x30/0x30
+      [1330.352292]  __iomap_dio_rw+0x29f/0x5e0
+      [1330.352294]  ? iomap_dio_rw+0x30/0x30
+      [1330.352306]  btrfs_file_write_iter+0x238/0x480 [btrfs]
+      [1330.352339]  new_sync_write+0x11f/0x1b0
+      [1330.352344]  ? NF_HOOK_LIST.constprop.0.cold+0x31/0x3e
+      [1330.352354]  vfs_write+0x292/0x3c0
+      [1330.352359]  __x64_sys_pwrite64+0x90/0xc0
+      [1330.352365]  do_syscall_64+0x3b/0xc0
+      [1330.352369]  entry_SYSCALL_64_after_hwframe+0x44/0xae
+      [1330.352372] RIP: 0033:0x7f4b0a580986
+      [1330.352379] RSP: 002b:00007ffd34d75418 EFLAGS: 00000246 ORIG_RAX: 0000000000000012
+      [1330.352382] RAX: ffffffffffffffda RBX: 0000000000001000 RCX: 00007f4b0a580986
+      [1330.352383] RDX: 0000000000001000 RSI: 00007f4b0a3a4000 RDI: 0000000000000003
+      [1330.352385] RBP: 00007f4b0a3a4000 R08: 0000000000000003 R09: 0000000000000000
+      [1330.352386] R10: 0000000000000000 R11: 0000000000000246 R12: 0000000000000003
+      [1330.352387] R13: 0000000000000000 R14: 0000000000000000 R15: 0000000000000000
+    
+    Unlike for reads, at btrfs_dio_iomap_begin() we return with the extent
+    range unlocked, but later when the page faults are triggered and we try
+    to read the extents, we end up btrfs_lock_and_flush_ordered_range() where
+    we find the ordered extent for our write, created by the iomap callback
+    btrfs_dio_iomap_begin(), and we wait for it to complete, which makes us
+    deadlock since we can't complete the ordered extent without reading the
+    pages (the iomap code only submits the bio after the pages are faulted
+    in).
+    
+    Fix this by setting the nofault attribute of the given iov_iter and retry
+    the direct IO read/write if we get an -EFAULT error returned from iomap.
+    For reads, also disable page faults completely, this is because when we
+    read from a hole or a prealloc extent, we can still trigger page faults
+    due to the call to iov_iter_zero() done by iomap - at the moment, it is
+    oblivious to the value of the ->nofault attribute of an iov_iter.
+    We also need to keep track of the number of bytes written or read, and
+    pass it to iomap_dio_rw(), as well as use the new flag IOMAP_DIO_PARTIAL.
+    
+    This depends on the iov_iter and iomap changes introduced in commit
+    c03098d4b9ad ("Merge tag 'gfs2-v5.15-rc5-mmap-fault' of
+    git://git.kernel.org/pub/scm/linux/kernel/git/gfs2/linux-gfs2").
+    
+    Reviewed-by: Josef Bacik <josef@toxicpanda.com>
+    Signed-off-by: Filipe Manana <fdmanana@suse.com>
+    Signed-off-by: David Sterba <dsterba@suse.com>
+    Signed-off-by: Anand Jain <anand.jain@oracle.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 640a6be8e8618ba1dd3ec6bc9beb92a0409ef9da
+Author: Andreas Gruenbacher <agruenba@redhat.com>
+Date:   Fri Apr 15 06:28:53 2022 +0800
+
+    gfs2: Fix mmap + page fault deadlocks for direct I/O
+    
+    commit b01b2d72da25c000aeb124bc78daf3fb998be2b6 upstream
+    
+    Also disable page faults during direct I/O requests and implement a
+    similar kind of retry logic as in the buffered I/O case.
+    
+    The retry logic in the direct I/O case differs from the buffered I/O
+    case in the following way: direct I/O doesn't provide the kinds of
+    consistency guarantees between concurrent reads and writes that buffered
+    I/O provides, so once we lose the inode glock while faulting in user
+    pages, we always resume the operation.  We never need to return a
+    partial read or write.
+    
+    This locking problem was originally reported by Jan Kara.  Linus came up
+    with the idea of disabling page faults.  Many thanks to Al Viro and
+    Matthew Wilcox for their feedback.
+    
+    Signed-off-by: Andreas Gruenbacher <agruenba@redhat.com>
+    Signed-off-by: Anand Jain <anand.jain@oracle.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit f86f8d27840a97afc09077528048d39aab3e7df3
+Author: Andreas Gruenbacher <agruenba@redhat.com>
+Date:   Fri Apr 15 06:28:52 2022 +0800
+
+    iov_iter: Introduce nofault flag to disable page faults
+    
+    commit 3337ab08d08b1a375f88471d9c8b1cac968cb054 upstream
+    
+    Introduce a new nofault flag to indicate to iov_iter_get_pages not to
+    fault in user pages.
+    
+    This is implemented by passing the FOLL_NOFAULT flag to get_user_pages,
+    which causes get_user_pages to fail when it would otherwise fault in a
+    page. We'll use the ->nofault flag to prevent iomap_dio_rw from faulting
+    in pages when page faults are not allowed.
+    
+    Signed-off-by: Andreas Gruenbacher <agruenba@redhat.com>
+    Signed-off-by: Anand Jain <anand.jain@oracle.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 6e213bc61446d5aefcedb00251c275e30ce82ab5
+Author: Andreas Gruenbacher <agruenba@redhat.com>
+Date:   Fri Apr 15 06:28:51 2022 +0800
+
+    gup: Introduce FOLL_NOFAULT flag to disable page faults
+    
+    commit 55b8fe703bc51200d4698596c90813453b35ae63 upstream
+    
+    Introduce a new FOLL_NOFAULT flag that causes get_user_pages to return
+    -EFAULT when it would otherwise trigger a page fault.  This is roughly
+    similar to FOLL_FAST_ONLY but available on all architectures, and less
+    fragile.
+    
+    Signed-off-by: Andreas Gruenbacher <agruenba@redhat.com>
+    Signed-off-by: Anand Jain <anand.jain@oracle.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit d3b744791bf06bc9720bfa36bc1757f25802d68b
+Author: Andreas Gruenbacher <agruenba@redhat.com>
+Date:   Fri Apr 15 06:28:50 2022 +0800
+
+    iomap: Add done_before argument to iomap_dio_rw
+    
+    commit 4fdccaa0d184c202f98d73b24e3ec8eeee88ab8d upstream
+    
+    Add a done_before argument to iomap_dio_rw that indicates how much of
+    the request has already been transferred.  When the request succeeds, we
+    report that done_before additional bytes were tranferred.  This is
+    useful for finishing a request asynchronously when part of the request
+    has already been completed synchronously.
+    
+    We'll use that to allow iomap_dio_rw to be used with page faults
+    disabled: when a page fault occurs while submitting a request, we
+    synchronously complete the part of the request that has already been
+    submitted.  The caller can then take care of the page fault and call
+    iomap_dio_rw again for the rest of the request, passing in the number of
+    bytes already tranferred.
+    
+    Signed-off-by: Andreas Gruenbacher <agruenba@redhat.com>
+    Reviewed-by: Darrick J. Wong <djwong@kernel.org>
+    Signed-off-by: Anand Jain <anand.jain@oracle.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit ea7a57858875256e233d29b9c01b9f558f3bd12a
+Author: Andreas Gruenbacher <agruenba@redhat.com>
+Date:   Fri Apr 15 06:28:49 2022 +0800
+
+    iomap: Support partial direct I/O on user copy failures
+    
+    commit 97308f8b0d867e9ef59528cd97f0db55ffdf5651 upstream
+    
+    In iomap_dio_rw, when iomap_apply returns an -EFAULT error and the
+    IOMAP_DIO_PARTIAL flag is set, complete the request synchronously and
+    return a partial result.  This allows the caller to deal with the page
+    fault and retry the remainder of the request.
+    
+    Signed-off-by: Andreas Gruenbacher <agruenba@redhat.com>
+    Reviewed-by: Darrick J. Wong <djwong@kernel.org>
+    Signed-off-by: Anand Jain <anand.jain@oracle.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit a00cc46f97b9b9544c5edabc81d6cbfadd0ffdab
+Author: Andreas Gruenbacher <agruenba@redhat.com>
+Date:   Fri Apr 15 06:28:48 2022 +0800
+
+    iomap: Fix iomap_dio_rw return value for user copies
+    
+    commit 42c498c18a94eed79896c50871889af52fa0822e upstream
+    
+    When a user copy fails in one of the helpers of iomap_dio_rw, fail with
+    -EFAULT instead of returning 0.  This matches what iomap_dio_bio_actor
+    returns when it gets an -EFAULT from bio_iov_iter_get_pages.  With these
+    changes, iomap_dio_actor now consistently fails with -EFAULT when a user
+    page cannot be faulted in.
+    
+    Signed-off-by: Andreas Gruenbacher <agruenba@redhat.com>
+    Reviewed-by: Darrick J. Wong <djwong@kernel.org>
+    Reviewed-by: Christoph Hellwig <hch@lst.de>
+    Signed-off-by: Anand Jain <anand.jain@oracle.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 81a7fc397a62c3f7a3003489177c80cd74ed562f
+Author: Andreas Gruenbacher <agruenba@redhat.com>
+Date:   Fri Apr 15 06:28:47 2022 +0800
+
+    gfs2: Fix mmap + page fault deadlocks for buffered I/O
+    
+    commit 00bfe02f479688a67a29019d1228f1470e26f014 upstream
+    
+    In the .read_iter and .write_iter file operations, we're accessing
+    user-space memory while holding the inode glock.  There is a possibility
+    that the memory is mapped to the same file, in which case we'd recurse
+    on the same glock.
+    
+    We could detect and work around this simple case of recursive locking,
+    but more complex scenarios exist that involve multiple glocks,
+    processes, and cluster nodes, and working around all of those cases
+    isn't practical or even possible.
+    
+    Avoid these kinds of problems by disabling page faults while holding the
+    inode glock.  If a page fault would occur, we either end up with a
+    partial read or write or with -EFAULT if nothing could be read or
+    written.  In either case, we know that we're not done with the
+    operation, so we indicate that we're willing to give up the inode glock
+    and then we fault in the missing pages.  If that made us lose the inode
+    glock, we return a partial read or write.  Otherwise, we resume the
+    operation.
+    
+    This locking problem was originally reported by Jan Kara.  Linus came up
+    with the idea of disabling page faults.  Many thanks to Al Viro and
+    Matthew Wilcox for their feedback.
+    
+    Signed-off-by: Andreas Gruenbacher <agruenba@redhat.com>
+    Signed-off-by: Anand Jain <anand.jain@oracle.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 38b58498819acc561f39a6e3eff1b22a1f192af0
+Author: Andreas Gruenbacher <agruenba@redhat.com>
+Date:   Fri Apr 15 06:28:46 2022 +0800
+
+    gfs2: Eliminate ip->i_gh
+    
+    commit 1b223f7065bc7d89c4677c27381817cc95b117a8 upstream
+    
+    Now that gfs2_file_buffered_write is the only remaining user of
+    ip->i_gh, we can move the glock holder to the stack (or rather, use the
+    one we already have on the stack); there is no need for keeping the
+    holder in the inode anymore.
+    
+    This is slightly complicated by the fact that we're using ip->i_gh for
+    the statfs inode in gfs2_file_buffered_write as well.  Writing to the
+    statfs inode isn't very common, so allocate the statfs holder
+    dynamically when needed.
+    
+    Signed-off-by: Andreas Gruenbacher <agruenba@redhat.com>
+    Signed-off-by: Anand Jain <anand.jain@oracle.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 8d363d817353e22dc2158a087b9df1fede5f149a
+Author: Andreas Gruenbacher <agruenba@redhat.com>
+Date:   Fri Apr 15 06:28:45 2022 +0800
+
+    gfs2: Move the inode glock locking to gfs2_file_buffered_write
+    
+    commit b924bdab7445946e2ed364a0e6e249d36f1f1158 upstream
+    
+    So far, for buffered writes, we were taking the inode glock in
+    gfs2_iomap_begin and dropping it in gfs2_iomap_end with the intention of
+    not holding the inode glock while iomap_write_actor faults in user
+    pages.  It turns out that iomap_write_actor is called inside iomap_begin
+    ... iomap_end, so the user pages were still faulted in while holding the
+    inode glock and the locking code in iomap_begin / iomap_end was
+    completely pointless.
+    
+    Move the locking into gfs2_file_buffered_write instead.  We'll take care
+    of the potential deadlocks due to faulting in user pages while holding a
+    glock in a subsequent patch.
+    
+    Signed-off-by: Andreas Gruenbacher <agruenba@redhat.com>
+    Signed-off-by: Anand Jain <anand.jain@oracle.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 416a705304e5b150bbe9c580ba25758fd1e0aab0
+Author: Bob Peterson <rpeterso@redhat.com>
+Date:   Fri Apr 15 06:28:44 2022 +0800
+
+    gfs2: Introduce flag for glock holder auto-demotion
+    
+    commit dc732906c2450939c319fec6e258aa89ecb5a632 upstream
+    
+    This patch introduces a new HIF_MAY_DEMOTE flag and infrastructure that
+    will allow glocks to be demoted automatically on locking conflicts.
+    When a locking request comes in that isn't compatible with the locking
+    state of an active holder and that holder has the HIF_MAY_DEMOTE flag
+    set, the holder will be demoted before the incoming locking request is
+    granted.
+    
+    Note that this mechanism demotes active holders (with the HIF_HOLDER
+    flag set), while before we were only demoting glocks without any active
+    holders.  This allows processes to keep hold of locks that may form a
+    cyclic locking dependency; the core glock logic will then break those
+    dependencies in case a conflicting locking request occurs.  We'll use
+    this to avoid giving up the inode glock proactively before faulting in
+    pages.
+    
+    Processes that allow a glock holder to be taken away indicate this by
+    calling gfs2_holder_allow_demote(), which sets the HIF_MAY_DEMOTE flag.
+    Later, they call gfs2_holder_disallow_demote() to clear the flag again,
+    and then they check if their holder is still queued: if it is, they are
+    still holding the glock; if it isn't, they can re-acquire the glock (or
+    abort).
+    
+    Signed-off-by: Bob Peterson <rpeterso@redhat.com>
+    Signed-off-by: Andreas Gruenbacher <agruenba@redhat.com>
+    Signed-off-by: Anand Jain <anand.jain@oracle.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit b25cfbc0e7deab4180694883dd7851ec62d645cf
+Author: Andreas Gruenbacher <agruenba@redhat.com>
+Date:   Fri Apr 15 06:28:43 2022 +0800
+
+    gfs2: Clean up function may_grant
+    
+    commit 6144464937fe1e6135b13a30502a339d549bf093 upstream
+    
+    Pass the first current glock holder into function may_grant and
+    deobfuscate the logic there.
+    
+    While at it, switch from BUG_ON to GLOCK_BUG_ON in may_grant.  To make
+    that build cleanly, de-constify the may_grant arguments.
+    
+    We're now using function find_first_holder in do_promote, so move the
+    function's definition above do_promote.
+    
+    Signed-off-by: Andreas Gruenbacher <agruenba@redhat.com>
+    Signed-off-by: Anand Jain <anand.jain@oracle.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit b88b998579eeb0df9471d6906f591d4747068dd4
+Author: Andreas Gruenbacher <agruenba@redhat.com>
+Date:   Fri Apr 15 06:28:42 2022 +0800
+
+    gfs2: Add wrapper for iomap_file_buffered_write
+    
+    commit 2eb7509a05443048fb4df60b782de3f03c6c298b upstream
+    
+    Add a wrapper around iomap_file_buffered_write.  We'll add code for when
+    the operation needs to be retried here later.
+    
+    Signed-off-by: Andreas Gruenbacher <agruenba@redhat.com>
+    Signed-off-by: Anand Jain <anand.jain@oracle.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 1d91c912e7d14e147183757f48e709f8154f9de3
+Author: Andreas Gruenbacher <agruenba@redhat.com>
+Date:   Fri Apr 15 06:28:41 2022 +0800
+
+    iov_iter: Introduce fault_in_iov_iter_writeable
+    
+    commit cdd591fc86e38ad3899196066219fbbd845f3162 upstream
+    
+    Introduce a new fault_in_iov_iter_writeable helper for safely faulting
+    in an iterator for writing.  Uses get_user_pages() to fault in the pages
+    without actually writing to them, which would be destructive.
+    
+    We'll use fault_in_iov_iter_writeable in gfs2 once we've determined that
+    the iterator passed to .read_iter isn't in memory.
+    
+    Signed-off-by: Andreas Gruenbacher <agruenba@redhat.com>
+    Signed-off-by: Anand Jain <anand.jain@oracle.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 30e66b1dfcbbe409c76500a77ecd20b3cf5b8fa5
+Author: Andreas Gruenbacher <agruenba@redhat.com>
+Date:   Fri Apr 15 06:28:40 2022 +0800
+
+    iov_iter: Turn iov_iter_fault_in_readable into fault_in_iov_iter_readable
+    
+    commit a6294593e8a1290091d0b078d5d33da5e0cd3dfe upstream
+    
+    Turn iov_iter_fault_in_readable into a function that returns the number
+    of bytes not faulted in, similar to copy_to_user, instead of returning a
+    non-zero value when any of the requested pages couldn't be faulted in.
+    This supports the existing users that require all pages to be faulted in
+    as well as new users that are happy if any pages can be faulted in.
+    
+    Rename iov_iter_fault_in_readable to fault_in_iov_iter_readable to make
+    sure this change doesn't silently break things.
+    
+    Signed-off-by: Andreas Gruenbacher <agruenba@redhat.com>
+    Signed-off-by: Anand Jain <anand.jain@oracle.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 923f05a660e60ef22952e09acdd6e37e17ddf084
+Author: Andreas Gruenbacher <agruenba@redhat.com>
+Date:   Fri Apr 15 06:28:39 2022 +0800
+
+    gup: Turn fault_in_pages_{readable,writeable} into fault_in_{readable,writeable}
+    
+    commit bb523b406c849eef8f265a07cd7f320f1f177743 upstream
+    
+    Turn fault_in_pages_{readable,writeable} into versions that return the
+    number of bytes not faulted in, similar to copy_to_user, instead of
+    returning a non-zero value when any of the requested pages couldn't be
+    faulted in.  This supports the existing users that require all pages to
+    be faulted in as well as new users that are happy if any pages can be
+    faulted in.
+    
+    Rename the functions to fault_in_{readable,writeable} to make sure
+    this change doesn't silently break things.
+    
+    Neither of these functions is entirely trivial and it doesn't seem
+    useful to inline them, so move them to mm/gup.c.
+    
+    Signed-off-by: Andreas Gruenbacher <agruenba@redhat.com>
+    Signed-off-by: Anand Jain <anand.jain@oracle.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 19cbd78fb26a2622714183d400b9af2659fa5221
+Author: Muchun Song <songmuchun@bytedance.com>
+Date:   Fri Apr 1 11:28:36 2022 -0700
+
+    mm: kfence: fix objcgs vector allocation
+    
+    commit 8f0b36497303487d5a32c75789c77859cc2ee895 upstream.
+    
+    If the kfence object is allocated to be used for objects vector, then
+    this slot of the pool eventually being occupied permanently since the
+    vector is never freed.  The solutions could be (1) freeing vector when
+    the kfence object is freed or (2) allocating all vectors statically.
+    
+    Since the memory consumption of object vectors is low, it is better to
+    chose (2) to fix the issue and it is also can reduce overhead of vectors
+    allocating in the future.
+    
+    Link: https://lkml.kernel.org/r/20220328132843.16624-1-songmuchun@bytedance.com
+    Fixes: d3fb45f370d9 ("mm, kfence: insert KFENCE hooks for SLAB")
+    Signed-off-by: Muchun Song <songmuchun@bytedance.com>
+    Reviewed-by: Marco Elver <elver@google.com>
+    Reviewed-by: Roman Gushchin <roman.gushchin@linux.dev>
+    Cc: Alexander Potapenko <glider@google.com>
+    Cc: Dmitry Vyukov <dvyukov@google.com>
+    Cc: Xiongchun Duan <duanxiongchun@bytedance.com>
+    Signed-off-by: Andrew Morton <akpm@linux-foundation.org>
+    Signed-off-by: Linus Torvalds <torvalds@linux-foundation.org>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 10033fa72d41cc1c2d9d18e97700715376b8088b
+Author: Dinh Nguyen <dinguyen@kernel.org>
+Date:   Mon Nov 22 09:10:03 2021 -0600
+
+    ARM: dts: socfpga: change qspi to "intel,socfpga-qspi"
+    
+    commit 36de991e93908f7ad5c2a0eac9c4ecf8b723fa4a upstream.
+    
+    Because of commit 9cb2ff111712 ("spi: cadence-quadspi: Disable Auto-HW polling"),
+    which does a write to the CQSPI_REG_WR_COMPLETION_CTRL register
+    regardless of any condition. Well, the Cadence QuadSPI controller on
+    Intel's SoCFPGA platforms does not implement the
+    CQSPI_REG_WR_COMPLETION_CTRL register, thus a write to this register
+    results in a crash!
+    
+    So starting with v5.16, I introduced the patch
+    98d948eb833 ("spi: cadence-quadspi: fix write completion support"),
+    which adds the dts compatible "intel,socfpga-qspi" that is specific for
+    versions that doesn't have the CQSPI_REG_WR_COMPLETION_CTRL register implemented.
+    
+    Signed-off-by: Dinh Nguyen <dinguyen@kernel.org>
+    [IA: submitted for linux-5.15.y]
+    Signed-off-by: Ian Abbott <abbotti@mev.co.uk>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit e8749d608847be133f5621f07e6e023c8fc33406
+Author: Dinh Nguyen <dinguyen@kernel.org>
+Date:   Mon Nov 8 14:08:54 2021 -0600
+
+    spi: cadence-quadspi: fix write completion support
+    
+    commit 98d948eb833104a094517401ed8be26ba3ce9935 upstream.
+    
+    Some versions of the Cadence QSPI controller does not have the write
+    completion register implemented(CQSPI_REG_WR_COMPLETION_CTRL). On the
+    Intel SoCFPGA platform the CQSPI_REG_WR_COMPLETION_CTRL register is
+    not configured.
+    
+    Add a quirk to not write to the CQSPI_REG_WR_COMPLETION_CTRL register.
+    
+    Fixes: 9cb2ff111712 ("spi: cadence-quadspi: Disable Auto-HW polling)
+    Signed-off-by: Dinh Nguyen <dinguyen@kernel.org>
+    Reviewed-by: Pratyush Yadav <p.yadav@ti.com>
+    Link: https://lore.kernel.org/r/20211108200854.3616121-1-dinguyen@kernel.org
+    Signed-off-by: Mark Brown <broonie@kernel.org>
+    [IA: backported for linux=5.15.y]
+    Signed-off-by: Ian Abbott <abbotti@mev.co.uk>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 8c39925e98d498b9531343066ef82ae39e41adae
+Author: Kumar Kartikeya Dwivedi <memxor@gmail.com>
+Date:   Thu Apr 28 16:57:51 2022 -0700
+
+    bpf: Fix crash due to out of bounds access into reg2btf_ids.
+    
+    commit 45ce4b4f9009102cd9f581196d480a59208690c1 upstream
+    
+    When commit e6ac2450d6de ("bpf: Support bpf program calling kernel function") added
+    kfunc support, it defined reg2btf_ids as a cheap way to translate the verifier
+    reg type to the appropriate btf_vmlinux BTF ID, however
+    commit c25b2ae13603 ("bpf: Replace PTR_TO_XXX_OR_NULL with PTR_TO_XXX | PTR_MAYBE_NULL")
+    moved the __BPF_REG_TYPE_MAX from the last member of bpf_reg_type enum to after
+    the base register types, and defined other variants using type flag
+    composition. However, now, the direct usage of reg->type to index into
+    reg2btf_ids may no longer fall into __BPF_REG_TYPE_MAX range, and hence lead to
+    out of bounds access and kernel crash on dereference of bad pointer.
+    
+    [backport note: commit 3363bd0cfbb80 ("bpf: Extend kfunc with PTR_TO_CTX, PTR_TO_MEM
+     argument support") was introduced after 5.15 and contains an out of bound
+     reg2btf_ids access. Since that commit hasn't been backported, this patch
+     doesn't include fix to that access. If we backport that commit in future,
+     we need to fix its faulting access as well.]
+    
+    Fixes: c25b2ae13603 ("bpf: Replace PTR_TO_XXX_OR_NULL with PTR_TO_XXX | PTR_MAYBE_NULL")
+    Signed-off-by: Kumar Kartikeya Dwivedi <memxor@gmail.com>
+    Signed-off-by: Hao Luo <haoluo@google.com>
+    Signed-off-by: Alexei Starovoitov <ast@kernel.org>
+    Link: https://lore.kernel.org/bpf/20220216201943.624869-1-memxor@gmail.com
+    Cc: stable@vger.kernel.org # v5.15+
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 379382b347dbd2058eb0bf7f269aed01985f8cf6
+Author: Hao Luo <haoluo@google.com>
+Date:   Thu Apr 28 16:57:50 2022 -0700
+
+    bpf/selftests: Test PTR_TO_RDONLY_MEM
+    
+    commit 9497c458c10b049438ef6e6ddda898edbc3ec6a8 upstream.
+    
+    This test verifies that a ksym of non-struct can not be directly
+    updated.
+    
+    Signed-off-by: Hao Luo <haoluo@google.com>
+    Signed-off-by: Alexei Starovoitov <ast@kernel.org>
+    Acked-by: Andrii Nakryiko <andrii@kernel.org>
+    Link: https://lore.kernel.org/bpf/20211217003152.48334-10-haoluo@google.com
+    Cc: stable@vger.kernel.org # 5.15.x
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 2a77c58726aba893129a369ed3d2be004dda41cd
+Author: Hao Luo <haoluo@google.com>
+Date:   Thu Apr 28 16:57:49 2022 -0700
+
+    bpf: Add MEM_RDONLY for helper args that are pointers to rdonly mem.
+    
+    commit 216e3cd2f28dbbf1fe86848e0e29e6693b9f0a20 upstream.
+    
+    Some helper functions may modify its arguments, for example,
+    bpf_d_path, bpf_get_stack etc. Previously, their argument types
+    were marked as ARG_PTR_TO_MEM, which is compatible with read-only
+    mem types, such as PTR_TO_RDONLY_BUF. Therefore it's legitimate,
+    but technically incorrect, to modify a read-only memory by passing
+    it into one of such helper functions.
+    
+    This patch tags the bpf_args compatible with immutable memory with
+    MEM_RDONLY flag. The arguments that don't have this flag will be
+    only compatible with mutable memory types, preventing the helper
+    from modifying a read-only memory. The bpf_args that have
+    MEM_RDONLY are compatible with both mutable memory and immutable
+    memory.
+    
+    Signed-off-by: Hao Luo <haoluo@google.com>
+    Signed-off-by: Alexei Starovoitov <ast@kernel.org>
+    Link: https://lore.kernel.org/bpf/20211217003152.48334-9-haoluo@google.com
+    Cc: stable@vger.kernel.org # 5.15.x
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 15166bb3000fc8b5faa8fa606eb25d300e6892ef
+Author: Hao Luo <haoluo@google.com>
+Date:   Thu Apr 28 16:57:48 2022 -0700
+
+    bpf: Make per_cpu_ptr return rdonly PTR_TO_MEM.
+    
+    commit 34d3a78c681e8e7844b43d1a2f4671a04249c821 upstream.
+    
+    Tag the return type of {per, this}_cpu_ptr with RDONLY_MEM. The
+    returned value of this pair of helpers is kernel object, which
+    can not be updated by bpf programs. Previously these two helpers
+    return PTR_OT_MEM for kernel objects of scalar type, which allows
+    one to directly modify the memory. Now with RDONLY_MEM tagging,
+    the verifier will reject programs that write into RDONLY_MEM.
+    
+    Fixes: 63d9b80dcf2c ("bpf: Introducte bpf_this_cpu_ptr()")
+    Fixes: eaa6bcb71ef6 ("bpf: Introduce bpf_per_cpu_ptr()")
+    Fixes: 4976b718c355 ("bpf: Introduce pseudo_btf_id")
+    Signed-off-by: Hao Luo <haoluo@google.com>
+    Signed-off-by: Alexei Starovoitov <ast@kernel.org>
+    Link: https://lore.kernel.org/bpf/20211217003152.48334-8-haoluo@google.com
+    Cc: stable@vger.kernel.org # 5.15.x
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit b710f73704d61069b2f05358309290551e5a8732
+Author: Hao Luo <haoluo@google.com>
+Date:   Thu Apr 28 16:57:47 2022 -0700
+
+    bpf: Convert PTR_TO_MEM_OR_NULL to composable types.
+    
+    commit cf9f2f8d62eca810afbd1ee6cc0800202b000e57 upstream.
+    
+    Remove PTR_TO_MEM_OR_NULL and replace it with PTR_TO_MEM combined with
+    flag PTR_MAYBE_NULL.
+    
+    Signed-off-by: Hao Luo <haoluo@google.com>
+    Signed-off-by: Alexei Starovoitov <ast@kernel.org>
+    Link: https://lore.kernel.org/bpf/20211217003152.48334-7-haoluo@google.com
+    Cc: stable@vger.kernel.org # 5.15.x
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit b453361384c2db1c703dacb806d5fd36aec4ceca
+Author: Hao Luo <haoluo@google.com>
+Date:   Thu Apr 28 16:57:46 2022 -0700
+
+    bpf: Introduce MEM_RDONLY flag
+    
+    commit 20b2aff4bc15bda809f994761d5719827d66c0b4 upstream.
+    
+    This patch introduce a flag MEM_RDONLY to tag a reg value
+    pointing to read-only memory. It makes the following changes:
+    
+    1. PTR_TO_RDWR_BUF -> PTR_TO_BUF
+    2. PTR_TO_RDONLY_BUF -> PTR_TO_BUF | MEM_RDONLY
+    
+    Signed-off-by: Hao Luo <haoluo@google.com>
+    Signed-off-by: Alexei Starovoitov <ast@kernel.org>
+    Link: https://lore.kernel.org/bpf/20211217003152.48334-6-haoluo@google.com
+    Cc: stable@vger.kernel.org # 5.15.x
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 8d38cde47a7e17b646401fa92d916503caa5375e
+Author: Hao Luo <haoluo@google.com>
+Date:   Thu Apr 28 16:57:45 2022 -0700
+
+    bpf: Replace PTR_TO_XXX_OR_NULL with PTR_TO_XXX | PTR_MAYBE_NULL
+    
+    commit c25b2ae136039ffa820c26138ed4a5e5f3ab3841 upstream.
+    
+    We have introduced a new type to make bpf_reg composable, by
+    allocating bits in the type to represent flags.
+    
+    One of the flags is PTR_MAYBE_NULL which indicates a pointer
+    may be NULL. This patch switches the qualified reg_types to
+    use this flag. The reg_types changed in this patch include:
+    
+    1. PTR_TO_MAP_VALUE_OR_NULL
+    2. PTR_TO_SOCKET_OR_NULL
+    3. PTR_TO_SOCK_COMMON_OR_NULL
+    4. PTR_TO_TCP_SOCK_OR_NULL
+    5. PTR_TO_BTF_ID_OR_NULL
+    6. PTR_TO_MEM_OR_NULL
+    7. PTR_TO_RDONLY_BUF_OR_NULL
+    8. PTR_TO_RDWR_BUF_OR_NULL
+    
+    [haoluo: backport notes
+     There was a reg_type_may_be_null() in adjust_ptr_min_max_vals() in
+     5.15.x, but didn't exist in the upstream commit. This backport
+     converted that reg_type_may_be_null() to type_may_be_null() as well.]
+    
+    Signed-off-by: Hao Luo <haoluo@google.com>
+    Signed-off-by: Alexei Starovoitov <ast@kernel.org>
+    Link: https://lore.kernel.org/r/20211217003152.48334-5-haoluo@google.com
+    Cc: stable@vger.kernel.org # 5.15.x
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 3c141c82b95807473d77079936769e04a84e4ca3
+Author: Hao Luo <haoluo@google.com>
+Date:   Thu Apr 28 16:57:44 2022 -0700
+
+    bpf: Replace RET_XXX_OR_NULL with RET_XXX | PTR_MAYBE_NULL
+    
+    commit 3c4807322660d4290ac9062c034aed6b87243861 upstream.
+    
+    We have introduced a new type to make bpf_ret composable, by
+    reserving high bits to represent flags.
+    
+    One of the flag is PTR_MAYBE_NULL, which indicates a pointer
+    may be NULL. When applying this flag to ret_types, it means
+    the returned value could be a NULL pointer. This patch
+    switches the qualified arg_types to use this flag.
+    The ret_types changed in this patch include:
+    
+    1. RET_PTR_TO_MAP_VALUE_OR_NULL
+    2. RET_PTR_TO_SOCKET_OR_NULL
+    3. RET_PTR_TO_TCP_SOCK_OR_NULL
+    4. RET_PTR_TO_SOCK_COMMON_OR_NULL
+    5. RET_PTR_TO_ALLOC_MEM_OR_NULL
+    6. RET_PTR_TO_MEM_OR_BTF_ID_OR_NULL
+    7. RET_PTR_TO_BTF_ID_OR_NULL
+    
+    This patch doesn't eliminate the use of these names, instead
+    it makes them aliases to 'RET_PTR_TO_XXX | PTR_MAYBE_NULL'.
+    
+    Signed-off-by: Hao Luo <haoluo@google.com>
+    Signed-off-by: Alexei Starovoitov <ast@kernel.org>
+    Link: https://lore.kernel.org/bpf/20211217003152.48334-4-haoluo@google.com
+    Cc: stable@vger.kernel.org # 5.15.x
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit d58a396fa6c98bde64772c1db715dfca32610597
+Author: Hao Luo <haoluo@google.com>
+Date:   Thu Apr 28 16:57:43 2022 -0700
+
+    bpf: Replace ARG_XXX_OR_NULL with ARG_XXX | PTR_MAYBE_NULL
+    
+    commit 48946bd6a5d695c50b34546864b79c1f910a33c1 upstream.
+    
+    We have introduced a new type to make bpf_arg composable, by
+    reserving high bits of bpf_arg to represent flags of a type.
+    
+    One of the flags is PTR_MAYBE_NULL which indicates a pointer
+    may be NULL. When applying this flag to an arg_type, it means
+    the arg can take NULL pointer. This patch switches the
+    qualified arg_types to use this flag. The arg_types changed
+    in this patch include:
+    
+    1. ARG_PTR_TO_MAP_VALUE_OR_NULL
+    2. ARG_PTR_TO_MEM_OR_NULL
+    3. ARG_PTR_TO_CTX_OR_NULL
+    4. ARG_PTR_TO_SOCKET_OR_NULL
+    5. ARG_PTR_TO_ALLOC_MEM_OR_NULL
+    6. ARG_PTR_TO_STACK_OR_NULL
+    
+    This patch does not eliminate the use of these arg_types, instead
+    it makes them an alias to the 'ARG_XXX | PTR_MAYBE_NULL'.
+    
+    Signed-off-by: Hao Luo <haoluo@google.com>
+    Signed-off-by: Alexei Starovoitov <ast@kernel.org>
+    Link: https://lore.kernel.org/bpf/20211217003152.48334-3-haoluo@google.com
+    Cc: stable@vger.kernel.org # 5.15.x
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit a76020980b9fa13b40e23711fcf79c018b1fd7fa
+Author: Hao Luo <haoluo@google.com>
+Date:   Thu Apr 28 16:57:42 2022 -0700
+
+    bpf: Introduce composable reg, ret and arg types.
+    
+    commit d639b9d13a39cf15639cbe6e8b2c43eb60148a73 upstream.
+    
+    There are some common properties shared between bpf reg, ret and arg
+    values. For instance, a value may be a NULL pointer, or a pointer to
+    a read-only memory. Previously, to express these properties, enumeration
+    was used. For example, in order to test whether a reg value can be NULL,
+    reg_type_may_be_null() simply enumerates all types that are possibly
+    NULL. The problem of this approach is that it's not scalable and causes
+    a lot of duplication. These properties can be combined, for example, a
+    type could be either MAYBE_NULL or RDONLY, or both.
+    
+    This patch series rewrites the layout of reg_type, arg_type and
+    ret_type, so that common properties can be extracted and represented as
+    composable flag. For example, one can write
+    
+     ARG_PTR_TO_MEM | PTR_MAYBE_NULL
+    
+    which is equivalent to the previous
+    
+     ARG_PTR_TO_MEM_OR_NULL
+    
+    The type ARG_PTR_TO_MEM are called "base type" in this patch. Base
+    types can be extended with flags. A flag occupies the higher bits while
+    base types sits in the lower bits.
+    
+    This patch in particular sets up a set of macro for this purpose. The
+    following patches will rewrite arg_types, ret_types and reg_types
+    respectively.
+    
+    Signed-off-by: Hao Luo <haoluo@google.com>
+    Signed-off-by: Alexei Starovoitov <ast@kernel.org>
+    Link: https://lore.kernel.org/bpf/20211217003152.48334-2-haoluo@google.com
+    Cc: stable@vger.kernel.org # 5.15.x
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit e52da8e4632f9c8fe78bf1c5881ce6871c7e08f3
+Author: Willy Tarreau <w@1wt.eu>
+Date:   Tue Apr 26 23:41:05 2022 +0300
+
+    floppy: disable FDRAWCMD by default
+    
+    commit 233087ca063686964a53c829d547c7571e3f67bf upstream.
+    
+    Minh Yuan reported a concurrency use-after-free issue in the floppy code
+    between raw_cmd_ioctl and seek_interrupt.
+    
+    [ It turns out this has been around, and that others have reported the
+      KASAN splats over the years, but Minh Yuan had a reproducer for it and
+      so gets primary credit for reporting it for this fix   - Linus ]
+    
+    The problem is, this driver tends to break very easily and nowadays,
+    nobody is expected to use FDRAWCMD anyway since it was used to
+    manipulate non-standard formats.  The risk of breaking the driver is
+    higher than the risk presented by this race, and accessing the device
+    requires privileges anyway.
+    
+    Let's just add a config option to completely disable this ioctl and
+    leave it disabled by default.  Distros shouldn't use it, and only those
+    running on antique hardware might need to enable it.
+    
+    Link: https://lore.kernel.org/all/000000000000b71cdd05d703f6bf@google.com/
+    Link: https://lore.kernel.org/lkml/CAKcFiNC=MfYVW-Jt9A3=FPJpTwCD2PL_ULNCpsCVE5s8ZeBQgQ@mail.gmail.com
+    Link: https://lore.kernel.org/all/CAEAjamu1FRhz6StCe_55XY5s389ZP_xmCF69k987En+1z53=eg@mail.gmail.com
+    Reported-by: Minh Yuan <yuanmingbuaa@gmail.com>
+    Reported-by: syzbot+8e8958586909d62b6840@syzkaller.appspotmail.com
+    Reported-by: cruise k <cruise4k@gmail.com>
+    Reported-by: Kyungtae Kim <kt0755@gmail.com>
+    Suggested-by: Linus Torvalds <torvalds@linuxfoundation.org>
+    Tested-by: Denis Efremov <efremov@linux.com>
+    Signed-off-by: Willy Tarreau <w@1wt.eu>
+    Signed-off-by: Linus Torvalds <torvalds@linux-foundation.org>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>

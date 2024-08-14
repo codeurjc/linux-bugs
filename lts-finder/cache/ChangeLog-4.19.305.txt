@@ -1,0 +1,1053 @@
+commit abc2dd6a248d443c27888aee13cfefd94c3f7407
+Author: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+Date:   Mon Jan 15 18:23:44 2024 +0100
+
+    Linux 4.19.305
+    
+    Link: https://lore.kernel.org/r/20240113094205.025407355@linuxfoundation.org
+    Tested-by: Pavel Machek (CIP) <pavel@denx.de>
+    Tested-by: Linux Kernel Functional Testing <lkft@linaro.org>
+    Tested-by: Jon Hunter <jonathanh@nvidia.com>
+    Tested-by: Harshit Mogalapalli <harshit.m.mogalapalli@oracle.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 95372b040ae689293c6863b90049f1af68410c8b
+Author: Jon Maxwell <jmaxwell37@gmail.com>
+Date:   Fri Jan 12 16:53:08 2024 -0800
+
+    ipv6: remove max_size check inline with ipv4
+    
+    commit af6d10345ca76670c1b7c37799f0d5576ccef277 upstream.
+    
+    In ip6_dst_gc() replace:
+    
+      if (entries > gc_thresh)
+    
+    With:
+    
+      if (entries > ops->gc_thresh)
+    
+    Sending Ipv6 packets in a loop via a raw socket triggers an issue where a
+    route is cloned by ip6_rt_cache_alloc() for each packet sent. This quickly
+    consumes the Ipv6 max_size threshold which defaults to 4096 resulting in
+    these warnings:
+    
+    [1]   99.187805] dst_alloc: 7728 callbacks suppressed
+    [2] Route cache is full: consider increasing sysctl net.ipv6.route.max_size.
+    .
+    .
+    [300] Route cache is full: consider increasing sysctl net.ipv6.route.max_size.
+    
+    When this happens the packet is dropped and sendto() gets a network is
+    unreachable error:
+    
+    remaining pkt 200557 errno 101
+    remaining pkt 196462 errno 101
+    .
+    .
+    remaining pkt 126821 errno 101
+    
+    Implement David Aherns suggestion to remove max_size check seeing that Ipv6
+    has a GC to manage memory usage. Ipv4 already does not check max_size.
+    
+    Here are some memory comparisons for Ipv4 vs Ipv6 with the patch:
+    
+    Test by running 5 instances of a program that sends UDP packets to a raw
+    socket 5000000 times. Compare Ipv4 and Ipv6 performance with a similar
+    program.
+    
+    Ipv4:
+    
+    Before test:
+    
+    MemFree:        29427108 kB
+    Slab:             237612 kB
+    
+    ip6_dst_cache       1912   2528    256   32    2 : tunables    0    0    0
+    xfrm_dst_cache         0      0    320   25    2 : tunables    0    0    0
+    ip_dst_cache        2881   3990    192   42    2 : tunables    0    0    0
+    
+    During test:
+    
+    MemFree:        29417608 kB
+    Slab:             247712 kB
+    
+    ip6_dst_cache       1912   2528    256   32    2 : tunables    0    0    0
+    xfrm_dst_cache         0      0    320   25    2 : tunables    0    0    0
+    ip_dst_cache       44394  44394    192   42    2 : tunables    0    0    0
+    
+    After test:
+    
+    MemFree:        29422308 kB
+    Slab:             238104 kB
+    
+    ip6_dst_cache       1912   2528    256   32    2 : tunables    0    0    0
+    xfrm_dst_cache         0      0    320   25    2 : tunables    0    0    0
+    ip_dst_cache        3048   4116    192   42    2 : tunables    0    0    0
+    
+    Ipv6 with patch:
+    
+    Errno 101 errors are not observed anymore with the patch.
+    
+    Before test:
+    
+    MemFree:        29422308 kB
+    Slab:             238104 kB
+    
+    ip6_dst_cache       1912   2528    256   32    2 : tunables    0    0    0
+    xfrm_dst_cache         0      0    320   25    2 : tunables    0    0    0
+    ip_dst_cache        3048   4116    192   42    2 : tunables    0    0    0
+    
+    During Test:
+    
+    MemFree:        29431516 kB
+    Slab:             240940 kB
+    
+    ip6_dst_cache      11980  12064    256   32    2 : tunables    0    0    0
+    xfrm_dst_cache         0      0    320   25    2 : tunables    0    0    0
+    ip_dst_cache        3048   4116    192   42    2 : tunables    0    0    0
+    
+    After Test:
+    
+    MemFree:        29441816 kB
+    Slab:             238132 kB
+    
+    ip6_dst_cache       1902   2432    256   32    2 : tunables    0    0    0
+    xfrm_dst_cache         0      0    320   25    2 : tunables    0    0    0
+    ip_dst_cache        3048   4116    192   42    2 : tunables    0    0    0
+    
+    Tested-by: Andrea Mayer <andrea.mayer@uniroma2.it>
+    Signed-off-by: Jon Maxwell <jmaxwell37@gmail.com>
+    Reviewed-by: David Ahern <dsahern@kernel.org>
+    Link: https://lore.kernel.org/r/20230112012532.311021-1-jmaxwell37@gmail.com
+    Signed-off-by: Jakub Kicinski <kuba@kernel.org>
+    Signed-off-by: Suraj Jitindar Singh <surajjs@amazon.com>
+    Cc: <stable@vger.kernel.org> # 4.19.x
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit b4cfbeaebeb355dbaefb218470055de2e8a73020
+Author: Eric Dumazet <edumazet@google.com>
+Date:   Fri Jan 12 16:53:07 2024 -0800
+
+    ipv6: make ip6_rt_gc_expire an atomic_t
+    
+    commit 9cb7c013420f98fa6fd12fc6a5dc055170c108db upstream.
+    
+    Reads and Writes to ip6_rt_gc_expire always have been racy,
+    as syzbot reported lately [1]
+    
+    There is a possible risk of under-flow, leading
+    to unexpected high value passed to fib6_run_gc(),
+    although I have not observed this in the field.
+    
+    Hosts hitting ip6_dst_gc() very hard are under pretty bad
+    state anyway.
+    
+    [1]
+    BUG: KCSAN: data-race in ip6_dst_gc / ip6_dst_gc
+    
+    read-write to 0xffff888102110744 of 4 bytes by task 13165 on cpu 1:
+     ip6_dst_gc+0x1f3/0x220 net/ipv6/route.c:3311
+     dst_alloc+0x9b/0x160 net/core/dst.c:86
+     ip6_dst_alloc net/ipv6/route.c:344 [inline]
+     icmp6_dst_alloc+0xb2/0x360 net/ipv6/route.c:3261
+     mld_sendpack+0x2b9/0x580 net/ipv6/mcast.c:1807
+     mld_send_cr net/ipv6/mcast.c:2119 [inline]
+     mld_ifc_work+0x576/0x800 net/ipv6/mcast.c:2651
+     process_one_work+0x3d3/0x720 kernel/workqueue.c:2289
+     worker_thread+0x618/0xa70 kernel/workqueue.c:2436
+     kthread+0x1a9/0x1e0 kernel/kthread.c:376
+     ret_from_fork+0x1f/0x30
+    
+    read-write to 0xffff888102110744 of 4 bytes by task 11607 on cpu 0:
+     ip6_dst_gc+0x1f3/0x220 net/ipv6/route.c:3311
+     dst_alloc+0x9b/0x160 net/core/dst.c:86
+     ip6_dst_alloc net/ipv6/route.c:344 [inline]
+     icmp6_dst_alloc+0xb2/0x360 net/ipv6/route.c:3261
+     mld_sendpack+0x2b9/0x580 net/ipv6/mcast.c:1807
+     mld_send_cr net/ipv6/mcast.c:2119 [inline]
+     mld_ifc_work+0x576/0x800 net/ipv6/mcast.c:2651
+     process_one_work+0x3d3/0x720 kernel/workqueue.c:2289
+     worker_thread+0x618/0xa70 kernel/workqueue.c:2436
+     kthread+0x1a9/0x1e0 kernel/kthread.c:376
+     ret_from_fork+0x1f/0x30
+    
+    value changed: 0x00000bb3 -> 0x00000ba9
+    
+    Reported by Kernel Concurrency Sanitizer on:
+    CPU: 0 PID: 11607 Comm: kworker/0:21 Not tainted 5.18.0-rc1-syzkaller-00037-g42e7a03d3bad-dirty #0
+    Hardware name: Google Google Compute Engine/Google Compute Engine, BIOS Google 01/01/2011
+    Workqueue: mld mld_ifc_work
+    
+    Fixes: 1da177e4c3f4 ("Linux-2.6.12-rc2")
+    Signed-off-by: Eric Dumazet <edumazet@google.com>
+    Reported-by: syzbot <syzkaller@googlegroups.com>
+    Reviewed-by: David Ahern <dsahern@kernel.org>
+    Link: https://lore.kernel.org/r/20220413181333.649424-1-eric.dumazet@gmail.com
+    Signed-off-by: Jakub Kicinski <kuba@kernel.org>
+    [ 4.19: context adjustment in include/net/netns/ipv6.h ]
+    Signed-off-by: Suraj Jitindar Singh <surajjs@amazon.com>
+    Cc: <stable@vger.kernel.org> # 4.19.x
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 9635bd0a5296e2e725c6b33e530d0ef582e2f64e
+Author: Eric Dumazet <edumazet@google.com>
+Date:   Fri Jan 12 16:53:06 2024 -0800
+
+    net/dst: use a smaller percpu_counter batch for dst entries accounting
+    
+    commit cf86a086a18095e33e0637cb78cda1fcf5280852 upstream.
+    
+    percpu_counter_add() uses a default batch size which is quite big
+    on platforms with 256 cpus. (2*256 -> 512)
+    
+    This means dst_entries_get_fast() can be off by +/- 2*(nr_cpus^2)
+    (131072 on servers with 256 cpus)
+    
+    Reduce the batch size to something more reasonable, and
+    add logic to ip6_dst_gc() to call dst_entries_get_slow()
+    before calling the _very_ expensive fib6_run_gc() function.
+    
+    Signed-off-by: Eric Dumazet <edumazet@google.com>
+    Signed-off-by: Jakub Kicinski <kuba@kernel.org>
+    Signed-off-by: Suraj Jitindar Singh <surajjs@amazon.com>
+    Cc: <stable@vger.kernel.org> # 4.19.x
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 47468fae2704151503214f4d4327c164118247fd
+Author: Peter Oskolkov <posk@google.com>
+Date:   Fri Jan 12 16:53:05 2024 -0800
+
+    net: add a route cache full diagnostic message
+    
+    commit 22c2ad616b74f3de2256b242572ab449d031d941 upstream.
+    
+    In some testing scenarios, dst/route cache can fill up so quickly
+    that even an explicit GC call occasionally fails to clean it up. This leads
+    to sporadically failing calls to dst_alloc and "network unreachable" errors
+    to the user, which is confusing.
+    
+    This patch adds a diagnostic message to make the cause of the failure
+    easier to determine.
+    
+    Signed-off-by: Peter Oskolkov <posk@google.com>
+    Signed-off-by: David S. Miller <davem@davemloft.net>
+    Signed-off-by: Suraj Jitindar Singh <surajjs@amazon.com>
+    Cc: <stable@vger.kernel.org> # 4.19.x
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 610003d742341dddca03a83beb7c61f1f079b8c5
+Author: Bartosz Pawlowski <bartosz.pawlowski@intel.com>
+Date:   Fri Sep 8 14:36:06 2023 +0000
+
+    PCI: Disable ATS for specific Intel IPU E2000 devices
+    
+    commit a18615b1cfc04f00548c60eb9a77e0ce56e848fd upstream.
+    
+    Due to a hardware issue in A and B steppings of Intel IPU E2000, it expects
+    wrong endianness in ATS invalidation message body. This problem can lead to
+    outdated translations being returned as valid and finally cause system
+    instability.
+    
+    To prevent such issues, add quirk_intel_e2000_no_ats() to disable ATS for
+    vulnerable IPU E2000 devices.
+    
+    Link: https://lore.kernel.org/r/20230908143606.685930-3-bartosz.pawlowski@intel.com
+    Signed-off-by: Bartosz Pawlowski <bartosz.pawlowski@intel.com>
+    Signed-off-by: Bjorn Helgaas <bhelgaas@google.com>
+    Reviewed-by: Andy Shevchenko <andriy.shevchenko@linux.intel.com>
+    Reviewed-by: Alexander Lobakin <aleksander.lobakin@intel.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 5e2cf4c8777cb3fdafecdbce263ba5d975910f03
+Author: Bartosz Pawlowski <bartosz.pawlowski@intel.com>
+Date:   Fri Sep 8 14:36:05 2023 +0000
+
+    PCI: Extract ATS disabling to a helper function
+    
+    commit f18b1137d38c091cc8c16365219f0a1d4a30b3d1 upstream.
+    
+    Introduce quirk_no_ats() helper function to provide a standard way to
+    disable ATS capability in PCI quirks.
+    
+    Suggested-by: Andy Shevchenko <andriy.shevchenko@linux.intel.com>
+    Link: https://lore.kernel.org/r/20230908143606.685930-2-bartosz.pawlowski@intel.com
+    Signed-off-by: Bartosz Pawlowski <bartosz.pawlowski@intel.com>
+    Signed-off-by: Bjorn Helgaas <bhelgaas@google.com>
+    Reviewed-by: Andy Shevchenko <andriy.shevchenko@linux.intel.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 087d38ae0fd5a9a41b949e97601b4b0d09336f19
+Author: Phil Sutter <phil@nwl.cc>
+Date:   Wed Feb 16 15:55:38 2022 +0100
+
+    netfilter: nf_tables: Reject tables of unsupported family
+    
+    commit f1082dd31fe461d482d69da2a8eccfeb7bf07ac2 upstream.
+    
+    An nftables family is merely a hollow container, its family just a
+    number and such not reliant on compile-time options other than nftables
+    support itself. Add an artificial check so attempts at using a family
+    the kernel can't support fail as early as possible. This helps user
+    space detect kernels which lack e.g. NFPROTO_INET.
+    
+    Signed-off-by: Phil Sutter <phil@nwl.cc>
+    Signed-off-by: Pablo Neira Ayuso <pablo@netfilter.org>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 437d8898fbf40b92516aef697b5638acccb7a6f9
+Author: ruanmeisi <ruan.meisi@zte.com.cn>
+Date:   Tue Apr 25 19:13:54 2023 +0800
+
+    fuse: nlookup missing decrement in fuse_direntplus_link
+    
+    commit b8bd342d50cbf606666488488f9fea374aceb2d5 upstream.
+    
+    During our debugging of glusterfs, we found an Assertion failed error:
+    inode_lookup >= nlookup, which was caused by the nlookup value in the
+    kernel being greater than that in the FUSE file system.
+    
+    The issue was introduced by fuse_direntplus_link, where in the function,
+    fuse_iget increments nlookup, and if d_splice_alias returns failure,
+    fuse_direntplus_link returns failure without decrementing nlookup
+    https://github.com/gluster/glusterfs/pull/4081
+    
+    Signed-off-by: ruanmeisi <ruan.meisi@zte.com.cn>
+    Fixes: 0b05b18381ee ("fuse: implement NFS-like readdirplus support")
+    Cc: <stable@vger.kernel.org> # v3.9
+    Signed-off-by: Miklos Szeredi <mszeredi@redhat.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 74f6bca1532e013ff5745414288088486b4e9251
+Author: Geert Uytterhoeven <geert+renesas@glider.be>
+Date:   Mon Dec 4 12:29:53 2023 +0100
+
+    mmc: core: Cancel delayed work before releasing host
+    
+    commit 1036f69e251380573e256568cf814506e3fb9988 upstream.
+    
+    On RZ/Five SMARC EVK, where probing of SDHI is deferred due to probe
+    deferral of the vqmmc-supply regulator:
+    
+        ------------[ cut here ]------------
+        WARNING: CPU: 0 PID: 0 at kernel/time/timer.c:1738 __run_timers.part.0+0x1d0/0x1e8
+        Modules linked in:
+        CPU: 0 PID: 0 Comm: swapper Not tainted 6.7.0-rc4 #101
+        Hardware name: Renesas SMARC EVK based on r9a07g043f01 (DT)
+        epc : __run_timers.part.0+0x1d0/0x1e8
+         ra : __run_timers.part.0+0x134/0x1e8
+        epc : ffffffff800771a4 ra : ffffffff80077108 sp : ffffffc800003e60
+         gp : ffffffff814f5028 tp : ffffffff8140c5c0 t0 : ffffffc800000000
+         t1 : 0000000000000001 t2 : ffffffff81201300 s0 : ffffffc800003f20
+         s1 : ffffffd8023bc4a0 a0 : 00000000fffee6b0 a1 : 0004010000400000
+         a2 : ffffffffc0000016 a3 : ffffffff81488640 a4 : ffffffc800003e60
+         a5 : 0000000000000000 a6 : 0000000004000000 a7 : ffffffc800003e68
+         s2 : 0000000000000122 s3 : 0000000000200000 s4 : 0000000000000000
+         s5 : ffffffffffffffff s6 : ffffffff81488678 s7 : ffffffff814886c0
+         s8 : ffffffff814f49c0 s9 : ffffffff81488640 s10: 0000000000000000
+         s11: ffffffc800003e60 t3 : 0000000000000240 t4 : 0000000000000a52
+         t5 : ffffffd8024ae018 t6 : ffffffd8024ae038
+        status: 0000000200000100 badaddr: 0000000000000000 cause: 0000000000000003
+        [<ffffffff800771a4>] __run_timers.part.0+0x1d0/0x1e8
+        [<ffffffff800771e0>] run_timer_softirq+0x24/0x4a
+        [<ffffffff80809092>] __do_softirq+0xc6/0x1fa
+        [<ffffffff80028e4c>] irq_exit_rcu+0x66/0x84
+        [<ffffffff80800f7a>] handle_riscv_irq+0x40/0x4e
+        [<ffffffff80808f48>] call_on_irq_stack+0x1c/0x28
+        ---[ end trace 0000000000000000 ]---
+    
+    What happens?
+    
+        renesas_sdhi_probe()
+        {
+            tmio_mmc_host_alloc()
+                mmc_alloc_host()
+                    INIT_DELAYED_WORK(&host->detect, mmc_rescan);
+    
+            devm_request_irq(tmio_mmc_irq);
+    
+            /*
+             * After this, the interrupt handler may be invoked at any time
+             *
+             *  tmio_mmc_irq()
+             *  {
+             *      __tmio_mmc_card_detect_irq()
+             *          mmc_detect_change()
+             *              _mmc_detect_change()
+             *                  mmc_schedule_delayed_work(&host->detect, delay);
+             *  }
+             */
+    
+            tmio_mmc_host_probe()
+                tmio_mmc_init_ocr()
+                    -EPROBE_DEFER
+    
+            tmio_mmc_host_free()
+                mmc_free_host()
+        }
+    
+    When expire_timers() runs later, it warns because the MMC host structure
+    containing the delayed work was freed, and now contains an invalid work
+    function pointer.
+    
+    Fix this by cancelling any pending delayed work before releasing the
+    MMC host structure.
+    
+    Signed-off-by: Geert Uytterhoeven <geert+renesas@glider.be>
+    Tested-by: Lad Prabhakar <prabhakar.mahadev-lad.rj@bp.renesas.com>
+    Cc: stable@vger.kernel.org
+    Link: https://lore.kernel.org/r/205dc4c91b47e31b64392fe2498c7a449e717b4b.1701689330.git.geert+renesas@glider.be
+    Signed-off-by: Ulf Hansson <ulf.hansson@linaro.org>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 4a2d650b8fb83b0ceb37279dcc7ceafd10b578a3
+Author: Jorge Ramirez-Ortiz <jorge@foundries.io>
+Date:   Fri Dec 1 16:31:43 2023 +0100
+
+    mmc: rpmb: fixes pause retune on all RPMB partitions.
+    
+    commit e7794c14fd73e5eb4a3e0ecaa5334d5a17377c50 upstream.
+    
+    When RPMB was converted to a character device, it added support for
+    multiple RPMB partitions (Commit 97548575bef3 ("mmc: block: Convert RPMB to
+    a character device").
+    
+    One of the changes in this commit was transforming the variable target_part
+    defined in __mmc_blk_ioctl_cmd into a bitmask. This inadvertently regressed
+    the validation check done in mmc_blk_part_switch_pre() and
+    mmc_blk_part_switch_post(), so let's fix it.
+    
+    Fixes: 97548575bef3 ("mmc: block: Convert RPMB to a character device")
+    Signed-off-by: Jorge Ramirez-Ortiz <jorge@foundries.io>
+    Reviewed-by: Linus Walleij <linus.walleij@linaro.org>
+    Cc: <stable@vger.kernel.org>
+    Link: https://lore.kernel.org/r/20231201153143.1449753-1-jorge@foundries.io
+    Signed-off-by: Ulf Hansson <ulf.hansson@linaro.org>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 2db1c46c3913b8bc92fed235a344de2671fe9d8d
+Author: Jiajun Xie <jiajun.xie.sh@gmail.com>
+Date:   Wed Dec 20 13:28:39 2023 +0800
+
+    mm: fix unmap_mapping_range high bits shift bug
+    
+    commit 9eab0421fa94a3dde0d1f7e36ab3294fc306c99d upstream.
+    
+    The bug happens when highest bit of holebegin is 1, suppose holebegin is
+    0x8000000111111000, after shift, hba would be 0xfff8000000111111, then
+    vma_interval_tree_foreach would look it up fail or leads to the wrong
+    result.
+    
+    error call seq e.g.:
+    - mmap(..., offset=0x8000000111111000)
+      |- syscall(mmap, ... unsigned long, off):
+         |- ksys_mmap_pgoff( ... , off >> PAGE_SHIFT);
+    
+      here pgoff is correctly shifted to 0x8000000111111,
+      but pass 0x8000000111111000 as holebegin to unmap
+      would then cause terrible result, as shown below:
+    
+    - unmap_mapping_range(..., loff_t const holebegin)
+      |- pgoff_t hba = holebegin >> PAGE_SHIFT;
+              /* hba = 0xfff8000000111111 unexpectedly */
+    
+    The issue happens in Heterogeneous computing, where the device(e.g.
+    gpu) and host share the same virtual address space.
+    
+    A simple workflow pattern which hit the issue is:
+            /* host */
+        1. userspace first mmap a file backed VA range with specified offset.
+                            e.g. (offset=0x800..., mmap return: va_a)
+        2. write some data to the corresponding sys page
+                             e.g. (va_a = 0xAABB)
+            /* device */
+        3. gpu workload touches VA, triggers gpu fault and notify the host.
+            /* host */
+        4. reviced gpu fault notification, then it will:
+                4.1 unmap host pages and also takes care of cpu tlb
+                      (use unmap_mapping_range with offset=0x800...)
+                4.2 migrate sys page to device
+                4.3 setup device page table and resolve device fault.
+            /* device */
+        5. gpu workload continued, it accessed va_a and got 0xAABB.
+        6. gpu workload continued, it wrote 0xBBCC to va_a.
+            /* host */
+        7. userspace access va_a, as expected, it will:
+                7.1 trigger cpu vm fault.
+                7.2 driver handling fault to migrate gpu local page to host.
+        8. userspace then could correctly get 0xBBCC from va_a
+        9. done
+    
+    But in step 4.1, if we hit the bug this patch mentioned, then userspace
+    would never trigger cpu fault, and still get the old value: 0xAABB.
+    
+    Making holebegin unsigned first fixes the bug.
+    
+    Link: https://lkml.kernel.org/r/20231220052839.26970-1-jiajun.xie.sh@gmail.com
+    Signed-off-by: Jiajun Xie <jiajun.xie.sh@gmail.com>
+    Cc: <stable@vger.kernel.org>
+    Signed-off-by: Andrew Morton <akpm@linux-foundation.org>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 50f8b0a96c88f78c2e40cdb93557385c2ce5f5e8
+Author: Takashi Sakamoto <o-takashi@sakamocchi.jp>
+Date:   Tue Jan 2 20:01:50 2024 +0900
+
+    firewire: ohci: suppress unexpected system reboot in AMD Ryzen machines and ASM108x/VT630x PCIe cards
+    
+    commit ac9184fbb8478dab4a0724b279f94956b69be827 upstream.
+    
+    VIA VT6306/6307/6308 provides PCI interface compliant to 1394 OHCI. When
+    the hardware is combined with Asmedia ASM1083/1085 PCIe-to-PCI bus bridge,
+    it appears that accesses to its 'Isochronous Cycle Timer' register (offset
+    0xf0 on PCI memory space) often causes unexpected system reboot in any
+    type of AMD Ryzen machine (both 0x17 and 0x19 families). It does not
+    appears in the other type of machine (AMD pre-Ryzen machine, Intel
+    machine, at least), or in the other OHCI 1394 hardware (e.g. Texas
+    Instruments).
+    
+    The issue explicitly appears at a commit dcadfd7f7c74 ("firewire: core:
+    use union for callback of transaction completion") added to v6.5 kernel.
+    It changed 1394 OHCI driver to access to the register every time to
+    dispatch local asynchronous transaction. However, the issue exists in
+    older version of kernel as long as it runs in AMD Ryzen machine, since
+    the access to the register is required to maintain bus time. It is not
+    hard to imagine that users experience the unexpected system reboot when
+    generating bus reset by plugging any devices in, or reading the register
+    by time-aware application programs; e.g. audio sample processing.
+    
+    This commit suppresses the unexpected system reboot in the combination of
+    hardware. It avoids the access itself. As a result, the software stack can
+    not provide the hardware time anymore to unit drivers, userspace
+    applications, and nodes in the same IEEE 1394 bus. It brings apparent
+    disadvantage since time-aware application programs require it, while
+    time-unaware applications are available again; e.g. sbp2.
+    
+    Cc: stable@vger.kernel.org
+    Reported-by: Jiri Slaby <jirislaby@kernel.org>
+    Closes: https://bugzilla.suse.com/show_bug.cgi?id=1215436
+    Reported-by: Mario Limonciello <mario.limonciello@amd.com>
+    Closes: https://bugzilla.kernel.org/show_bug.cgi?id=217994
+    Reported-by: Tobias Gruetzmacher <tobias-lists@23.gs>
+    Closes: https://sourceforge.net/p/linux1394/mailman/message/58711901/
+    Closes: https://bugzilla.redhat.com/show_bug.cgi?id=2240973
+    Closes: https://bugs.launchpad.net/linux/+bug/2043905
+    Link: https://lore.kernel.org/r/20240102110150.244475-1-o-takashi@sakamocchi.jp
+    Signed-off-by: Takashi Sakamoto <o-takashi@sakamocchi.jp>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit c6f50413f2aacc919b5de443aa080b94f5ebb21d
+Author: Matthew Wilcox (Oracle) <willy@infradead.org>
+Date:   Mon Dec 18 13:58:36 2023 +0000
+
+    mm/memory-failure: check the mapcount of the precise page
+    
+    [ Upstream commit c79c5a0a00a9457718056b588f312baadf44e471 ]
+    
+    A process may map only some of the pages in a folio, and might be missed
+    if it maps the poisoned page but not the head page.  Or it might be
+    unnecessarily hit if it maps the head page, but not the poisoned page.
+    
+    Link: https://lkml.kernel.org/r/20231218135837.3310403-3-willy@infradead.org
+    Fixes: 7af446a841a2 ("HWPOISON, hugetlb: enable error handling path for hugepage")
+    Signed-off-by: Matthew Wilcox (Oracle) <willy@infradead.org>
+    Cc: Dan Williams <dan.j.williams@intel.com>
+    Cc: Naoya Horiguchi <n-horiguchi@ah.jp.nec.com>
+    Cc: <stable@vger.kernel.org>
+    Signed-off-by: Andrew Morton <akpm@linux-foundation.org>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit b39d97468acf9651ff68e44f0e0c7ebac4ecdca7
+Author: Michael Chan <michael.chan@broadcom.com>
+Date:   Wed Jan 3 16:59:24 2024 -0800
+
+    bnxt_en: Remove mis-applied code from bnxt_cfg_ntp_filters()
+    
+    [ Upstream commit e009b2efb7a8850498796b360043ac25c8d3d28f ]
+    
+    The 2 lines to check for the BNXT_HWRM_PF_UNLOAD_SP_EVENT bit was
+    mis-applied to bnxt_cfg_ntp_filters() and should have been applied to
+    bnxt_sp_task().
+    
+    Fixes: 19241368443f ("bnxt_en: Send PF driver unload notification to all VFs.")
+    Reviewed-by: Andy Gospodarek <andrew.gospodarek@broadcom.com>
+    Signed-off-by: Michael Chan <michael.chan@broadcom.com>
+    Signed-off-by: David S. Miller <davem@davemloft.net>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 1d267835dadc8cec3bd3da252171bb335f507cd3
+Author: Chen Ni <nichen@iscas.ac.cn>
+Date:   Wed Jan 3 03:35:34 2024 +0000
+
+    asix: Add check for usbnet_get_endpoints
+    
+    [ Upstream commit eaac6a2d26b65511e164772bec6918fcbc61938e ]
+    
+    Add check for usbnet_get_endpoints() and return the error if it fails
+    in order to transfer the error.
+    
+    Fixes: 16626b0cc3d5 ("asix: Add a new driver for the AX88172A")
+    Signed-off-by: Chen Ni <nichen@iscas.ac.cn>
+    Signed-off-by: David S. Miller <davem@davemloft.net>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 39437c89a3074b3e869dab2d0e65148923e327a5
+Author: Dinghao Liu <dinghao.liu@zju.edu.cn>
+Date:   Wed Dec 27 15:02:27 2023 +0800
+
+    net/qla3xxx: fix potential memleak in ql_alloc_buffer_queues
+    
+    [ Upstream commit 89f45c30172c80e55c887f32f1af8e184124577b ]
+    
+    When dma_alloc_coherent() fails, we should free qdev->lrg_buf
+    to prevent potential memleak.
+    
+    Fixes: 1357bfcf7106 ("qla3xxx: Dynamically size the rx buffer queue based on the MTU.")
+    Signed-off-by: Dinghao Liu <dinghao.liu@zju.edu.cn>
+    Link: https://lore.kernel.org/r/20231227070227.10527-1-dinghao.liu@zju.edu.cn
+    Signed-off-by: Jakub Kicinski <kuba@kernel.org>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 4c731d37cdd8bb66e4a6cff0ce69eb6ecf4e7620
+Author: Christophe JAILLET <christophe.jaillet@wanadoo.fr>
+Date:   Sun Jan 17 09:15:42 2021 +0100
+
+    net/qla3xxx: switch from 'pci_' to 'dma_' API
+    
+    [ Upstream commit 41fb4c1ba7478fe34c7e094e124e4ee4513b9763 ]
+    
+    The wrappers in include/linux/pci-dma-compat.h should go away.
+    
+    The patch has been generated with the coccinelle script below and has been
+    hand modified to replace GFP_ with a correct flag.
+    It has been compile tested.
+    
+    When memory is allocated in 'ql_alloc_net_req_rsp_queues()' GFP_KERNEL can
+    be used because it is only called from 'ql_alloc_mem_resources()' which
+    already calls 'ql_alloc_buffer_queues()' which uses GFP_KERNEL. (see below)
+    
+    When memory is allocated in 'ql_alloc_buffer_queues()' GFP_KERNEL can be
+    used because this flag is already used just a few line above.
+    
+    When memory is allocated in 'ql_alloc_small_buffers()' GFP_KERNEL can
+    be used because it is only called from 'ql_alloc_mem_resources()' which
+    already calls 'ql_alloc_buffer_queues()' which uses GFP_KERNEL. (see above)
+    
+    When memory is allocated in 'ql_alloc_mem_resources()' GFP_KERNEL can be
+    used because this function already calls 'ql_alloc_buffer_queues()' which
+    uses GFP_KERNEL. (see above)
+    
+    While at it, use 'dma_set_mask_and_coherent()' instead of 'dma_set_mask()/
+    dma_set_coherent_mask()' in order to slightly simplify code.
+    
+    @@
+    @@
+    -    PCI_DMA_BIDIRECTIONAL
+    +    DMA_BIDIRECTIONAL
+    
+    @@
+    @@
+    -    PCI_DMA_TODEVICE
+    +    DMA_TO_DEVICE
+    
+    @@
+    @@
+    -    PCI_DMA_FROMDEVICE
+    +    DMA_FROM_DEVICE
+    
+    @@
+    @@
+    -    PCI_DMA_NONE
+    +    DMA_NONE
+    
+    @@
+    expression e1, e2, e3;
+    @@
+    -    pci_alloc_consistent(e1, e2, e3)
+    +    dma_alloc_coherent(&e1->dev, e2, e3, GFP_)
+    
+    @@
+    expression e1, e2, e3;
+    @@
+    -    pci_zalloc_consistent(e1, e2, e3)
+    +    dma_alloc_coherent(&e1->dev, e2, e3, GFP_)
+    
+    @@
+    expression e1, e2, e3, e4;
+    @@
+    -    pci_free_consistent(e1, e2, e3, e4)
+    +    dma_free_coherent(&e1->dev, e2, e3, e4)
+    
+    @@
+    expression e1, e2, e3, e4;
+    @@
+    -    pci_map_single(e1, e2, e3, e4)
+    +    dma_map_single(&e1->dev, e2, e3, e4)
+    
+    @@
+    expression e1, e2, e3, e4;
+    @@
+    -    pci_unmap_single(e1, e2, e3, e4)
+    +    dma_unmap_single(&e1->dev, e2, e3, e4)
+    
+    @@
+    expression e1, e2, e3, e4, e5;
+    @@
+    -    pci_map_page(e1, e2, e3, e4, e5)
+    +    dma_map_page(&e1->dev, e2, e3, e4, e5)
+    
+    @@
+    expression e1, e2, e3, e4;
+    @@
+    -    pci_unmap_page(e1, e2, e3, e4)
+    +    dma_unmap_page(&e1->dev, e2, e3, e4)
+    
+    @@
+    expression e1, e2, e3, e4;
+    @@
+    -    pci_map_sg(e1, e2, e3, e4)
+    +    dma_map_sg(&e1->dev, e2, e3, e4)
+    
+    @@
+    expression e1, e2, e3, e4;
+    @@
+    -    pci_unmap_sg(e1, e2, e3, e4)
+    +    dma_unmap_sg(&e1->dev, e2, e3, e4)
+    
+    @@
+    expression e1, e2, e3, e4;
+    @@
+    -    pci_dma_sync_single_for_cpu(e1, e2, e3, e4)
+    +    dma_sync_single_for_cpu(&e1->dev, e2, e3, e4)
+    
+    @@
+    expression e1, e2, e3, e4;
+    @@
+    -    pci_dma_sync_single_for_device(e1, e2, e3, e4)
+    +    dma_sync_single_for_device(&e1->dev, e2, e3, e4)
+    
+    @@
+    expression e1, e2, e3, e4;
+    @@
+    -    pci_dma_sync_sg_for_cpu(e1, e2, e3, e4)
+    +    dma_sync_sg_for_cpu(&e1->dev, e2, e3, e4)
+    
+    @@
+    expression e1, e2, e3, e4;
+    @@
+    -    pci_dma_sync_sg_for_device(e1, e2, e3, e4)
+    +    dma_sync_sg_for_device(&e1->dev, e2, e3, e4)
+    
+    @@
+    expression e1, e2;
+    @@
+    -    pci_dma_mapping_error(e1, e2)
+    +    dma_mapping_error(&e1->dev, e2)
+    
+    @@
+    expression e1, e2;
+    @@
+    -    pci_set_dma_mask(e1, e2)
+    +    dma_set_mask(&e1->dev, e2)
+    
+    @@
+    expression e1, e2;
+    @@
+    -    pci_set_consistent_dma_mask(e1, e2)
+    +    dma_set_coherent_mask(&e1->dev, e2)
+    
+    Signed-off-by: Christophe JAILLET <christophe.jaillet@wanadoo.fr>
+    Link: https://lore.kernel.org/r/20210117081542.560021-1-christophe.jaillet@wanadoo.fr
+    Signed-off-by: Jakub Kicinski <kuba@kernel.org>
+    Stable-dep-of: 89f45c30172c ("net/qla3xxx: fix potential memleak in ql_alloc_buffer_queues")
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit d94b35454b1ff91f3d1cb12198b00b71ec3341aa
+Author: Andrii Staikov <andrii.staikov@intel.com>
+Date:   Thu Dec 21 14:27:35 2023 +0100
+
+    i40e: Restore VF MSI-X state during PCI reset
+    
+    [ Upstream commit 371e576ff3e8580d91d49026e5d5faebf5565558 ]
+    
+    During a PCI FLR the MSI-X Enable flag in the VF PCI MSI-X capability
+    register will be cleared. This can lead to issues when a VF is
+    assigned to a VM because in these cases the VF driver receives no
+    indication of the PF PCI error/reset and additionally it is incapable
+    of restoring the cleared flag in the hypervisor configuration space
+    without fully reinitializing the driver interrupt functionality.
+    
+    Since the VF driver is unable to easily resolve this condition on its own,
+    restore the VF MSI-X flag during the PF PCI reset handling.
+    
+    Fixes: 19b7960b2da1 ("i40e: implement split PCI error reset handler")
+    Co-developed-by: Karen Ostrowska <karen.ostrowska@intel.com>
+    Signed-off-by: Karen Ostrowska <karen.ostrowska@intel.com>
+    Co-developed-by: Mateusz Palczewski <mateusz.palczewski@intel.com>
+    Signed-off-by: Mateusz Palczewski <mateusz.palczewski@intel.com>
+    Reviewed-by: Wojciech Drewek <wojciech.drewek@intel.com>
+    Reviewed-by: Przemek Kitszel <przemyslaw.kitszel@intel.com>
+    Signed-off-by: Andrii Staikov <andrii.staikov@intel.com>
+    Tested-by: Rafal Romanowski <rafal.romanowski@intel.com>
+    Signed-off-by: Tony Nguyen <anthony.l.nguyen@intel.com>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit af9ec305b68635ae6d8eb957e91e723bfee0d336
+Author: Ke Xiao <xiaoke@sangfor.com.cn>
+Date:   Mon Dec 18 15:08:50 2023 +0800
+
+    i40e: fix use-after-free in i40e_aqc_add_filters()
+    
+    [ Upstream commit 6a15584e99db8918b60e507539c7446375dcf366 ]
+    
+    Commit 3116f59c12bd ("i40e: fix use-after-free in
+    i40e_sync_filters_subtask()") avoided use-after-free issues,
+    by increasing refcount during update the VSI filter list to
+    the HW. However, it missed the unicast situation.
+    
+    When deleting an unicast FDB entry, the i40e driver will release
+    the mac_filter, and i40e_service_task will concurrently request
+    firmware to add the mac_filter, which will lead to the following
+    use-after-free issue.
+    
+    Fix again for both netdev->uc and netdev->mc.
+    
+    BUG: KASAN: use-after-free in i40e_aqc_add_filters+0x55c/0x5b0 [i40e]
+    Read of size 2 at addr ffff888eb3452d60 by task kworker/8:7/6379
+    
+    CPU: 8 PID: 6379 Comm: kworker/8:7 Kdump: loaded Tainted: G
+    Workqueue: i40e i40e_service_task [i40e]
+    Call Trace:
+     dump_stack+0x71/0xab
+     print_address_description+0x6b/0x290
+     kasan_report+0x14a/0x2b0
+     i40e_aqc_add_filters+0x55c/0x5b0 [i40e]
+     i40e_sync_vsi_filters+0x1676/0x39c0 [i40e]
+     i40e_service_task+0x1397/0x2bb0 [i40e]
+     process_one_work+0x56a/0x11f0
+     worker_thread+0x8f/0xf40
+     kthread+0x2a0/0x390
+     ret_from_fork+0x1f/0x40
+    
+    Allocated by task 21948:
+     kasan_kmalloc+0xa6/0xd0
+     kmem_cache_alloc_trace+0xdb/0x1c0
+     i40e_add_filter+0x11e/0x520 [i40e]
+     i40e_addr_sync+0x37/0x60 [i40e]
+     __hw_addr_sync_dev+0x1f5/0x2f0
+     i40e_set_rx_mode+0x61/0x1e0 [i40e]
+     dev_uc_add_excl+0x137/0x190
+     i40e_ndo_fdb_add+0x161/0x260 [i40e]
+     rtnl_fdb_add+0x567/0x950
+     rtnetlink_rcv_msg+0x5db/0x880
+     netlink_rcv_skb+0x254/0x380
+     netlink_unicast+0x454/0x610
+     netlink_sendmsg+0x747/0xb00
+     sock_sendmsg+0xe2/0x120
+     __sys_sendto+0x1ae/0x290
+     __x64_sys_sendto+0xdd/0x1b0
+     do_syscall_64+0xa0/0x370
+     entry_SYSCALL_64_after_hwframe+0x65/0xca
+    
+    Freed by task 21948:
+     __kasan_slab_free+0x137/0x190
+     kfree+0x8b/0x1b0
+     __i40e_del_filter+0x116/0x1e0 [i40e]
+     i40e_del_mac_filter+0x16c/0x300 [i40e]
+     i40e_addr_unsync+0x134/0x1b0 [i40e]
+     __hw_addr_sync_dev+0xff/0x2f0
+     i40e_set_rx_mode+0x61/0x1e0 [i40e]
+     dev_uc_del+0x77/0x90
+     rtnl_fdb_del+0x6a5/0x860
+     rtnetlink_rcv_msg+0x5db/0x880
+     netlink_rcv_skb+0x254/0x380
+     netlink_unicast+0x454/0x610
+     netlink_sendmsg+0x747/0xb00
+     sock_sendmsg+0xe2/0x120
+     __sys_sendto+0x1ae/0x290
+     __x64_sys_sendto+0xdd/0x1b0
+     do_syscall_64+0xa0/0x370
+     entry_SYSCALL_64_after_hwframe+0x65/0xca
+    
+    Fixes: 3116f59c12bd ("i40e: fix use-after-free in i40e_sync_filters_subtask()")
+    Fixes: 41c445ff0f48 ("i40e: main driver core")
+    Signed-off-by: Ke Xiao <xiaoke@sangfor.com.cn>
+    Signed-off-by: Ding Hui <dinghui@sangfor.com.cn>
+    Cc: Di Zhu <zhudi2@huawei.com>
+    Reviewed-by: Jan Sokolowski <jan.sokolowski@intel.com>
+    Reviewed-by: Simon Horman <horms@kernel.org>
+    Reviewed-by: Jacob Keller <jacob.e.keller@intel.com>
+    Tested-by: Pucha Himasekhar Reddy <himasekharx.reddy.pucha@intel.com> (A Contingent worker at Intel)
+    Signed-off-by: Tony Nguyen <anthony.l.nguyen@intel.com>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 0c220aefdb064f4fff02732ecd302f0901b15dc0
+Author: Marc Dionne <marc.dionne@auristor.com>
+Date:   Thu Dec 21 09:12:30 2023 -0400
+
+    net: Save and restore msg_namelen in sock_sendmsg
+    
+    [ Upstream commit 01b2885d9415152bcb12ff1f7788f500a74ea0ed ]
+    
+    Commit 86a7e0b69bd5 ("net: prevent rewrite of msg_name in
+    sock_sendmsg()") made sock_sendmsg save the incoming msg_name pointer
+    and restore it before returning, to insulate the caller against
+    msg_name being changed by the called code.  If the address length
+    was also changed however, we may return with an inconsistent structure
+    where the length doesn't match the address, and attempts to reuse it may
+    lead to lost packets.
+    
+    For example, a kernel that doesn't have commit 1c5950fc6fe9 ("udp6: fix
+    potential access to stale information") will replace a v4 mapped address
+    with its ipv4 equivalent, and shorten namelen accordingly from 28 to 16.
+    If the caller attempts to reuse the resulting msg structure, it will have
+    the original ipv6 (v4 mapped) address but an incorrect v4 length.
+    
+    Fixes: 86a7e0b69bd5 ("net: prevent rewrite of msg_name in sock_sendmsg()")
+    Signed-off-by: Marc Dionne <marc.dionne@auristor.com>
+    Reviewed-by: Willem de Bruijn <willemb@google.com>
+    Signed-off-by: David S. Miller <davem@davemloft.net>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit fe7f1685f44bf8c24e3d9d9bb5196c668513aedb
+Author: Adrian Cinal <adriancinal@gmail.com>
+Date:   Thu Dec 28 14:56:38 2023 +0100
+
+    net: bcmgenet: Fix FCS generation for fragmented skbuffs
+    
+    [ Upstream commit e584f2ff1e6cc9b1d99e8a6b0f3415940d1b3eb3 ]
+    
+    The flag DMA_TX_APPEND_CRC was only written to the first DMA descriptor
+    in the TX path, where each descriptor corresponds to a single skbuff
+    fragment (or the skbuff head). This led to packets with no FCS appearing
+    on the wire if the kernel allocated the packet in fragments, which would
+    always happen when using PACKET_MMAP/TPACKET (cf. tpacket_fill_skb() in
+    net/af_packet.c).
+    
+    Fixes: 1c1008c793fa ("net: bcmgenet: add main driver file")
+    Signed-off-by: Adrian Cinal <adriancinal1@gmail.com>
+    Acked-by: Doug Berger <opendmb@gmail.com>
+    Acked-by: Florian Fainelli <florian.fainelli@broadcom.com>
+    Link: https://lore.kernel.org/r/20231228135638.1339245-1-adriancinal1@gmail.com
+    Signed-off-by: Jakub Kicinski <kuba@kernel.org>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit ee49874f862ffa7d155fa4b2ef12a4ad1504c184
+Author: Stefan Wahren <wahrenst@gmx.net>
+Date:   Thu Dec 28 20:39:02 2023 +0100
+
+    ARM: sun9i: smp: Fix array-index-out-of-bounds read in sunxi_mc_smp_init
+    
+    [ Upstream commit 72ad3b772b6d393701df58ba1359b0bb346a19ed ]
+    
+    Running a multi-arch kernel (multi_v7_defconfig) on a Raspberry Pi 3B+
+    with enabled CONFIG_UBSAN triggers the following warning:
+    
+     UBSAN: array-index-out-of-bounds in arch/arm/mach-sunxi/mc_smp.c:810:29
+     index 2 is out of range for type 'sunxi_mc_smp_data [2]'
+     CPU: 0 PID: 1 Comm: swapper/0 Not tainted 6.7.0-rc6-00248-g5254c0cbc92d
+     Hardware name: BCM2835
+      unwind_backtrace from show_stack+0x10/0x14
+      show_stack from dump_stack_lvl+0x40/0x4c
+      dump_stack_lvl from ubsan_epilogue+0x8/0x34
+      ubsan_epilogue from __ubsan_handle_out_of_bounds+0x78/0x80
+      __ubsan_handle_out_of_bounds from sunxi_mc_smp_init+0xe4/0x4cc
+      sunxi_mc_smp_init from do_one_initcall+0xa0/0x2fc
+      do_one_initcall from kernel_init_freeable+0xf4/0x2f4
+      kernel_init_freeable from kernel_init+0x18/0x158
+      kernel_init from ret_from_fork+0x14/0x28
+    
+    Since the enabled method couldn't match with any entry from
+    sunxi_mc_smp_data, the value of the index shouldn't be used right after
+    the loop. So move it after the check of ret in order to have a valid
+    index.
+    
+    Fixes: 1631090e34f5 ("ARM: sun9i: smp: Add is_a83t field")
+    Signed-off-by: Stefan Wahren <wahrenst@gmx.net>
+    Link: https://lore.kernel.org/r/20231228193903.9078-1-wahrenst@gmx.net
+    Reviewed-by: Chen-Yu Tsai <wens@csie.org>
+    Signed-off-by: Arnd Bergmann <arnd@arndb.de>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 67188c52c06ad8bf3890d9a2dc8cedc9a707cb61
+Author: Hangyu Hua <hbh25y@gmail.com>
+Date:   Thu Dec 21 10:25:31 2023 +0800
+
+    net: sched: em_text: fix possible memory leak in em_text_destroy()
+    
+    [ Upstream commit 8fcb0382af6f1ef50936f1be05b8149eb2f88496 ]
+    
+    m->data needs to be freed when em_text_destroy is called.
+    
+    Fixes: d675c989ed2d ("[PKT_SCHED]: Packet classification based on textsearch (ematch)")
+    Acked-by: Jamal Hadi Salim <jhs@mojatatu.com>
+    Signed-off-by: Hangyu Hua <hbh25y@gmail.com>
+    Reviewed-by: Simon Horman <horms@kernel.org>
+    Signed-off-by: David S. Miller <davem@davemloft.net>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit e4f367ae64ff2ab90407e21ce0928b749a0c0c50
+Author: Sudheer Mogilappagari <sudheer.mogilappagari@intel.com>
+Date:   Wed Nov 29 11:23:11 2023 +0100
+
+    i40e: Fix filter input checks to prevent config with invalid values
+    
+    [ Upstream commit 3e48041d9820c17e0a51599d12e66c6e12a8d08d ]
+    
+    Prevent VF from configuring filters with unsupported actions or use
+    REDIRECT action with invalid tc number. Current checks could cause
+    out of bounds access on PF side.
+    
+    Fixes: e284fc280473 ("i40e: Add and delete cloud filter")
+    Reviewed-by: Andrii Staikov <andrii.staikov@intel.com>
+    Signed-off-by: Sudheer Mogilappagari <sudheer.mogilappagari@intel.com>
+    Signed-off-by: Aleksandr Loktionov <aleksandr.loktionov@intel.com>
+    Reviewed-by: Simon Horman <horms@kernel.org>
+    Tested-by: Bharathi Sreenivas <bharathi.sreenivas@intel.com>
+    Signed-off-by: Tony Nguyen <anthony.l.nguyen@intel.com>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit df02150025a3ac134a29c3a847b334f53d4b0c4a
+Author: Siddh Raman Pant <code@siddh.me>
+Date:   Tue Dec 19 23:19:43 2023 +0530
+
+    nfc: llcp_core: Hold a ref to llcp_local->dev when holding a ref to llcp_local
+    
+    [ Upstream commit c95f919567d6f1914f13350af61a1b044ac85014 ]
+    
+    llcp_sock_sendmsg() calls nfc_llcp_send_ui_frame() which in turn calls
+    nfc_alloc_send_skb(), which accesses the nfc_dev from the llcp_sock for
+    getting the headroom and tailroom needed for skb allocation.
+    
+    Parallelly the nfc_dev can be freed, as the refcount is decreased via
+    nfc_free_device(), leading to a UAF reported by Syzkaller, which can
+    be summarized as follows:
+    
+    (1) llcp_sock_sendmsg() -> nfc_llcp_send_ui_frame()
+            -> nfc_alloc_send_skb() -> Dereference *nfc_dev
+    (2) virtual_ncidev_close() -> nci_free_device() -> nfc_free_device()
+            -> put_device() -> nfc_release() -> Free *nfc_dev
+    
+    When a reference to llcp_local is acquired, we do not acquire the same
+    for the nfc_dev. This leads to freeing even when the llcp_local is in
+    use, and this is the case with the UAF described above too.
+    
+    Thus, when we acquire a reference to llcp_local, we should acquire a
+    reference to nfc_dev, and release the references appropriately later.
+    
+    References for llcp_local is initialized in nfc_llcp_register_device()
+    (which is called by nfc_register_device()). Thus, we should acquire a
+    reference to nfc_dev there.
+    
+    nfc_unregister_device() calls nfc_llcp_unregister_device() which in
+    turn calls nfc_llcp_local_put(). Thus, the reference to nfc_dev is
+    appropriately released later.
+    
+    Reported-and-tested-by: syzbot+bbe84a4010eeea00982d@syzkaller.appspotmail.com
+    Closes: https://syzkaller.appspot.com/bug?extid=bbe84a4010eeea00982d
+    Fixes: c7aa12252f51 ("NFC: Take a reference on the LLCP local pointer when creating a socket")
+    Reviewed-by: Suman Ghosh <sumang@marvell.com>
+    Signed-off-by: Siddh Raman Pant <code@siddh.me>
+    Reviewed-by: Krzysztof Kozlowski <krzysztof.kozlowski@linaro.org>
+    Signed-off-by: David S. Miller <davem@davemloft.net>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>

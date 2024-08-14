@@ -1,0 +1,407 @@
+commit 6a7c3bcc3c2e2c2e7a42d6601306095060ea938a
+Author: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+Date:   Sat Jun 25 15:16:09 2022 +0200
+
+    Linux 5.10.125
+    
+    Link: https://lore.kernel.org/r/20220623164322.296526800@linuxfoundation.org
+    Tested-by: Salvatore Bonaccorso <carnil@debian.org>
+    Tested-by: Pavel Machek (CIP) <pavel@denx.de>
+    Tested-by: Florian Fainelli <f.fainelli@gmail.com>
+    Tested-by: Shuah Khan <skhan@linuxfoundation.org>
+    Tested-by: Hulk Robot <hulkrobot@huawei.com>
+    Tested-by: Jon Hunter <jonathanh@nvidia.com>
+    Tested-by: Sudip Mukherjee <sudip.mukherjee@codethink.co.uk>
+    Tested-by: Guenter Roeck <linux@roeck-us.net>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit df3f3bb5059d20ef094d6b2f0256c4bf4127a859
+Author: Jens Axboe <axboe@kernel.dk>
+Date:   Wed Jun 22 14:05:49 2022 -0600
+
+    io_uring: add missing item types for various requests
+    
+    Any read/write should grab current->nsproxy, denoted by IO_WQ_WORK_FILES
+    as it refers to current->files as well, and connect and recv/recvmsg,
+    send/sendmsg should grab current->fs which is denoted by IO_WQ_WORK_FS.
+    
+    No upstream commit exists for this issue.
+    
+    Reported-by: Bing-Jhong Billy Jheng <billy@starlabs.sg>
+    Signed-off-by: Jens Axboe <axboe@kernel.dk>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 1a264b3a6940b2595dc6b51edf8b1d9a71963fc7
+Author: Will Deacon <will@kernel.org>
+Date:   Fri Jun 10 16:12:27 2022 +0100
+
+    arm64: mm: Don't invalidate FROM_DEVICE buffers at start of DMA transfer
+    
+    commit c50f11c6196f45c92ca48b16a5071615d4ae0572 upstream.
+    
+    Invalidating the buffer memory in arch_sync_dma_for_device() for
+    FROM_DEVICE transfers
+    
+    When using the streaming DMA API to map a buffer prior to inbound
+    non-coherent DMA (i.e. DMA_FROM_DEVICE), we invalidate any dirty CPU
+    cachelines so that they will not be written back during the transfer and
+    corrupt the buffer contents written by the DMA. This, however, poses two
+    potential problems:
+    
+      (1) If the DMA transfer does not write to every byte in the buffer,
+          then the unwritten bytes will contain stale data once the transfer
+          has completed.
+    
+      (2) If the buffer has a virtual alias in userspace, then stale data
+          may be visible via this alias during the period between performing
+          the cache invalidation and the DMA writes landing in memory.
+    
+    Address both of these issues by cleaning (aka writing-back) the dirty
+    lines in arch_sync_dma_for_device(DMA_FROM_DEVICE) instead of discarding
+    them using invalidation.
+    
+    Cc: Ard Biesheuvel <ardb@kernel.org>
+    Cc: Christoph Hellwig <hch@lst.de>
+    Cc: Robin Murphy <robin.murphy@arm.com>
+    Cc: Russell King <linux@armlinux.org.uk>
+    Cc: <stable@vger.kernel.org>
+    Link: https://lore.kernel.org/r/20220606152150.GA31568@willie-the-truck
+    Signed-off-by: Will Deacon <will@kernel.org>
+    Reviewed-by: Ard Biesheuvel <ardb@kernel.org>
+    Link: https://lore.kernel.org/r/20220610151228.4562-2-will@kernel.org
+    Signed-off-by: Catalin Marinas <catalin.marinas@arm.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit a1508d164e58dc0857a1103a014d78f321d7481f
+Author: Lukas Wunner <lukas@wunner.de>
+Date:   Sun Jan 23 05:21:14 2022 +0100
+
+    serial: core: Initialize rs485 RTS polarity already on probe
+    
+    commit 2dd8a74fddd21b95dcc60a2d3c9eaec993419d69 upstream.
+    
+    RTS polarity of rs485-enabled ports is currently initialized on uart
+    open via:
+    
+    tty_port_open()
+      tty_port_block_til_ready()
+        tty_port_raise_dtr_rts()  # if (C_BAUD(tty))
+          uart_dtr_rts()
+            uart_port_dtr_rts()
+    
+    There's at least three problems here:
+    
+    First, if no baud rate is set, RTS polarity is not initialized.
+    That's the right thing to do for rs232, but not for rs485, which
+    requires that RTS is deasserted unconditionally.
+    
+    Second, if the DeviceTree property "linux,rs485-enabled-at-boot-time" is
+    present, RTS should be deasserted as early as possible, i.e. on probe.
+    Otherwise it may remain asserted until first open.
+    
+    Third, even though RTS is deasserted on open and close, it may
+    subsequently be asserted by uart_throttle(), uart_unthrottle() or
+    uart_set_termios() because those functions aren't rs485-aware.
+    (Only uart_tiocmset() is.)
+    
+    To address these issues, move RTS initialization from uart_port_dtr_rts()
+    to uart_configure_port().  Prevent subsequent modification of RTS
+    polarity by moving the existing rs485 check from uart_tiocmget() to
+    uart_update_mctrl().
+    
+    That way, RTS is initialized on probe and then remains unmodified unless
+    the uart transmits data.  If rs485 is enabled at runtime (instead of at
+    boot) through a TIOCSRS485 ioctl(), RTS is initialized by the uart
+    driver's ->rs485_config() callback and then likewise remains unmodified.
+    
+    The PL011 driver initializes RTS on uart open and prevents subsequent
+    modification in its ->set_mctrl() callback.  That code is obsoleted by
+    the present commit, so drop it.
+    
+    Cc: Jan Kiszka <jan.kiszka@siemens.com>
+    Cc: Su Bao Cheng <baocheng.su@siemens.com>
+    Signed-off-by: Lukas Wunner <lukas@wunner.de>
+    Link: https://lore.kernel.org/r/2d2acaf3a69e89b7bf687c912022b11fd29dfa1e.1642909284.git.lukas@wunner.de
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 7ccb026ecb997405b59d391140c25ee347891504
+Author: Willy Tarreau <w@1wt.eu>
+Date:   Mon May 2 10:46:14 2022 +0200
+
+    tcp: drop the hash_32() part from the index calculation
+    
+    commit e8161345ddbb66e449abde10d2fdce93f867eba9 upstream.
+    
+    In commit 190cc82489f4 ("tcp: change source port randomizarion at
+    connect() time"), the table_perturb[] array was introduced and an
+    index was taken from the port_offset via hash_32(). But it turns
+    out that hash_32() performs a multiplication while the input here
+    comes from the output of SipHash in secure_seq, that is well
+    distributed enough to avoid the need for yet another hash.
+    
+    Suggested-by: Amit Klein <aksecurity@gmail.com>
+    Reviewed-by: Eric Dumazet <edumazet@google.com>
+    Signed-off-by: Willy Tarreau <w@1wt.eu>
+    Signed-off-by: Jakub Kicinski <kuba@kernel.org>
+    Cc: Ben Hutchings <ben@decadent.org.uk>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 9429b75bc271b6f29e50dbb0ee0751800ff87dd9
+Author: Willy Tarreau <w@1wt.eu>
+Date:   Mon May 2 10:46:13 2022 +0200
+
+    tcp: increase source port perturb table to 2^16
+    
+    commit 4c2c8f03a5ab7cb04ec64724d7d176d00bcc91e5 upstream.
+    
+    Moshe Kol, Amit Klein, and Yossi Gilad reported being able to accurately
+    identify a client by forcing it to emit only 40 times more connections
+    than there are entries in the table_perturb[] table. The previous two
+    improvements consisting in resalting the secret every 10s and adding
+    randomness to each port selection only slightly improved the situation,
+    and the current value of 2^8 was too small as it's not very difficult
+    to make a client emit 10k connections in less than 10 seconds.
+    
+    Thus we're increasing the perturb table from 2^8 to 2^16 so that the
+    same precision now requires 2.6M connections, which is more difficult in
+    this time frame and harder to hide as a background activity. The impact
+    is that the table now uses 256 kB instead of 1 kB, which could mostly
+    affect devices making frequent outgoing connections. However such
+    components usually target a small set of destinations (load balancers,
+    database clients, perf assessment tools), and in practice only a few
+    entries will be visited, like before.
+    
+    A live test at 1 million connections per second showed no performance
+    difference from the previous value.
+    
+    Reported-by: Moshe Kol <moshe.kol@mail.huji.ac.il>
+    Reported-by: Yossi Gilad <yossi.gilad@mail.huji.ac.il>
+    Reported-by: Amit Klein <aksecurity@gmail.com>
+    Reviewed-by: Eric Dumazet <edumazet@google.com>
+    Signed-off-by: Willy Tarreau <w@1wt.eu>
+    Signed-off-by: Jakub Kicinski <kuba@kernel.org>
+    Cc: Ben Hutchings <ben@decadent.org.uk>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 24b922a5da0055f1bb8b391b83e494d2e5d56508
+Author: Willy Tarreau <w@1wt.eu>
+Date:   Mon May 2 10:46:12 2022 +0200
+
+    tcp: dynamically allocate the perturb table used by source ports
+    
+    commit e9261476184be1abd486c9434164b2acbe0ed6c2 upstream.
+    
+    We'll need to further increase the size of this table and it's likely
+    that at some point its size will not be suitable anymore for a static
+    table. Let's allocate it on boot from inet_hashinfo2_init(), which is
+    called from tcp_init().
+    
+    Cc: Moshe Kol <moshe.kol@mail.huji.ac.il>
+    Cc: Yossi Gilad <yossi.gilad@mail.huji.ac.il>
+    Cc: Amit Klein <aksecurity@gmail.com>
+    Reviewed-by: Eric Dumazet <edumazet@google.com>
+    Signed-off-by: Willy Tarreau <w@1wt.eu>
+    Signed-off-by: Jakub Kicinski <kuba@kernel.org>
+    Cc: Ben Hutchings <ben@decadent.org.uk>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit d28e64b1c63eced06aedadcacb0be4997c10c7c1
+Author: Willy Tarreau <w@1wt.eu>
+Date:   Mon May 2 10:46:11 2022 +0200
+
+    tcp: add small random increments to the source port
+    
+    commit ca7af0402550f9a0b3316d5f1c30904e42ed257d upstream.
+    
+    Here we're randomly adding between 0 and 7 random increments to the
+    selected source port in order to add some noise in the source port
+    selection that will make the next port less predictable.
+    
+    With the default port range of 32768-60999 this means a worst case
+    reuse scenario of 14116/8=1764 connections between two consecutive
+    uses of the same port, with an average of 14116/4.5=3137. This code
+    was stressed at more than 800000 connections per second to a fixed
+    target with all connections closed by the client using RSTs (worst
+    condition) and only 2 connections failed among 13 billion, despite
+    the hash being reseeded every 10 seconds, indicating a perfectly
+    safe situation.
+    
+    Cc: Moshe Kol <moshe.kol@mail.huji.ac.il>
+    Cc: Yossi Gilad <yossi.gilad@mail.huji.ac.il>
+    Cc: Amit Klein <aksecurity@gmail.com>
+    Reviewed-by: Eric Dumazet <edumazet@google.com>
+    Signed-off-by: Willy Tarreau <w@1wt.eu>
+    Signed-off-by: Jakub Kicinski <kuba@kernel.org>
+    Cc: Ben Hutchings <ben@decadent.org.uk>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit dd46a868fcfdf3aac8ffb20b2321e174a0156fb2
+Author: Willy Tarreau <w@1wt.eu>
+Date:   Mon May 2 10:46:09 2022 +0200
+
+    tcp: use different parts of the port_offset for index and offset
+    
+    commit 9e9b70ae923baf2b5e8a0ea4fd0c8451801ac526 upstream.
+    
+    Amit Klein suggests that we use different parts of port_offset for the
+    table's index and the port offset so that there is no direct relation
+    between them.
+    
+    Cc: Jason A. Donenfeld <Jason@zx2c4.com>
+    Cc: Moshe Kol <moshe.kol@mail.huji.ac.il>
+    Cc: Yossi Gilad <yossi.gilad@mail.huji.ac.il>
+    Cc: Amit Klein <aksecurity@gmail.com>
+    Reviewed-by: Eric Dumazet <edumazet@google.com>
+    Signed-off-by: Willy Tarreau <w@1wt.eu>
+    Signed-off-by: Jakub Kicinski <kuba@kernel.org>
+    Cc: Ben Hutchings <ben@decadent.org.uk>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 743acb520799bd8987edb7d1282b7eeddeb8f986
+Author: Eric Dumazet <edumazet@google.com>
+Date:   Tue Feb 9 11:20:28 2021 -0800
+
+    tcp: add some entropy in __inet_hash_connect()
+    
+    commit c579bd1b4021c42ae247108f1e6f73dd3f08600c upstream.
+    
+    Even when implementing RFC 6056 3.3.4 (Algorithm 4: Double-Hash
+    Port Selection Algorithm), a patient attacker could still be able
+    to collect enough state from an otherwise idle host.
+    
+    Idea of this patch is to inject some noise, in the
+    cases __inet_hash_connect() found a candidate in the first
+    attempt.
+    
+    This noise should not significantly reduce the collision
+    avoidance, and should be zero if connection table
+    is already well used.
+    
+    Note that this is not implementing RFC 6056 3.3.5
+    because we think Algorithm 5 could hurt typical
+    workloads.
+    
+    Signed-off-by: Eric Dumazet <edumazet@google.com>
+    Cc: David Dworken <ddworken@google.com>
+    Cc: Willem de Bruijn <willemb@google.com>
+    Signed-off-by: David S. Miller <davem@davemloft.net>
+    Cc: Ben Hutchings <ben@decadent.org.uk>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 16b1994679a0ad7f12a3b40b928e70241303d6f4
+Author: Marian Postevca <posteuca@mutex.one>
+Date:   Fri Jun 3 18:34:59 2022 +0300
+
+    usb: gadget: u_ether: fix regression in setting fixed MAC address
+    
+    commit b337af3a4d6147000b7ca6b3438bf5c820849b37 upstream.
+    
+    In systemd systems setting a fixed MAC address through
+    the "dev_addr" module argument fails systematically.
+    When checking the MAC address after the interface is created
+    it always has the same but different MAC address to the one
+    supplied as argument.
+    
+    This is partially caused by systemd which by default will
+    set an internally generated permanent MAC address for interfaces
+    that are marked as having a randomly generated address.
+    
+    Commit 890d5b40908bfd1a ("usb: gadget: u_ether: fix race in
+    setting MAC address in setup phase") didn't take into account
+    the fact that the interface must be marked as having a set
+    MAC address when it's set as module argument.
+    
+    Fixed by marking the interface with NET_ADDR_SET when
+    the "dev_addr" module argument is supplied.
+    
+    Fixes: 890d5b40908bfd1a ("usb: gadget: u_ether: fix race in setting MAC address in setup phase")
+    Cc: stable@vger.kernel.org
+    Signed-off-by: Marian Postevca <posteuca@mutex.one>
+    Link: https://lore.kernel.org/r/20220603153459.32722-1-posteuca@mutex.one
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 355be6131164c5bacf2e810763835aecb6e01fcb
+Author: Damien Le Moal <damien.lemoal@opensource.wdc.com>
+Date:   Mon May 23 16:29:10 2022 +0900
+
+    zonefs: fix zonefs_iomap_begin() for reads
+    
+    commit c1c1204c0d0c1dccc1310b9277fb2bd8b663d8fe upstream.
+    
+    If a readahead is issued to a sequential zone file with an offset
+    exactly equal to the current file size, the iomap type is set to
+    IOMAP_UNWRITTEN, which will prevent an IO, but the iomap length is
+    calculated as 0. This causes a WARN_ON() in iomap_iter():
+    
+    [17309.548939] WARNING: CPU: 3 PID: 2137 at fs/iomap/iter.c:34 iomap_iter+0x9cf/0xe80
+    [...]
+    [17309.650907] RIP: 0010:iomap_iter+0x9cf/0xe80
+    [...]
+    [17309.754560] Call Trace:
+    [17309.757078]  <TASK>
+    [17309.759240]  ? lock_is_held_type+0xd8/0x130
+    [17309.763531]  iomap_readahead+0x1a8/0x870
+    [17309.767550]  ? iomap_read_folio+0x4c0/0x4c0
+    [17309.771817]  ? lockdep_hardirqs_on_prepare+0x400/0x400
+    [17309.778848]  ? lock_release+0x370/0x750
+    [17309.784462]  ? folio_add_lru+0x217/0x3f0
+    [17309.790220]  ? reacquire_held_locks+0x4e0/0x4e0
+    [17309.796543]  read_pages+0x17d/0xb60
+    [17309.801854]  ? folio_add_lru+0x238/0x3f0
+    [17309.807573]  ? readahead_expand+0x5f0/0x5f0
+    [17309.813554]  ? policy_node+0xb5/0x140
+    [17309.819018]  page_cache_ra_unbounded+0x27d/0x450
+    [17309.825439]  filemap_get_pages+0x500/0x1450
+    [17309.831444]  ? filemap_add_folio+0x140/0x140
+    [17309.837519]  ? lock_is_held_type+0xd8/0x130
+    [17309.843509]  filemap_read+0x28c/0x9f0
+    [17309.848953]  ? zonefs_file_read_iter+0x1ea/0x4d0 [zonefs]
+    [17309.856162]  ? trace_contention_end+0xd6/0x130
+    [17309.862416]  ? __mutex_lock+0x221/0x1480
+    [17309.868151]  ? zonefs_file_read_iter+0x166/0x4d0 [zonefs]
+    [17309.875364]  ? filemap_get_pages+0x1450/0x1450
+    [17309.881647]  ? __mutex_unlock_slowpath+0x15e/0x620
+    [17309.888248]  ? wait_for_completion_io_timeout+0x20/0x20
+    [17309.895231]  ? lock_is_held_type+0xd8/0x130
+    [17309.901115]  ? lock_is_held_type+0xd8/0x130
+    [17309.906934]  zonefs_file_read_iter+0x356/0x4d0 [zonefs]
+    [17309.913750]  new_sync_read+0x2d8/0x520
+    [17309.919035]  ? __x64_sys_lseek+0x1d0/0x1d0
+    
+    Furthermore, this causes iomap_readahead() to loop forever as
+    iomap_readahead_iter() always returns 0, making no progress.
+    
+    Fix this by treating reads after the file size as access to holes,
+    setting the iomap type to IOMAP_HOLE, the iomap addr to IOMAP_NULL_ADDR
+    and using the length argument as is for the iomap length. To simplify
+    the code with this change, zonefs_iomap_begin() is split into the read
+    variant, zonefs_read_iomap_begin() and zonefs_read_iomap_ops, and the
+    write variant, zonefs_write_iomap_begin() and zonefs_write_iomap_ops.
+    
+    Reported-by: Jorgen Hansen <Jorgen.Hansen@wdc.com>
+    Fixes: 8dcc1a9d90c1 ("fs: New zonefs file system")
+    Signed-off-by: Damien Le Moal <damien.lemoal@opensource.wdc.com>
+    Reviewed-by: Christoph Hellwig <hch@lst.de>
+    Reviewed-by: Johannes Thumshirn <johannes.thumshirn@wdc.com>
+    Reviewed-by: Jorgen Hansen <Jorgen.Hansen@wdc.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit ee4677b78eca67f9c89b2452e9e9d37cc2a7436d
+Author: Christian Borntraeger <borntraeger@linux.ibm.com>
+Date:   Mon May 30 11:27:06 2022 +0200
+
+    s390/mm: use non-quiescing sske for KVM switch to keyed guest
+    
+    commit 3ae11dbcfac906a8c3a480e98660a823130dc16a upstream.
+    
+    The switch to a keyed guest does not require a classic sske as the other
+    guest CPUs are not accessing the key before the switch is complete.
+    By using the NQ SSKE things are faster especially with multiple guests.
+    
+    Signed-off-by: Christian Borntraeger <borntraeger@linux.ibm.com>
+    Suggested-by: Janis Schoetterl-Glausch <scgl@linux.ibm.com>
+    Reviewed-by: Claudio Imbrenda <imbrenda@linux.ibm.com>
+    Link: https://lore.kernel.org/r/20220530092706.11637-3-borntraeger@linux.ibm.com
+    Signed-off-by: Christian Borntraeger <borntraeger@linux.ibm.com>
+    Signed-off-by: Heiko Carstens <hca@linux.ibm.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>

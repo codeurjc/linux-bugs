@@ -1,0 +1,470 @@
+commit 84bac3a01bf71c9e52b716f95f1dec4ef4321251
+Author: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+Date:   Sun May 15 19:41:59 2022 +0200
+
+    Linux 4.19.243
+    
+    Link: https://lore.kernel.org/r/20220513142227.897535454@linuxfoundation.org
+    Tested-by: Jon Hunter <jonathanh@nvidia.com>
+    Tested-by: Pavel Machek (CIP) <pavel@denx.de>
+    Tested-by: Shuah Khan <skhan@linuxfoundation.org>
+    Tested-by: Hulk Robot <hulkrobot@huawei.com>
+    Tested-by: Sudip Mukherjee <sudip.mukherjee@codethink.co.uk>
+    Tested-by: Guenter Roeck <linux@roeck-us.net>
+    Tested-by: Linux Kernel Functional Testing <lkft@linaro.org>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 8033f109be4a1d5b466284e8ab9119c04f2a334b
+Author: ChenXiaoSong <chenxiaosong2@huawei.com>
+Date:   Tue Nov 2 22:22:06 2021 +0800
+
+    VFS: Fix memory leak caused by concurrently mounting fs with subtype
+    
+    If two processes mount same superblock, memory leak occurs:
+    
+    CPU0               |  CPU1
+    do_new_mount       |  do_new_mount
+      fs_set_subtype   |    fs_set_subtype
+        kstrdup        |
+                       |      kstrdup
+        memrory leak   |
+    
+    The following reproducer triggers the problem:
+    
+    1. shell command: mount -t ntfs /dev/sda1 /mnt &
+    2. c program: mount("/dev/sda1", "/mnt", "fuseblk", 0, "...")
+    
+    with kmemleak report being along the lines of
+    
+    unreferenced object 0xffff888235f1a5c0 (size 8):
+      comm "mount.ntfs", pid 2860, jiffies 4295757824 (age 43.423s)
+      hex dump (first 8 bytes):
+        00 a5 f1 35 82 88 ff ff                          ...5....
+      backtrace:
+        [<00000000656e30cc>] __kmalloc_track_caller+0x16e/0x430
+        [<000000008e591727>] kstrdup+0x3e/0x90
+        [<000000008430d12b>] do_mount.cold+0x7b/0xd9
+        [<0000000078d639cd>] ksys_mount+0xb2/0x150
+        [<000000006015988d>] __x64_sys_mount+0x29/0x40
+        [<00000000e0a7c118>] do_syscall_64+0xc1/0x1d0
+        [<00000000bcea7df5>] entry_SYSCALL_64_after_hwframe+0x44/0xa9
+        [<00000000803a4067>] 0xffffffffffffffff
+    
+    Linus's tree already have refactoring patchset [1], one of them can fix this bug:
+            c30da2e981a7 ("fuse: convert to use the new mount API")
+    After refactoring, init super_block->s_subtype in fuse_fill_super.
+    
+    Since we did not merge the refactoring patchset in this branch, I create this patch.
+    This patch fix this by adding a write lock while calling fs_set_subtype.
+    
+    [1] https://patchwork.kernel.org/project/linux-fsdevel/patch/20190903113640.7984-3-mszeredi@redhat.com/
+    
+    Fixes: 79c0b2df79eb ("add filesystem subtype support")
+    Cc: David Howells <dhowells@redhat.com>
+    Cc: <stable@vger.kernel.org>
+    Signed-off-by: ChenXiaoSong <chenxiaosong2@huawei.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 259dfb503b8f4087898403faf0e76dcb8d232e3d
+Author: Muchun Song <songmuchun@bytedance.com>
+Date:   Tue Mar 22 14:42:08 2022 -0700
+
+    mm: userfaultfd: fix missing cache flush in mcopy_atomic_pte() and __mcopy_atomic()
+    
+    commit 7c25a0b89a487878b0691e6524fb5a8827322194 upstream.
+    
+    userfaultfd calls mcopy_atomic_pte() and __mcopy_atomic() which do not
+    do any cache flushing for the target page.  Then the target page will be
+    mapped to the user space with a different address (user address), which
+    might have an alias issue with the kernel address used to copy the data
+    from the user to.  Fix this by insert flush_dcache_page() after
+    copy_from_user() succeeds.
+    
+    Link: https://lkml.kernel.org/r/20220210123058.79206-7-songmuchun@bytedance.com
+    Fixes: b6ebaedb4cb1 ("userfaultfd: avoid mmap_sem read recursion in mcopy_atomic")
+    Fixes: c1a4de99fada ("userfaultfd: mcopy_atomic|mfill_zeropage: UFFDIO_COPY|UFFDIO_ZEROPAGE preparation")
+    Signed-off-by: Muchun Song <songmuchun@bytedance.com>
+    Cc: Axel Rasmussen <axelrasmussen@google.com>
+    Cc: David Rientjes <rientjes@google.com>
+    Cc: Fam Zheng <fam.zheng@bytedance.com>
+    Cc: Kirill A. Shutemov <kirill.shutemov@linux.intel.com>
+    Cc: Lars Persson <lars.persson@axis.com>
+    Cc: Mike Kravetz <mike.kravetz@oracle.com>
+    Cc: Peter Xu <peterx@redhat.com>
+    Cc: Xiongchun Duan <duanxiongchun@bytedance.com>
+    Cc: Zi Yan <ziy@nvidia.com>
+    Signed-off-by: Andrew Morton <akpm@linux-foundation.org>
+    Signed-off-by: Linus Torvalds <torvalds@linux-foundation.org>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 5ca7aa4331009b08f9c81a6309ae5e69cd9011b2
+Author: Muchun Song <songmuchun@bytedance.com>
+Date:   Tue Mar 22 14:41:59 2022 -0700
+
+    mm: hugetlb: fix missing cache flush in copy_huge_page_from_user()
+    
+    commit e763243cc6cb1fcc720ec58cfd6e7c35ae90a479 upstream.
+    
+    userfaultfd calls copy_huge_page_from_user() which does not do any cache
+    flushing for the target page.  Then the target page will be mapped to
+    the user space with a different address (user address), which might have
+    an alias issue with the kernel address used to copy the data from the
+    user to.
+    
+    Fix this issue by flushing dcache in copy_huge_page_from_user().
+    
+    Link: https://lkml.kernel.org/r/20220210123058.79206-4-songmuchun@bytedance.com
+    Fixes: fa4d75c1de13 ("userfaultfd: hugetlbfs: add copy_huge_page_from_user for hugetlb userfaultfd support")
+    Signed-off-by: Muchun Song <songmuchun@bytedance.com>
+    Reviewed-by: Mike Kravetz <mike.kravetz@oracle.com>
+    Cc: Axel Rasmussen <axelrasmussen@google.com>
+    Cc: David Rientjes <rientjes@google.com>
+    Cc: Fam Zheng <fam.zheng@bytedance.com>
+    Cc: Kirill A. Shutemov <kirill.shutemov@linux.intel.com>
+    Cc: Lars Persson <lars.persson@axis.com>
+    Cc: Peter Xu <peterx@redhat.com>
+    Cc: Xiongchun Duan <duanxiongchun@bytedance.com>
+    Cc: Zi Yan <ziy@nvidia.com>
+    Signed-off-by: Andrew Morton <akpm@linux-foundation.org>
+    Signed-off-by: Linus Torvalds <torvalds@linux-foundation.org>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 40f4cffbe13a51faf136faf5f9ef6847782cd595
+Author: Takashi Iwai <tiwai@suse.de>
+Date:   Fri May 13 11:00:18 2022 +0300
+
+    ALSA: pcm: Fix potential AB/BA lock with buffer_mutex and mmap_lock
+    
+    commit bc55cfd5718c7c23e5524582e9fa70b4d10f2433 upstream.
+    
+    syzbot caught a potential deadlock between the PCM
+    runtime->buffer_mutex and the mm->mmap_lock.  It was brought by the
+    recent fix to cover the racy read/write and other ioctls, and in that
+    commit, I overlooked a (hopefully only) corner case that may take the
+    revert lock, namely, the OSS mmap.  The OSS mmap operation
+    exceptionally allows to re-configure the parameters inside the OSS
+    mmap syscall, where mm->mmap_mutex is already held.  Meanwhile, the
+    copy_from/to_user calls at read/write operations also take the
+    mm->mmap_lock internally, hence it may lead to a AB/BA deadlock.
+    
+    A similar problem was already seen in the past and we fixed it with a
+    refcount (in commit b248371628aa).  The former fix covered only the
+    call paths with OSS read/write and OSS ioctls, while we need to cover
+    the concurrent access via both ALSA and OSS APIs now.
+    
+    This patch addresses the problem above by replacing the buffer_mutex
+    lock in the read/write operations with a refcount similar as we've
+    used for OSS.  The new field, runtime->buffer_accessing, keeps the
+    number of concurrent read/write operations.  Unlike the former
+    buffer_mutex protection, this protects only around the
+    copy_from/to_user() calls; the other codes are basically protected by
+    the PCM stream lock.  The refcount can be a negative, meaning blocked
+    by the ioctls.  If a negative value is seen, the read/write aborts
+    with -EBUSY.  In the ioctl side, OTOH, they check this refcount, too,
+    and set to a negative value for blocking unless it's already being
+    accessed.
+    
+    Reported-by: syzbot+6e5c88838328e99c7e1c@syzkaller.appspotmail.com
+    Fixes: dca947d4d26d ("ALSA: pcm: Fix races among concurrent read/write and buffer changes")
+    Cc: <stable@vger.kernel.org>
+    Link: https://lore.kernel.org/r/000000000000381a0d05db622a81@google.com
+    Link: https://lore.kernel.org/r/20220330120903.4738-1-tiwai@suse.de
+    Signed-off-by: Takashi Iwai <tiwai@suse.de>
+    [OP: backport to 4.19: adjusted context]
+    Signed-off-by: Ovidiu Panait <ovidiu.panait@windriver.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit e14dca613e0a6ddc2bf6e360f16936a9f865205b
+Author: Takashi Iwai <tiwai@suse.de>
+Date:   Fri May 13 11:00:17 2022 +0300
+
+    ALSA: pcm: Fix races among concurrent prealloc proc writes
+    
+    commit 69534c48ba8ce552ce383b3dfdb271ffe51820c3 upstream.
+    
+    We have no protection against concurrent PCM buffer preallocation
+    changes via proc files, and it may potentially lead to UAF or some
+    weird problem.  This patch applies the PCM open_mutex to the proc
+    write operation for avoiding the racy proc writes and the PCM stream
+    open (and further operations).
+    
+    Cc: <stable@vger.kernel.org>
+    Reviewed-by: Jaroslav Kysela <perex@perex.cz>
+    Link: https://lore.kernel.org/r/20220322170720.3529-5-tiwai@suse.de
+    Signed-off-by: Takashi Iwai <tiwai@suse.de>
+    [OP: backport to 4.19: adjusted context]
+    Signed-off-by: Ovidiu Panait <ovidiu.panait@windriver.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 47cef5937a43a412405ea54ad6e0a91d2890493e
+Author: Takashi Iwai <tiwai@suse.de>
+Date:   Fri May 13 11:00:16 2022 +0300
+
+    ALSA: pcm: Fix races among concurrent prepare and hw_params/hw_free calls
+    
+    commit 3c3201f8c7bb77eb53b08a3ca8d9a4ddc500b4c0 upstream.
+    
+    Like the previous fixes to hw_params and hw_free ioctl races, we need
+    to paper over the concurrent prepare ioctl calls against hw_params and
+    hw_free, too.
+    
+    This patch implements the locking with the existing
+    runtime->buffer_mutex for prepare ioctls.  Unlike the previous case
+    for snd_pcm_hw_hw_params() and snd_pcm_hw_free(), snd_pcm_prepare() is
+    performed to the linked streams, hence the lock can't be applied
+    simply on the top.  For tracking the lock in each linked substream, we
+    modify snd_pcm_action_group() slightly and apply the buffer_mutex for
+    the case stream_lock=false (formerly there was no lock applied)
+    there.
+    
+    Cc: <stable@vger.kernel.org>
+    Reviewed-by: Jaroslav Kysela <perex@perex.cz>
+    Link: https://lore.kernel.org/r/20220322170720.3529-4-tiwai@suse.de
+    Signed-off-by: Takashi Iwai <tiwai@suse.de>
+    [OP: backport to 4.19: adjusted context]
+    Signed-off-by: Ovidiu Panait <ovidiu.panait@windriver.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit b3830197aa7413c65767cf5a1aa8775c83f0dbf7
+Author: Takashi Iwai <tiwai@suse.de>
+Date:   Fri May 13 11:00:15 2022 +0300
+
+    ALSA: pcm: Fix races among concurrent read/write and buffer changes
+    
+    commit dca947d4d26dbf925a64a6cfb2ddbc035e831a3d upstream.
+    
+    In the current PCM design, the read/write syscalls (as well as the
+    equivalent ioctls) are allowed before the PCM stream is running, that
+    is, at PCM PREPARED state.  Meanwhile, we also allow to re-issue
+    hw_params and hw_free ioctl calls at the PREPARED state that may
+    change or free the buffers, too.  The problem is that there is no
+    protection against those mix-ups.
+    
+    This patch applies the previously introduced runtime->buffer_mutex to
+    the read/write operations so that the concurrent hw_params or hw_free
+    call can no longer interfere during the operation.  The mutex is
+    unlocked before scheduling, so we don't take it too long.
+    
+    Cc: <stable@vger.kernel.org>
+    Reviewed-by: Jaroslav Kysela <perex@perex.cz>
+    Link: https://lore.kernel.org/r/20220322170720.3529-3-tiwai@suse.de
+    Signed-off-by: Takashi Iwai <tiwai@suse.de>
+    Signed-off-by: Ovidiu Panait <ovidiu.panait@windriver.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 9cb6c40a6ebe4a0cfc9d6a181958211682cffea9
+Author: Takashi Iwai <tiwai@suse.de>
+Date:   Fri May 13 11:00:14 2022 +0300
+
+    ALSA: pcm: Fix races among concurrent hw_params and hw_free calls
+    
+    commit 92ee3c60ec9fe64404dc035e7c41277d74aa26cb upstream.
+    
+    Currently we have neither proper check nor protection against the
+    concurrent calls of PCM hw_params and hw_free ioctls, which may result
+    in a UAF.  Since the existing PCM stream lock can't be used for
+    protecting the whole ioctl operations, we need a new mutex to protect
+    those racy calls.
+    
+    This patch introduced a new mutex, runtime->buffer_mutex, and applies
+    it to both hw_params and hw_free ioctl code paths.  Along with it, the
+    both functions are slightly modified (the mmap_count check is moved
+    into the state-check block) for code simplicity.
+    
+    Reported-by: Hu Jiahui <kirin.say@gmail.com>
+    Cc: <stable@vger.kernel.org>
+    Reviewed-by: Jaroslav Kysela <perex@perex.cz>
+    Link: https://lore.kernel.org/r/20220322170720.3529-2-tiwai@suse.de
+    Signed-off-by: Takashi Iwai <tiwai@suse.de>
+    [OP: backport to 4.19: adjusted context]
+    Signed-off-by: Ovidiu Panait <ovidiu.panait@windriver.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 0779b2efbd63c0a0ccb70d382dfef88ec00ca1ff
+Author: Itay Iellin <ieitayie@gmail.com>
+Date:   Sat May 7 08:32:48 2022 -0400
+
+    Bluetooth: Fix the creation of hdev->name
+    
+    commit 103a2f3255a95991252f8f13375c3a96a75011cd upstream.
+    
+    Set a size limit of 8 bytes of the written buffer to "hdev->name"
+    including the terminating null byte, as the size of "hdev->name" is 8
+    bytes. If an id value which is greater than 9999 is allocated,
+    then the "snprintf(hdev->name, sizeof(hdev->name), "hci%d", id)"
+    function call would lead to a truncation of the id value in decimal
+    notation.
+    
+    Set an explicit maximum id parameter in the id allocation function call.
+    The id allocation function defines the maximum allocated id value as the
+    maximum id parameter value minus one. Therefore, HCI_MAX_ID is defined
+    as 10000.
+    
+    Signed-off-by: Itay Iellin <ieitayie@gmail.com>
+    Signed-off-by: Luiz Augusto von Dentz <luiz.von.dentz@intel.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit cb386a4d96c24f2270bb5cfcdc27aeecc9d3b9f6
+Author: Andreas Larsson <andreas@gaisler.com>
+Date:   Fri Apr 29 10:46:56 2022 +0200
+
+    can: grcan: only use the NAPI poll budget for RX
+    
+    commit 2873d4d52f7c52d60b316ba6c47bd7122b5a9861 upstream.
+    
+    The previous split budget between TX and RX made it return not using
+    the entire budget but at the same time not having calling called
+    napi_complete. This sometimes led to the poll to not be called, and at
+    the same time having TX and RX interrupts disabled resulting in the
+    driver getting stuck.
+    
+    Fixes: 6cec9b07fe6a ("can: grcan: Add device driver for GRCAN and GRHCAN cores")
+    Link: https://lore.kernel.org/all/20220429084656.29788-4-andreas@gaisler.com
+    Cc: stable@vger.kernel.org
+    Signed-off-by: Andreas Larsson <andreas@gaisler.com>
+    Signed-off-by: Marc Kleine-Budde <mkl@pengutronix.de>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 26ae1f992496c3556405709d1099438c5ee4d8b1
+Author: Andreas Larsson <andreas@gaisler.com>
+Date:   Fri Apr 29 10:46:55 2022 +0200
+
+    can: grcan: grcan_probe(): fix broken system id check for errata workaround needs
+    
+    commit 1e93ed26acf03fe6c97c6d573a10178596aadd43 upstream.
+    
+    The systemid property was checked for in the wrong place of the device
+    tree and compared to the wrong value.
+    
+    Fixes: 6cec9b07fe6a ("can: grcan: Add device driver for GRCAN and GRHCAN cores")
+    Link: https://lore.kernel.org/all/20220429084656.29788-3-andreas@gaisler.com
+    Cc: stable@vger.kernel.org
+    Signed-off-by: Andreas Larsson <andreas@gaisler.com>
+    Signed-off-by: Marc Kleine-Budde <mkl@pengutronix.de>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 2808b9b9d3558e01748bc43e342eb5e1acccf1b2
+Author: Nathan Chancellor <nathan@kernel.org>
+Date:   Mon Oct 18 12:31:01 2021 -0700
+
+    nfp: bpf: silence bitwise vs. logical OR warning
+    
+    commit 8a64ef042eab8a6cec04a6c79d44d1af79b628ca upstream.
+    
+    A new warning in clang points out two places in this driver where
+    boolean expressions are being used with a bitwise OR instead of a
+    logical one:
+    
+    drivers/net/ethernet/netronome/nfp/nfp_asm.c:199:20: error: use of bitwise '|' with boolean operands [-Werror,-Wbitwise-instead-of-logical]
+            reg->src_lmextn = swreg_lmextn(lreg) | swreg_lmextn(rreg);
+                              ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+                                                 ||
+    drivers/net/ethernet/netronome/nfp/nfp_asm.c:199:20: note: cast one or both operands to int to silence this warning
+    drivers/net/ethernet/netronome/nfp/nfp_asm.c:280:20: error: use of bitwise '|' with boolean operands [-Werror,-Wbitwise-instead-of-logical]
+            reg->src_lmextn = swreg_lmextn(lreg) | swreg_lmextn(rreg);
+                              ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+                                                 ||
+    drivers/net/ethernet/netronome/nfp/nfp_asm.c:280:20: note: cast one or both operands to int to silence this warning
+    2 errors generated.
+    
+    The motivation for the warning is that logical operations short circuit
+    while bitwise operations do not. In this case, it does not seem like
+    short circuiting is harmful so implement the suggested fix of changing
+    to a logical operation to fix the warning.
+    
+    Link: https://github.com/ClangBuiltLinux/linux/issues/1479
+    Reported-by: Nick Desaulniers <ndesaulniers@google.com>
+    Signed-off-by: Nathan Chancellor <nathan@kernel.org>
+    Reviewed-by: Nick Desaulniers <ndesaulniers@google.com>
+    Link: https://lore.kernel.org/r/20211018193101.2340261-1-nathan@kernel.org
+    Signed-off-by: Jakub Kicinski <kuba@kernel.org>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit e319dfff1b674a84cc048f0475fe81d30ad6344d
+Author: Lee Jones <lee.jones@linaro.org>
+Date:   Wed May 26 09:47:06 2021 +0100
+
+    drm/amd/display/dc/gpio/gpio_service: Pass around correct dce_{version, environment} types
+    
+    commit 353f7f3a9dd5fd2833b6462bac89ec1654c9c3aa upstream.
+    
+    Fixes the following W=1 kernel build warning(s):
+    
+     drivers/gpu/drm/amd/amdgpu/../display/dc/gpio/gpio_service.c: In function ‘dal_gpio_service_create’:
+     drivers/gpu/drm/amd/amdgpu/../display/dc/gpio/gpio_service.c:71:4: warning: implicit conversion from ‘enum dce_version’ to ‘enum dce_environment’ [-Wenum-conversion]
+     drivers/gpu/drm/amd/amdgpu/../display/dc/gpio/gpio_service.c:77:4: warning: implicit conversion from ‘enum dce_version’ to ‘enum dce_environment’ [-Wenum-conversion]
+    
+    Cc: Harry Wentland <harry.wentland@amd.com>
+    Cc: Leo Li <sunpeng.li@amd.com>
+    Cc: Alex Deucher <alexander.deucher@amd.com>
+    Cc: "Christian König" <christian.koenig@amd.com>
+    Cc: David Airlie <airlied@linux.ie>
+    Cc: Daniel Vetter <daniel@ffwll.ch>
+    Cc: amd-gfx@lists.freedesktop.org
+    Cc: dri-devel@lists.freedesktop.org
+    Signed-off-by: Lee Jones <lee.jones@linaro.org>
+    Signed-off-by: Alex Deucher <alexander.deucher@amd.com>
+    Cc: Nathan Chancellor <nathan@kernel.org>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit efea29b748ebafcc8ba3f7829f84a601f4750114
+Author: Lee Jones <lee.jones@linaro.org>
+Date:   Fri Mar 12 10:55:26 2021 +0000
+
+    block: drbd: drbd_nl: Make conversion to 'enum drbd_ret_code' explicit
+    
+    commit 1f1e87b4dc4598eac57a69868534b92d65e47e82 upstream.
+    
+    Fixes the following W=1 kernel build warning(s):
+    
+     from drivers/block/drbd/drbd_nl.c:24:
+     drivers/block/drbd/drbd_nl.c: In function ‘drbd_adm_set_role’:
+     drivers/block/drbd/drbd_nl.c:793:11: warning: implicit conversion from ‘enum drbd_state_rv’ to ‘enum drbd_ret_code’ [-Wenum-conversion]
+     drivers/block/drbd/drbd_nl.c:795:11: warning: implicit conversion from ‘enum drbd_state_rv’ to ‘enum drbd_ret_code’ [-Wenum-conversion]
+     drivers/block/drbd/drbd_nl.c: In function ‘drbd_adm_attach’:
+     drivers/block/drbd/drbd_nl.c:1965:10: warning: implicit conversion from ‘enum drbd_state_rv’ to ‘enum drbd_ret_code’ [-Wenum-conversion]
+     drivers/block/drbd/drbd_nl.c: In function ‘drbd_adm_connect’:
+     drivers/block/drbd/drbd_nl.c:2690:10: warning: implicit conversion from ‘enum drbd_state_rv’ to ‘enum drbd_ret_code’ [-Wenum-conversion]
+     drivers/block/drbd/drbd_nl.c: In function ‘drbd_adm_disconnect’:
+     drivers/block/drbd/drbd_nl.c:2803:11: warning: implicit conversion from ‘enum drbd_state_rv’ to ‘enum drbd_ret_code’ [-Wenum-conversion]
+    
+    Cc: Philipp Reisner <philipp.reisner@linbit.com>
+    Cc: Lars Ellenberg <lars.ellenberg@linbit.com>
+    Cc: Jens Axboe <axboe@kernel.dk>
+    Cc: drbd-dev@lists.linbit.com
+    Cc: linux-block@vger.kernel.org
+    Signed-off-by: Lee Jones <lee.jones@linaro.org>
+    Link: https://lore.kernel.org/r/20210312105530.2219008-8-lee.jones@linaro.org
+    Signed-off-by: Jens Axboe <axboe@kernel.dk>
+    Cc: Nathan Chancellor <nathan@kernel.org>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit c6648430f9c37e75f69ab5ec30489a33ca8ee580
+Author: Nathan Chancellor <nathan@kernel.org>
+Date:   Tue Jan 5 13:18:27 2021 -0700
+
+    MIPS: Use address-of operator on section symbols
+    
+    commit d422c6c0644bccbb1ebeefffa51f35cec3019517 upstream.
+    
+    When building xway_defconfig with clang:
+    
+    arch/mips/lantiq/prom.c:82:23: error: array comparison always evaluates
+    to true [-Werror,-Wtautological-compare]
+            else if (__dtb_start != __dtb_end)
+                                 ^
+    1 error generated.
+    
+    These are not true arrays, they are linker defined symbols, which are
+    just addresses. Using the address of operator silences the warning
+    and does not change the resulting assembly with either clang/ld.lld
+    or gcc/ld (tested with diff + objdump -Dr). Do the same thing across
+    the entire MIPS subsystem to ensure there are no more warnings around
+    this type of comparison.
+    
+    Link: https://github.com/ClangBuiltLinux/linux/issues/1232
+    Signed-off-by: Nathan Chancellor <natechancellor@gmail.com>
+    Acked-by: Florian Fainelli <f.fainelli@gmail.com>
+    Signed-off-by: Thomas Bogendoerfer <tsbogend@alpha.franken.de>
+    Cc: Sudip Mukherjee <sudipm.mukherjee@gmail.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>

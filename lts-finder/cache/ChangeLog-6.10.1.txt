@@ -1,0 +1,348 @@
+commit 0129910096573d08ecb139b20e2940682f248186
+Author: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+Date:   Wed Jul 24 15:54:07 2024 +0200
+
+    Linux 6.10.1
+    
+    Link: https://lore.kernel.org/r/20240723122838.406690588@linuxfoundation.org
+    Tested-by: Linux Kernel Functional Testing <lkft@linaro.org>
+    Tested-by: Florian Fainelli <florian.fainelli@broadcom.com>
+    Tested-by: Jon Hunter <jonathanh@nvidia.com>
+    Tested-by: Mark Brown <broonie@kernel.org>
+    Tested-by: Rudi Heitbaum <rudi@heitbaum.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 5e052818fafacefe6fc9c5561a9385ffaef0aa5b
+Author: Rafael J. Wysocki <rafael.j.wysocki@intel.com>
+Date:   Wed Jul 17 21:45:02 2024 +0200
+
+    thermal: core: Allow thermal zones to tell the core to ignore them
+    
+    commit e528be3c87be953b73e7826a2d7e4b837cbad39d upstream.
+    
+    The iwlwifi wireless driver registers a thermal zone that is only needed
+    when the network interface handled by it is up and it wants that thermal
+    zone to be effectively ignored by the core otherwise.
+    
+    Before commit a8a261774466 ("thermal: core: Call monitor_thermal_zone()
+    if zone temperature is invalid") that could be achieved by returning
+    an error code from the thermal zone's .get_temp() callback because the
+    core did not really handle errors returned by it almost at all.
+    However, commit a8a261774466 made the core attempt to recover from the
+    situation in which the temperature of a thermal zone cannot be
+    determined due to errors returned by its .get_temp() and is always
+    invalid from the core's perspective.
+    
+    That was done because there are thermal zones in which .get_temp()
+    returns errors to start with due to some difficulties related to the
+    initialization ordering, but then it will start to produce valid
+    temperature values at one point.
+    
+    Unfortunately, the simple approach taken by commit a8a261774466,
+    which is to poll the thermal zone periodically until its .get_temp()
+    callback starts to return valid temperature values, is at odds with
+    the special thermal zone in iwlwifi in which .get_temp() may always
+    return an error because its network interface may always be down.  If
+    that happens, every attempt to invoke the thermal zone's .get_temp()
+    callback resulting in an error causes the thermal core to print a
+    dev_warn() message to the kernel log which is super-noisy.
+    
+    To address this problem, make the core handle the case in which
+    .get_temp() returns 0, but the temperature value returned by it
+    is not actually valid, in a special way.  Namely, make the core
+    completely ignore the invalid temperature value coming from
+    .get_temp() in that case, which requires folding in
+    update_temperature() into its caller and a few related changes.
+    
+    On the iwlwifi side, modify iwl_mvm_tzone_get_temp() to return 0
+    and put THERMAL_TEMP_INVALID into the temperature return memory
+    location instead of returning an error when the firmware is not
+    running or it is not of the right type.
+    
+    Also, to clearly separate the handling of invalid temperature
+    values from the thermal zone initialization, introduce a special
+    THERMAL_TEMP_INIT value specifically for the latter purpose.
+    
+    Fixes: a8a261774466 ("thermal: core: Call monitor_thermal_zone() if zone temperature is invalid")
+    Closes: https://lore.kernel.org/linux-pm/20240715044527.GA1544@sol.localdomain/
+    Reported-by: Eric Biggers <ebiggers@kernel.org>
+    Reported-by: Stefan Lippers-Hollmann <s.l-h@gmx.de>
+    Link: https://bugzilla.kernel.org/show_bug.cgi?id=201761
+    Tested-by: Oleksandr Natalenko <oleksandr@natalenko.name>
+    Tested-by: Stefan Lippers-Hollmann <s.l-h@gmx.de>
+    Cc: 6.10+ <stable@vger.kernel.org> # 6.10+
+    Signed-off-by: Rafael J. Wysocki <rafael.j.wysocki@intel.com>
+    Link: https://patch.msgid.link/4950004.31r3eYUQgx@rjwysocki.net
+    [ rjw: Rebased on top of the current mainline ]
+    Signed-off-by: Rafael J. Wysocki <rafael.j.wysocki@intel.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 68d19af95a353f5e2b021602180b65b303eba99d
+Author: Pavel Begunkov <asml.silence@gmail.com>
+Date:   Thu Jul 18 20:00:53 2024 +0100
+
+    io_uring: fix error pbuf checking
+    
+    commit bcc87d978b834c298bbdd9c52454c5d0a946e97e upstream.
+    
+    Syz reports a problem, which boils down to NULL vs IS_ERR inconsistent
+    error handling in io_alloc_pbuf_ring().
+    
+    KASAN: null-ptr-deref in range [0x0000000000000000-0x0000000000000007]
+    RIP: 0010:__io_remove_buffers+0xac/0x700 io_uring/kbuf.c:341
+    Call Trace:
+     <TASK>
+     io_put_bl io_uring/kbuf.c:378 [inline]
+     io_destroy_buffers+0x14e/0x490 io_uring/kbuf.c:392
+     io_ring_ctx_free+0xa00/0x1070 io_uring/io_uring.c:2613
+     io_ring_exit_work+0x80f/0x8a0 io_uring/io_uring.c:2844
+     process_one_work kernel/workqueue.c:3231 [inline]
+     process_scheduled_works+0xa2c/0x1830 kernel/workqueue.c:3312
+     worker_thread+0x86d/0xd40 kernel/workqueue.c:3390
+     kthread+0x2f0/0x390 kernel/kthread.c:389
+     ret_from_fork+0x4b/0x80 arch/x86/kernel/process.c:147
+     ret_from_fork_asm+0x1a/0x30 arch/x86/entry/entry_64.S:244
+    
+    Cc: stable@vger.kernel.org
+    Reported-by: syzbot+2074b1a3d447915c6f1c@syzkaller.appspotmail.com
+    Fixes: 87585b05757dc ("io_uring/kbuf: use vm_insert_pages() for mmap'ed pbuf ring")
+    Signed-off-by: Pavel Begunkov <asml.silence@gmail.com>
+    Link: https://lore.kernel.org/r/c5f9df20560bd9830401e8e48abc029e7cfd9f5e.1721329239.git.asml.silence@gmail.com
+    Signed-off-by: Jens Axboe <axboe@kernel.dk>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit d905723ee6578d9ef2873acaceb2356341d46f5d
+Author: Richard Fitzgerald <rf@opensource.cirrus.com>
+Date:   Wed Jul 3 10:55:17 2024 +0100
+
+    ASoC: cs35l56: Limit Speaker Volume to +12dB maximum
+    
+    commit 244389bd42870640c4b5ef672a360da329b579ed upstream.
+    
+    Change CS35L56_MAIN_RENDER_USER_VOLUME_MAX to 48, to limit the maximum
+    value of the Speaker Volume control to +12dB. The minimum value is
+    unchanged so that the default 0dB has the same integer control value.
+    
+    The original maximum of 400 (+100dB) was the largest value that can be
+    mathematically handled by the DSP. The actual maximum amplification is
+    +12dB.
+    
+    Signed-off-by: Richard Fitzgerald <rf@opensource.cirrus.com>
+    Link: https://patch.msgid.link/20240703095517.208077-3-rf@opensource.cirrus.com
+    Signed-off-by: Mark Brown <broonie@kernel.org>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 890e1e6b2fd51c56e2070b9ccde942a728f813c9
+Author: Richard Fitzgerald <rf@opensource.cirrus.com>
+Date:   Wed Jul 3 10:55:16 2024 +0100
+
+    ASoC: cs35l56: Use header defines for Speaker Volume control definition
+    
+    commit c66995ae403073212f5ba60d2079003866c6e130 upstream.
+    
+    The "Speaker Volume" control was being defined using four hardcoded magic
+    numbers. There are #defines in the cs35l56.h header for these numbers, so
+    change the code to use the defined constants.
+    
+    Signed-off-by: Richard Fitzgerald <rf@opensource.cirrus.com>
+    Link: https://patch.msgid.link/20240703095517.208077-2-rf@opensource.cirrus.com
+    Signed-off-by: Mark Brown <broonie@kernel.org>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit b9afbb9a0c734197c59c43610071041044bf1562
+Author: Hao Ge <gehao@kylinos.cn>
+Date:   Tue Jul 9 10:33:37 2024 +0800
+
+    tpm: Use auth only after NULL check in tpm_buf_check_hmac_response()
+    
+    commit 7dc357d343f134bf59815ff6098b93503ec8a23b upstream.
+    
+    Dereference auth after NULL check in tpm_buf_check_hmac_response().
+    Otherwise, unless tpm2_sessions_init() was called, a call can cause NULL
+    dereference, when TCG_TPM2_HMAC is enabled.
+    
+    [jarkko: adjusted the commit message.]
+    Cc: stable@vger.kernel.org # v6.10+
+    Fixes: 7ca110f2679b ("tpm: Address !chip->auth in tpm_buf_append_hmac_session*()")
+    Signed-off-by: Hao Ge <gehao@kylinos.cn>
+    Signed-off-by: Jarkko Sakkinen <jarkko@kernel.org>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit fafd1dcc84c59e57a6077cf99de38f1485e84b9a
+Author: David Howells <dhowells@redhat.com>
+Date:   Fri Jul 19 14:07:07 2024 +0100
+
+    cifs: Fix setting of zero_point after DIO write
+    
+    commit 61ea6b3a3104fcd66364282391dd2152bc4c129a upstream.
+    
+    At the moment, at the end of a DIO write, cifs calls netfs_resize_file() to
+    adjust the size of the file if it needs it.  This will reduce the
+    zero_point (the point above which we assume a read will just return zeros)
+    if it's more than the new i_size, but won't increase it.
+    
+    With DIO writes, however, we definitely want to increase it as we have
+    clobbered the local pagecache and then written some data that's not
+    available locally.
+    
+    Fix cifs to make the zero_point above the end of a DIO or unbuffered write.
+    
+    This fixes corruption seen occasionally with the generic/708 xfs-test.  In
+    that case, the read-back of some of the written data is being
+    short-circuited and replaced with zeroes.
+    
+    Fixes: 3ee1a1fc3981 ("cifs: Cut over to using netfslib")
+    Cc: stable@vger.kernel.org
+    Reported-by: Steve French <sfrench@samba.org>
+    Signed-off-by: David Howells <dhowells@redhat.com>
+    Reviewed-by: Paulo Alcantara (Red Hat) <pc@manguebit.com>
+    cc: Jeff Layton <jlayton@kernel.org>
+    cc: linux-cifs@vger.kernel.org
+    cc: netfs@lists.linux.dev
+    cc: linux-fsdevel@vger.kernel.org
+    Signed-off-by: Steve French <stfrench@microsoft.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit b1d0a566769b6fb3795b5289fc1daf9e0638d97a
+Author: David Howells <dhowells@redhat.com>
+Date:   Thu Jul 18 20:19:32 2024 +0100
+
+    cifs: Fix server re-repick on subrequest retry
+    
+    commit de40579b903883274fe203865f29d66b168b7236 upstream.
+    
+    When a subrequest is marked for needing retry, netfs will call
+    cifs_prepare_write() which will make cifs repick the server for the op
+    before renegotiating credits; it then calls cifs_issue_write() which
+    invokes smb2_async_writev() - which re-repicks the server.
+    
+    If a different server is then selected, this causes the increment of
+    server->in_flight to happen against one record and the decrement to happen
+    against another, leading to misaccounting.
+    
+    Fix this by just removing the repick code in smb2_async_writev().  As this
+    is only called from netfslib-driven code, cifs_prepare_write() should
+    always have been called first, and so server should never be NULL and the
+    preparatory step is repeated in the event that we do a retry.
+    
+    The problem manifests as a warning looking something like:
+    
+     WARNING: CPU: 4 PID: 72896 at fs/smb/client/smb2ops.c:97 smb2_add_credits+0x3f0/0x9e0 [cifs]
+     ...
+     RIP: 0010:smb2_add_credits+0x3f0/0x9e0 [cifs]
+     ...
+      smb2_writev_callback+0x334/0x560 [cifs]
+      cifs_demultiplex_thread+0x77a/0x11b0 [cifs]
+      kthread+0x187/0x1d0
+      ret_from_fork+0x34/0x60
+      ret_from_fork_asm+0x1a/0x30
+    
+    Which may be triggered by a number of different xfstests running against an
+    Azure server in multichannel mode.  generic/249 seems the most repeatable,
+    but generic/215, generic/249 and generic/308 may also show it.
+    
+    Fixes: 3ee1a1fc3981 ("cifs: Cut over to using netfslib")
+    Cc: stable@vger.kernel.org
+    Reported-by: Steve French <smfrench@gmail.com>
+    Reviewed-by: Paulo Alcantara (Red Hat) <pc@manguebit.com>
+    Acked-by: Tom Talpey <tom@talpey.com>
+    Signed-off-by: David Howells <dhowells@redhat.com>
+    cc: Jeff Layton <jlayton@kernel.org>
+    cc: Aurelien Aptel <aaptel@suse.com>
+    cc: linux-cifs@vger.kernel.org
+    cc: netfs@lists.linux.dev
+    cc: linux-fsdevel@vger.kernel.org
+    Signed-off-by: Steve French <stfrench@microsoft.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit b5347b051d3b263992b9f2cd0a1a5dff7917c2b3
+Author: Steve French <stfrench@microsoft.com>
+Date:   Wed Jul 17 00:42:22 2024 -0500
+
+    cifs: fix noisy message on copy_file_range
+    
+    commit ae4ccca47195332c69176b8615c5ee17efd30c46 upstream.
+    
+    There are common cases where copy_file_range can noisily
+    log "source and target of copy not on same server"
+    e.g. the mv command across mounts to two different server's shares.
+    Change this to informational rather than logging as an error.
+    
+    A followon patch will add dynamic trace points e.g. for
+    cifs_file_copychunk_range
+    
+    Cc: stable@vger.kernel.org
+    Reviewed-by: Shyam Prasad N <sprasad@microsoft.com>
+    Signed-off-by: Steve French <stfrench@microsoft.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 5c0a6c40c2b9466685f3966eaeeecf036006bc57
+Author: David Howells <dhowells@redhat.com>
+Date:   Fri Jul 19 16:01:48 2024 +0100
+
+    cifs: Fix missing fscache invalidation
+    
+    commit a07d38afd15281c42613943a9a715c3ba07c21e6 upstream.
+    
+    A network filesystem needs to implement a netfslib hook to invalidate
+    fscache if it's to be able to use the cache.
+    
+    Fix cifs to implement the cache invalidation hook.
+    
+    Signed-off-by: David Howells <dhowells@redhat.com>
+    Reviewed-by: Paulo Alcantara (Red Hat) <pc@manguebit.com>
+    cc: Jeff Layton <jlayton@kernel.org>
+    cc: linux-cifs@vger.kernel.org
+    cc: netfs@lists.linux.dev
+    cc: linux-fsdevel@vger.kernel.org
+    Cc: stable@vger.kernel.org
+    Fixes: 3ee1a1fc3981 ("cifs: Cut over to using netfslib")
+    Signed-off-by: Steve French <stfrench@microsoft.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 447c00d76e908ac215b8430ddc6aca6f494992cb
+Author: David Howells <dhowells@redhat.com>
+Date:   Thu Jul 18 20:55:20 2024 +0100
+
+    cifs: Fix missing error code set
+    
+    commit d2c5eb57b6da10f335c30356f9696bd667601e6a upstream.
+    
+    In cifs_strict_readv(), the default rc (-EACCES) is accidentally cleared by
+    a successful return from netfs_start_io_direct(), such that if
+    cifs_find_lock_conflict() fails, we don't return an error.
+    
+    Fix this by resetting the default error code.
+    
+    Fixes: 14b1cd25346b ("cifs: Fix locking in cifs_strict_readv()")
+    Cc: stable@vger.kernel.org
+    Signed-off-by: David Howells <dhowells@redhat.com>
+    Reviewed-by: Paulo Alcantara (Red Hat) <pc@manguebit.com>
+    cc: Jeff Layton <jlayton@kernel.org>
+    cc: linux-cifs@vger.kernel.org
+    cc: netfs@lists.linux.dev
+    cc: linux-fsdevel@vger.kernel.org
+    Signed-off-by: Steve French <stfrench@microsoft.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 4378be89ddb7de88d984b67ecfd6191686c42817
+Author: Kees Cook <kees@kernel.org>
+Date:   Thu May 23 15:54:12 2024 -0700
+
+    ext4: use memtostr_pad() for s_volume_name
+    
+    commit be27cd64461c45a6088a91a04eba5cd44e1767ef upstream.
+    
+    As with the other strings in struct ext4_super_block, s_volume_name is
+    not NUL terminated. The other strings were marked in commit 072ebb3bffe6
+    ("ext4: add nonstring annotations to ext4.h"). Using strscpy() isn't
+    the right replacement for strncpy(); it should use memtostr_pad()
+    instead.
+    
+    Reported-by: syzbot+50835f73143cc2905b9e@syzkaller.appspotmail.com
+    Closes: https://lore.kernel.org/all/00000000000019f4c00619192c05@google.com/
+    Fixes: 744a56389f73 ("ext4: replace deprecated strncpy with alternatives")
+    Signed-off-by: Kees Cook <keescook@chromium.org>
+    Link: https://patch.msgid.link/20240523225408.work.904-kees@kernel.org
+    Signed-off-by: Theodore Ts'o <tytso@mit.edu>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>

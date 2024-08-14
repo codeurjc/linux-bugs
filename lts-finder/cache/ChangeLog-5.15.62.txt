@@ -1,0 +1,543 @@
+commit a0a7e0b2b8b22901945ea2aef1b65871d718accf
+Author: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+Date:   Sun Aug 21 15:17:49 2022 +0200
+
+    Linux 5.15.62
+    
+    Link: https://lore.kernel.org/r/20220819153711.658766010@linuxfoundation.org
+    Tested-by: Shuah Khan <skhan@linuxfoundation.org>
+    Tested-by: Bagas Sanjaya <bagasdotme@gmail.com>
+    Tested-by: Sudip Mukherjee <sudip.mukherjee@codethink.co.uk>
+    Tested-by: Ron Economos <re@w6rz.net>
+    Link: https://lore.kernel.org/r/20220820182309.607584465@linuxfoundation.org
+    Tested-by: Guenter Roeck <linux@roeck-us.net>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 2a9114b3ec6f9d195e7744e50dc13937a88d48db
+Author: Qu Wenruo <wqu@suse.com>
+Date:   Fri Aug 19 16:39:50 2022 +0800
+
+    btrfs: raid56: don't trust any cached sector in __raid56_parity_recover()
+    
+    commit f6065f8edeb25f4a9dfe0b446030ad995a84a088 upstream.
+    
+    [BUG]
+    There is a small workload which will always fail with recent kernel:
+    (A simplified version from btrfs/125 test case)
+    
+      mkfs.btrfs -f -m raid5 -d raid5 -b 1G $dev1 $dev2 $dev3
+      mount $dev1 $mnt
+      xfs_io -f -c "pwrite -S 0xee 0 1M" $mnt/file1
+      sync
+      umount $mnt
+      btrfs dev scan -u $dev3
+      mount -o degraded $dev1 $mnt
+      xfs_io -f -c "pwrite -S 0xff 0 128M" $mnt/file2
+      umount $mnt
+      btrfs dev scan
+      mount $dev1 $mnt
+      btrfs balance start --full-balance $mnt
+      umount $mnt
+    
+    The failure is always failed to read some tree blocks:
+    
+      BTRFS info (device dm-4): relocating block group 217710592 flags data|raid5
+      BTRFS error (device dm-4): parent transid verify failed on 38993920 wanted 9 found 7
+      BTRFS error (device dm-4): parent transid verify failed on 38993920 wanted 9 found 7
+      ...
+    
+    [CAUSE]
+    With the recently added debug output, we can see all RAID56 operations
+    related to full stripe 38928384:
+    
+      56.1183: raid56_read_partial: full_stripe=38928384 devid=2 type=DATA1 offset=0 opf=0x0 physical=9502720 len=65536
+      56.1185: raid56_read_partial: full_stripe=38928384 devid=3 type=DATA2 offset=16384 opf=0x0 physical=9519104 len=16384
+      56.1185: raid56_read_partial: full_stripe=38928384 devid=3 type=DATA2 offset=49152 opf=0x0 physical=9551872 len=16384
+      56.1187: raid56_write_stripe: full_stripe=38928384 devid=3 type=DATA2 offset=0 opf=0x1 physical=9502720 len=16384
+      56.1188: raid56_write_stripe: full_stripe=38928384 devid=3 type=DATA2 offset=32768 opf=0x1 physical=9535488 len=16384
+      56.1188: raid56_write_stripe: full_stripe=38928384 devid=1 type=PQ1 offset=0 opf=0x1 physical=30474240 len=16384
+      56.1189: raid56_write_stripe: full_stripe=38928384 devid=1 type=PQ1 offset=32768 opf=0x1 physical=30507008 len=16384
+      56.1218: raid56_write_stripe: full_stripe=38928384 devid=3 type=DATA2 offset=49152 opf=0x1 physical=9551872 len=16384
+      56.1219: raid56_write_stripe: full_stripe=38928384 devid=1 type=PQ1 offset=49152 opf=0x1 physical=30523392 len=16384
+      56.2721: raid56_parity_recover: full stripe=38928384 eb=39010304 mirror=2
+      56.2723: raid56_parity_recover: full stripe=38928384 eb=39010304 mirror=2
+      56.2724: raid56_parity_recover: full stripe=38928384 eb=39010304 mirror=2
+    
+    Before we enter raid56_parity_recover(), we have triggered some metadata
+    write for the full stripe 38928384, this leads to us to read all the
+    sectors from disk.
+    
+    Furthermore, btrfs raid56 write will cache its calculated P/Q sectors to
+    avoid unnecessary read.
+    
+    This means, for that full stripe, after any partial write, we will have
+    stale data, along with P/Q calculated using that stale data.
+    
+    Thankfully due to patch "btrfs: only write the sectors in the vertical stripe
+    which has data stripes" we haven't submitted all the corrupted P/Q to disk.
+    
+    When we really need to recover certain range, aka in
+    raid56_parity_recover(), we will use the cached rbio, along with its
+    cached sectors (the full stripe is all cached).
+    
+    This explains why we have no event raid56_scrub_read_recover()
+    triggered.
+    
+    Since we have the cached P/Q which is calculated using the stale data,
+    the recovered one will just be stale.
+    
+    In our particular test case, it will always return the same incorrect
+    metadata, thus causing the same error message "parent transid verify
+    failed on 39010304 wanted 9 found 7" again and again.
+    
+    [BTRFS DESTRUCTIVE RMW PROBLEM]
+    
+    Test case btrfs/125 (and above workload) always has its trouble with
+    the destructive read-modify-write (RMW) cycle:
+    
+            0       32K     64K
+    Data1:  | Good  | Good  |
+    Data2:  | Bad   | Bad   |
+    Parity: | Good  | Good  |
+    
+    In above case, if we trigger any write into Data1, we will use the bad
+    data in Data2 to re-generate parity, killing the only chance to recovery
+    Data2, thus Data2 is lost forever.
+    
+    This destructive RMW cycle is not specific to btrfs RAID56, but there
+    are some btrfs specific behaviors making the case even worse:
+    
+    - Btrfs will cache sectors for unrelated vertical stripes.
+    
+      In above example, if we're only writing into 0~32K range, btrfs will
+      still read data range (32K ~ 64K) of Data1, and (64K~128K) of Data2.
+      This behavior is to cache sectors for later update.
+    
+      Incidentally commit d4e28d9b5f04 ("btrfs: raid56: make steal_rbio()
+      subpage compatible") has a bug which makes RAID56 to never trust the
+      cached sectors, thus slightly improve the situation for recovery.
+    
+      Unfortunately, follow up fix "btrfs: update stripe_sectors::uptodate in
+      steal_rbio" will revert the behavior back to the old one.
+    
+    - Btrfs raid56 partial write will update all P/Q sectors and cache them
+    
+      This means, even if data at (64K ~ 96K) of Data2 is free space, and
+      only (96K ~ 128K) of Data2 is really stale data.
+      And we write into that (96K ~ 128K), we will update all the parity
+      sectors for the full stripe.
+    
+      This unnecessary behavior will completely kill the chance of recovery.
+    
+      Thankfully, an unrelated optimization "btrfs: only write the sectors
+      in the vertical stripe which has data stripes" will prevent
+      submitting the write bio for untouched vertical sectors.
+    
+      That optimization will keep the on-disk P/Q untouched for a chance for
+      later recovery.
+    
+    [FIX]
+    Although we have no good way to completely fix the destructive RMW
+    (unless we go full scrub for each partial write), we can still limit the
+    damage.
+    
+    With patch "btrfs: only write the sectors in the vertical stripe which
+    has data stripes" now we won't really submit the P/Q of unrelated
+    vertical stripes, so the on-disk P/Q should still be fine.
+    
+    Now we really need to do is just drop all the cached sectors when doing
+    recovery.
+    
+    By this, we have a chance to read the original P/Q from disk, and have a
+    chance to recover the stale data, while still keep the cache to speed up
+    regular write path.
+    
+    In fact, just dropping all the cache for recovery path is good enough to
+    allow the test case btrfs/125 along with the small script to pass
+    reliably.
+    
+    The lack of metadata write after the degraded mount, and forced metadata
+    COW is saving us this time.
+    
+    So this patch will fix the behavior by not trust any cache in
+    __raid56_parity_recover(), to solve the problem while still keep the
+    cache useful.
+    
+    But please note that this test pass DOES NOT mean we have solved the
+    destructive RMW problem, we just do better damage control a little
+    better.
+    
+    Related patches:
+    
+    - btrfs: only write the sectors in the vertical stripe
+    - d4e28d9b5f04 ("btrfs: raid56: make steal_rbio() subpage compatible")
+    - btrfs: update stripe_sectors::uptodate in steal_rbio
+    
+    Acked-by: David Sterba <dsterba@suse.com>
+    Signed-off-by: Qu Wenruo <wqu@suse.com>
+    Signed-off-by: David Sterba <dsterba@suse.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 0d9c713cc30f78f5af731afedb91f04b9b6ae70d
+Author: Qu Wenruo <wqu@suse.com>
+Date:   Fri Aug 19 16:39:49 2022 +0800
+
+    btrfs: only write the sectors in the vertical stripe which has data stripes
+    
+    commit bd8f7e627703ca5707833d623efcd43f104c7b3f upstream.
+    
+    If we have only 8K partial write at the beginning of a full RAID56
+    stripe, we will write the following contents:
+    
+                        0  8K           32K             64K
+    Disk 1  (data):     |XX|            |               |
+    Disk 2  (data):     |               |               |
+    Disk 3  (parity):   |XXXXXXXXXXXXXXX|XXXXXXXXXXXXXXX|
+    
+    |X| means the sector will be written back to disk.
+    
+    Note that, although we won't write any sectors from disk 2, but we will
+    write the full 64KiB of parity to disk.
+    
+    This behavior is fine for now, but not for the future (especially for
+    RAID56J, as we waste quite some space to journal the unused parity
+    stripes).
+    
+    So here we will also utilize the btrfs_raid_bio::dbitmap, anytime we
+    queue a higher level bio into an rbio, we will update rbio::dbitmap to
+    indicate which vertical stripes we need to writeback.
+    
+    And at finish_rmw(), we also check dbitmap to see if we need to write
+    any sector in the vertical stripe.
+    
+    So after the patch, above example will only lead to the following
+    writeback pattern:
+    
+                        0  8K           32K             64K
+    Disk 1  (data):     |XX|            |               |
+    Disk 2  (data):     |               |               |
+    Disk 3  (parity):   |XX|            |               |
+    
+    Acked-by: David Sterba <dsterba@suse.com>
+    Signed-off-by: Qu Wenruo <wqu@suse.com>
+    Signed-off-by: David Sterba <dsterba@suse.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 3eb602ad6a94a76941f93173131a71ad36fa1324
+Author: Peter Zijlstra <peterz@infradead.org>
+Date:   Tue Aug 16 05:26:58 2022 -0300
+
+    x86/ftrace: Use alternative RET encoding
+    
+    commit 1f001e9da6bbf482311e45e48f53c2bd2179e59c upstream.
+    
+    Use the return thunk in ftrace trampolines, if needed.
+    
+    Signed-off-by: Peter Zijlstra (Intel) <peterz@infradead.org>
+    Signed-off-by: Borislav Petkov <bp@suse.de>
+    Reviewed-by: Josh Poimboeuf <jpoimboe@kernel.org>
+    Signed-off-by: Borislav Petkov <bp@suse.de>
+    [cascardo: use memcpy(text_gen_insn) as there is no __text_gen_insn]
+    Signed-off-by: Thadeu Lima de Souza Cascardo <cascardo@canonical.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 543138c555185e5054f9095909761f1bca9096ba
+Author: Peter Zijlstra <peterz@infradead.org>
+Date:   Tue Aug 16 05:26:57 2022 -0300
+
+    x86/ibt,ftrace: Make function-graph play nice
+    
+    commit e52fc2cf3f662828cc0d51c4b73bed73ad275fce upstream.
+    
+    Return trampoline must not use indirect branch to return; while this
+    preserves the RSB, it is fundamentally incompatible with IBT. Instead
+    use a retpoline like ROP gadget that defeats IBT while not unbalancing
+    the RSB.
+    
+    And since ftrace_stub is no longer a plain RET, don't use it to copy
+    from. Since RET is a trivial instruction, poke it directly.
+    
+    Signed-off-by: Peter Zijlstra (Intel) <peterz@infradead.org>
+    Acked-by: Josh Poimboeuf <jpoimboe@redhat.com>
+    Link: https://lore.kernel.org/r/20220308154318.347296408@infradead.org
+    [cascardo: remove ENDBR]
+    Signed-off-by: Thadeu Lima de Souza Cascardo <cascardo@canonical.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit f6632763484c6078f65eff3fd0044cc2bc82fd18
+Author: Thadeu Lima de Souza Cascardo <cascardo@canonical.com>
+Date:   Tue Aug 16 05:26:56 2022 -0300
+
+    Revert "x86/ftrace: Use alternative RET encoding"
+    
+    This reverts commit e54fcb0812faebd147de72bd37ad87cc4951c68c.
+    
+    This temporarily reverts the backport of upstream commit
+    1f001e9da6bbf482311e45e48f53c2bd2179e59c. It was not correct to copy the
+    ftrace stub as it would contain a relative jump to the return thunk which
+    would not apply to the context where it was being copied to, leading to
+    ftrace support to be broken.
+    
+    Signed-off-by: Thadeu Lima de Souza Cascardo <cascardo@canonical.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit cb69d4d6f709f87c94afa28ae64c501576692171
+Author: Namjae Jeon <linkinjeon@kernel.org>
+Date:   Tue Aug 2 07:28:51 2022 +0900
+
+    ksmbd: fix heap-based overflow in set_ntacl_dacl()
+    
+    commit 8f0541186e9ad1b62accc9519cc2b7a7240272a7 upstream.
+    
+    The testcase use SMB2_SET_INFO_HE command to set a malformed file attribute
+    under the label `security.NTACL`. SMB2_QUERY_INFO_HE command in testcase
+    trigger the following overflow.
+    
+    [ 4712.003781] ==================================================================
+    [ 4712.003790] BUG: KASAN: slab-out-of-bounds in build_sec_desc+0x842/0x1dd0 [ksmbd]
+    [ 4712.003807] Write of size 1060 at addr ffff88801e34c068 by task kworker/0:0/4190
+    
+    [ 4712.003813] CPU: 0 PID: 4190 Comm: kworker/0:0 Not tainted 5.19.0-rc5 #1
+    [ 4712.003850] Workqueue: ksmbd-io handle_ksmbd_work [ksmbd]
+    [ 4712.003867] Call Trace:
+    [ 4712.003870]  <TASK>
+    [ 4712.003873]  dump_stack_lvl+0x49/0x5f
+    [ 4712.003935]  print_report.cold+0x5e/0x5cf
+    [ 4712.003972]  ? ksmbd_vfs_get_sd_xattr+0x16d/0x500 [ksmbd]
+    [ 4712.003984]  ? cmp_map_id+0x200/0x200
+    [ 4712.003988]  ? build_sec_desc+0x842/0x1dd0 [ksmbd]
+    [ 4712.004000]  kasan_report+0xaa/0x120
+    [ 4712.004045]  ? build_sec_desc+0x842/0x1dd0 [ksmbd]
+    [ 4712.004056]  kasan_check_range+0x100/0x1e0
+    [ 4712.004060]  memcpy+0x3c/0x60
+    [ 4712.004064]  build_sec_desc+0x842/0x1dd0 [ksmbd]
+    [ 4712.004076]  ? parse_sec_desc+0x580/0x580 [ksmbd]
+    [ 4712.004088]  ? ksmbd_acls_fattr+0x281/0x410 [ksmbd]
+    [ 4712.004099]  smb2_query_info+0xa8f/0x6110 [ksmbd]
+    [ 4712.004111]  ? psi_group_change+0x856/0xd70
+    [ 4712.004148]  ? update_load_avg+0x1c3/0x1af0
+    [ 4712.004152]  ? asym_cpu_capacity_scan+0x5d0/0x5d0
+    [ 4712.004157]  ? xas_load+0x23/0x300
+    [ 4712.004162]  ? smb2_query_dir+0x1530/0x1530 [ksmbd]
+    [ 4712.004173]  ? _raw_spin_lock_bh+0xe0/0xe0
+    [ 4712.004179]  handle_ksmbd_work+0x30e/0x1020 [ksmbd]
+    [ 4712.004192]  process_one_work+0x778/0x11c0
+    [ 4712.004227]  ? _raw_spin_lock_irq+0x8e/0xe0
+    [ 4712.004231]  worker_thread+0x544/0x1180
+    [ 4712.004234]  ? __cpuidle_text_end+0x4/0x4
+    [ 4712.004239]  kthread+0x282/0x320
+    [ 4712.004243]  ? process_one_work+0x11c0/0x11c0
+    [ 4712.004246]  ? kthread_complete_and_exit+0x30/0x30
+    [ 4712.004282]  ret_from_fork+0x1f/0x30
+    
+    This patch add the buffer validation for security descriptor that is
+    stored by malformed SMB2_SET_INFO_HE command. and allocate large
+    response buffer about SMB2_O_INFO_SECURITY file info class.
+    
+    Fixes: e2f34481b24d ("cifsd: add server-side procedures for SMB3")
+    Cc: stable@vger.kernel.org
+    Reported-by: zdi-disclosures@trendmicro.com # ZDI-CAN-17771
+    Reviewed-by: Hyunchul Lee <hyc.lee@gmail.com>
+    Signed-off-by: Namjae Jeon <linkinjeon@kernel.org>
+    Signed-off-by: Steve French <stfrench@microsoft.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit c76b216753c9eb2950a091037c9976f389e73529
+Author: Hyunchul Lee <hyc.lee@gmail.com>
+Date:   Thu Jul 28 23:41:51 2022 +0900
+
+    ksmbd: prevent out of bound read for SMB2_WRITE
+    
+    commit ac60778b87e45576d7bfdbd6f53df902654e6f09 upstream.
+    
+    OOB read memory can be written to a file,
+    if DataOffset is 0 and Length is too large
+    in SMB2_WRITE request of compound request.
+    
+    To prevent this, when checking the length of
+    the data area of SMB2_WRITE in smb2_get_data_area_len(),
+    let the minimum of DataOffset be the size of
+    SMB2 header + the size of SMB2_WRITE header.
+    
+    This bug can lead an oops looking something like:
+    
+    [  798.008715] BUG: KASAN: slab-out-of-bounds in copy_page_from_iter_atomic+0xd3d/0x14b0
+    [  798.008724] Read of size 252 at addr ffff88800f863e90 by task kworker/0:2/2859
+    ...
+    [  798.008754] Call Trace:
+    [  798.008756]  <TASK>
+    [  798.008759]  dump_stack_lvl+0x49/0x5f
+    [  798.008764]  print_report.cold+0x5e/0x5cf
+    [  798.008768]  ? __filemap_get_folio+0x285/0x6d0
+    [  798.008774]  ? copy_page_from_iter_atomic+0xd3d/0x14b0
+    [  798.008777]  kasan_report+0xaa/0x120
+    [  798.008781]  ? copy_page_from_iter_atomic+0xd3d/0x14b0
+    [  798.008784]  kasan_check_range+0x100/0x1e0
+    [  798.008788]  memcpy+0x24/0x60
+    [  798.008792]  copy_page_from_iter_atomic+0xd3d/0x14b0
+    [  798.008795]  ? pagecache_get_page+0x53/0x160
+    [  798.008799]  ? iov_iter_get_pages_alloc+0x1590/0x1590
+    [  798.008803]  ? ext4_write_begin+0xfc0/0xfc0
+    [  798.008807]  ? current_time+0x72/0x210
+    [  798.008811]  generic_perform_write+0x2c8/0x530
+    [  798.008816]  ? filemap_fdatawrite_wbc+0x180/0x180
+    [  798.008820]  ? down_write+0xb4/0x120
+    [  798.008824]  ? down_write_killable+0x130/0x130
+    [  798.008829]  ext4_buffered_write_iter+0x137/0x2c0
+    [  798.008833]  ext4_file_write_iter+0x40b/0x1490
+    [  798.008837]  ? __fsnotify_parent+0x275/0xb20
+    [  798.008842]  ? __fsnotify_update_child_dentry_flags+0x2c0/0x2c0
+    [  798.008846]  ? ext4_buffered_write_iter+0x2c0/0x2c0
+    [  798.008851]  __kernel_write+0x3a1/0xa70
+    [  798.008855]  ? __x64_sys_preadv2+0x160/0x160
+    [  798.008860]  ? security_file_permission+0x4a/0xa0
+    [  798.008865]  kernel_write+0xbb/0x360
+    [  798.008869]  ksmbd_vfs_write+0x27e/0xb90 [ksmbd]
+    [  798.008881]  ? ksmbd_vfs_read+0x830/0x830 [ksmbd]
+    [  798.008892]  ? _raw_read_unlock+0x2a/0x50
+    [  798.008896]  smb2_write+0xb45/0x14e0 [ksmbd]
+    [  798.008909]  ? __kasan_check_write+0x14/0x20
+    [  798.008912]  ? _raw_spin_lock_bh+0xd0/0xe0
+    [  798.008916]  ? smb2_read+0x15e0/0x15e0 [ksmbd]
+    [  798.008927]  ? memcpy+0x4e/0x60
+    [  798.008931]  ? _raw_spin_unlock+0x19/0x30
+    [  798.008934]  ? ksmbd_smb2_check_message+0x16af/0x2350 [ksmbd]
+    [  798.008946]  ? _raw_spin_lock_bh+0xe0/0xe0
+    [  798.008950]  handle_ksmbd_work+0x30e/0x1020 [ksmbd]
+    [  798.008962]  process_one_work+0x778/0x11c0
+    [  798.008966]  ? _raw_spin_lock_irq+0x8e/0xe0
+    [  798.008970]  worker_thread+0x544/0x1180
+    [  798.008973]  ? __cpuidle_text_end+0x4/0x4
+    [  798.008977]  kthread+0x282/0x320
+    [  798.008982]  ? process_one_work+0x11c0/0x11c0
+    [  798.008985]  ? kthread_complete_and_exit+0x30/0x30
+    [  798.008989]  ret_from_fork+0x1f/0x30
+    [  798.008995]  </TASK>
+    
+    Fixes: e2f34481b24d ("cifsd: add server-side procedures for SMB3")
+    Cc: stable@vger.kernel.org
+    Reported-by: zdi-disclosures@trendmicro.com # ZDI-CAN-17817
+    Signed-off-by: Hyunchul Lee <hyc.lee@gmail.com>
+    Acked-by: Namjae Jeon <linkinjeon@kernel.org>
+    Signed-off-by: Steve French <stfrench@microsoft.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 5430db94434f9100cbf2284903652c5fb26a5ce1
+Author: Jamal Hadi Salim <jhs@mojatatu.com>
+Date:   Sun Aug 14 11:27:58 2022 +0000
+
+    net_sched: cls_route: disallow handle of 0
+    
+    commit 02799571714dc5dd6948824b9d080b44a295f695 upstream.
+    
+    Follows up on:
+    https://lore.kernel.org/all/20220809170518.164662-1-cascardo@canonical.com/
+    
+    handle of 0 implies from/to of universe realm which is not very
+    sensible.
+    
+    Lets see what this patch will do:
+    $sudo tc qdisc add dev $DEV root handle 1:0 prio
+    
+    //lets manufacture a way to insert handle of 0
+    $sudo tc filter add dev $DEV parent 1:0 protocol ip prio 100 \
+    route to 0 from 0 classid 1:10 action ok
+    
+    //gets rejected...
+    Error: handle of 0 is not valid.
+    We have an error talking to the kernel, -1
+    
+    //lets create a legit entry..
+    sudo tc filter add dev $DEV parent 1:0 protocol ip prio 100 route from 10 \
+    classid 1:10 action ok
+    
+    //what did the kernel insert?
+    $sudo tc filter ls dev $DEV parent 1:0
+    filter protocol ip pref 100 route chain 0
+    filter protocol ip pref 100 route chain 0 fh 0x000a8000 flowid 1:10 from 10
+            action order 1: gact action pass
+             random type none pass val 0
+             index 1 ref 1 bind 1
+    
+    //Lets try to replace that legit entry with a handle of 0
+    $ sudo tc filter replace dev $DEV parent 1:0 protocol ip prio 100 \
+    handle 0x000a8000 route to 0 from 0 classid 1:10 action drop
+    
+    Error: Replacing with handle of 0 is invalid.
+    We have an error talking to the kernel, -1
+    
+    And last, lets run Cascardo's POC:
+    $ ./poc
+    0
+    0
+    -22
+    -22
+    -22
+    
+    Signed-off-by: Jamal Hadi Salim <jhs@mojatatu.com>
+    Acked-by: Stephen Hemminger <stephen@networkplumber.org>
+    Signed-off-by: David S. Miller <davem@davemloft.net>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit c12f0e6126ad223806a365084e86370511654bf1
+Author: Jens Wiklander <jens.wiklander@linaro.org>
+Date:   Thu Aug 18 13:08:59 2022 +0200
+
+    tee: add overflow check in register_shm_helper()
+    
+    commit 573ae4f13f630d6660008f1974c0a8a29c30e18a upstream.
+    
+    With special lengths supplied by user space, register_shm_helper() has
+    an integer overflow when calculating the number of pages covered by a
+    supplied user space memory region.
+    
+    This causes internal_get_user_pages_fast() a helper function of
+    pin_user_pages_fast() to do a NULL pointer dereference:
+    
+      Unable to handle kernel NULL pointer dereference at virtual address 0000000000000010
+      Modules linked in:
+      CPU: 1 PID: 173 Comm: optee_example_a Not tainted 5.19.0 #11
+      Hardware name: QEMU QEMU Virtual Machine, BIOS 0.0.0 02/06/2015
+      pc : internal_get_user_pages_fast+0x474/0xa80
+      Call trace:
+       internal_get_user_pages_fast+0x474/0xa80
+       pin_user_pages_fast+0x24/0x4c
+       register_shm_helper+0x194/0x330
+       tee_shm_register_user_buf+0x78/0x120
+       tee_ioctl+0xd0/0x11a0
+       __arm64_sys_ioctl+0xa8/0xec
+       invoke_syscall+0x48/0x114
+    
+    Fix this by adding an an explicit call to access_ok() in
+    tee_shm_register_user_buf() to catch an invalid user space address
+    early.
+    
+    Fixes: 033ddf12bcf5 ("tee: add register user memory")
+    Cc: stable@vger.kernel.org
+    Reported-by: Nimish Mishra <neelam.nimish@gmail.com>
+    Reported-by: Anirban Chakraborty <ch.anirban00727@gmail.com>
+    Reported-by: Debdeep Mukhopadhyay <debdeep.mukhopadhyay@gmail.com>
+    Suggested-by: Jerome Forissier <jerome.forissier@linaro.org>
+    Signed-off-by: Jens Wiklander <jens.wiklander@linaro.org>
+    Signed-off-by: Linus Torvalds <torvalds@linux-foundation.org>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 3746d62ecf1c872a520c4866118edccb121c44fd
+Author: Jens Axboe <axboe@kernel.dk>
+Date:   Thu Jun 23 11:06:43 2022 -0600
+
+    io_uring: use original request task for inflight tracking
+    
+    commit 386e4fb6962b9f248a80f8870aea0870ca603e89 upstream.
+    
+    In prior kernels, we did file assignment always at prep time. This meant
+    that req->task == current. But after deferring that assignment and then
+    pushing the inflight tracking back in, we've got the inflight tracking
+    using current when it should in fact now be using req->task.
+    
+    Fixup that error introduced by adding the inflight tracking back after
+    file assignments got modifed.
+    
+    Fixes: 9cae36a094e7 ("io_uring: reinstate the inflight tracking")
+    Signed-off-by: Jens Axboe <axboe@kernel.dk>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>

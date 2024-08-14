@@ -1,0 +1,4007 @@
+commit 62aea694445d5fc0f51b45afe8003ff3b7431141
+Author: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+Date:   Wed Sep 28 11:10:41 2022 +0200
+
+    Linux 5.10.146
+    
+    Link: https://lore.kernel.org/r/20220926100754.639112000@linuxfoundation.org
+    Tested-by: Pavel Machek (CIP) <pavel@denx.de>
+    Link: https://lore.kernel.org/r/20220926163550.904900693@linuxfoundation.org
+    Tested-by: Florian Fainelli <f.fainelli@gmail.com>
+    Tested-by: Linux Kernel Functional Testing <lkft@linaro.org>
+    Tested-by: Sudip Mukherjee <sudip.mukherjee@codethink.co.uk>
+    Tested-by: Pavel Machek (CIP) <pavel@denx.de>
+    Tested-by: Guenter Roeck <linux@roeck-us.net>
+    Tested-by: Jon Hunter <jonathanh@nvidia.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit c18383218c3102f8f9ba56fd9abed86ac80a69c3
+Author: Jan Kara <jack@suse.cz>
+Date:   Thu Sep 8 11:21:26 2022 +0200
+
+    ext4: make directory inode spreading reflect flexbg size
+    
+    commit 613c5a85898d1cd44e68f28d65eccf64a8ace9cf upstream.
+    
+    Currently the Orlov inode allocator searches for free inodes for a
+    directory only in flex block groups with at most inodes_per_group/16
+    more directory inodes than average per flex block group. However with
+    growing size of flex block group this becomes unnecessarily strict.
+    Scale allowed difference from average directory count per flex block
+    group with flex block group size as we do with other metrics.
+    
+    Tested-by: Stefan Wahren <stefan.wahren@i2se.com>
+    Tested-by: Ojaswin Mujoo <ojaswin@linux.ibm.com>
+    Cc: stable@kernel.org
+    Link: https://lore.kernel.org/all/0d81a7c2-46b7-6010-62a4-3e6cfc1628d6@i2se.com/
+    Signed-off-by: Jan Kara <jack@suse.cz>
+    Link: https://lore.kernel.org/r/20220908092136.11770-3-jack@suse.cz
+    Signed-off-by: Theodore Ts'o <tytso@mit.edu>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit a968542d7e2471f3c75ed9380110049354e1de44
+Author: Theodore Ts'o <tytso@mit.edu>
+Date:   Thu Sep 1 18:03:14 2022 -0400
+
+    ext4: limit the number of retries after discarding preallocations blocks
+    
+    commit 80fa46d6b9e7b1527bfd2197d75431fd9c382161 upstream.
+    
+    This patch avoids threads live-locking for hours when a large number
+    threads are competing over the last few free extents as they blocks
+    getting added and removed from preallocation pools.  From our bug
+    reporter:
+    
+       A reliable way for triggering this has multiple writers
+       continuously write() to files when the filesystem is full, while
+       small amounts of space are freed (e.g. by truncating a large file
+       -1MiB at a time). In the local filesystem, this can be done by
+       simply not checking the return code of write (0) and/or the error
+       (ENOSPACE) that is set. Over NFS with an async mount, even clients
+       with proper error checking will behave this way since the linux NFS
+       client implementation will not propagate the server errors [the
+       write syscalls immediately return success] until the file handle is
+       closed. This leads to a situation where NFS clients send a
+       continuous stream of WRITE rpcs which result in ERRNOSPACE -- but
+       since the client isn't seeing this, the stream of writes continues
+       at maximum network speed.
+    
+       When some space does appear, multiple writers will all attempt to
+       claim it for their current write. For NFS, we may see dozens to
+       hundreds of threads that do this.
+    
+       The real-world scenario of this is database backup tooling (in
+       particular, github.com/mdkent/percona-xtrabackup) which may write
+       large files (>1TiB) to NFS for safe keeping. Some temporary files
+       are written, rewound, and read back -- all before closing the file
+       handle (the temp file is actually unlinked, to trigger automatic
+       deletion on close/crash.) An application like this operating on an
+       async NFS mount will not see an error code until TiB have been
+       written/read.
+    
+       The lockup was observed when running this database backup on large
+       filesystems (64 TiB in this case) with a high number of block
+       groups and no free space. Fragmentation is generally not a factor
+       in this filesystem (~thousands of large files, mostly contiguous
+       except for the parts written while the filesystem is at capacity.)
+    
+    Signed-off-by: Theodore Ts'o <tytso@mit.edu>
+    Cc: stable@kernel.org
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 958b0ee23f5ac106e7cc11472b71aa2ea9a033bc
+Author: Luís Henriques <lhenriques@suse.de>
+Date:   Mon Aug 22 10:42:35 2022 +0100
+
+    ext4: fix bug in extents parsing when eh_entries == 0 and eh_depth > 0
+    
+    commit 29a5b8a137ac8eb410cc823653a29ac0e7b7e1b0 upstream.
+    
+    When walking through an inode extents, the ext4_ext_binsearch_idx() function
+    assumes that the extent header has been previously validated.  However, there
+    are no checks that verify that the number of entries (eh->eh_entries) is
+    non-zero when depth is > 0.  And this will lead to problems because the
+    EXT_FIRST_INDEX() and EXT_LAST_INDEX() will return garbage and result in this:
+    
+    [  135.245946] ------------[ cut here ]------------
+    [  135.247579] kernel BUG at fs/ext4/extents.c:2258!
+    [  135.249045] invalid opcode: 0000 [#1] PREEMPT SMP
+    [  135.250320] CPU: 2 PID: 238 Comm: tmp118 Not tainted 5.19.0-rc8+ #4
+    [  135.252067] Hardware name: QEMU Standard PC (i440FX + PIIX, 1996), BIOS rel-1.15.0-0-g2dd4b9b-rebuilt.opensuse.org 04/01/2014
+    [  135.255065] RIP: 0010:ext4_ext_map_blocks+0xc20/0xcb0
+    [  135.256475] Code:
+    [  135.261433] RSP: 0018:ffffc900005939f8 EFLAGS: 00010246
+    [  135.262847] RAX: 0000000000000024 RBX: ffffc90000593b70 RCX: 0000000000000023
+    [  135.264765] RDX: ffff8880038e5f10 RSI: 0000000000000003 RDI: ffff8880046e922c
+    [  135.266670] RBP: ffff8880046e9348 R08: 0000000000000001 R09: ffff888002ca580c
+    [  135.268576] R10: 0000000000002602 R11: 0000000000000000 R12: 0000000000000024
+    [  135.270477] R13: 0000000000000000 R14: 0000000000000024 R15: 0000000000000000
+    [  135.272394] FS:  00007fdabdc56740(0000) GS:ffff88807dd00000(0000) knlGS:0000000000000000
+    [  135.274510] CS:  0010 DS: 0000 ES: 0000 CR0: 0000000080050033
+    [  135.276075] CR2: 00007ffc26bd4f00 CR3: 0000000006261004 CR4: 0000000000170ea0
+    [  135.277952] Call Trace:
+    [  135.278635]  <TASK>
+    [  135.279247]  ? preempt_count_add+0x6d/0xa0
+    [  135.280358]  ? percpu_counter_add_batch+0x55/0xb0
+    [  135.281612]  ? _raw_read_unlock+0x18/0x30
+    [  135.282704]  ext4_map_blocks+0x294/0x5a0
+    [  135.283745]  ? xa_load+0x6f/0xa0
+    [  135.284562]  ext4_mpage_readpages+0x3d6/0x770
+    [  135.285646]  read_pages+0x67/0x1d0
+    [  135.286492]  ? folio_add_lru+0x51/0x80
+    [  135.287441]  page_cache_ra_unbounded+0x124/0x170
+    [  135.288510]  filemap_get_pages+0x23d/0x5a0
+    [  135.289457]  ? path_openat+0xa72/0xdd0
+    [  135.290332]  filemap_read+0xbf/0x300
+    [  135.291158]  ? _raw_spin_lock_irqsave+0x17/0x40
+    [  135.292192]  new_sync_read+0x103/0x170
+    [  135.293014]  vfs_read+0x15d/0x180
+    [  135.293745]  ksys_read+0xa1/0xe0
+    [  135.294461]  do_syscall_64+0x3c/0x80
+    [  135.295284]  entry_SYSCALL_64_after_hwframe+0x46/0xb0
+    
+    This patch simply adds an extra check in __ext4_ext_check(), verifying that
+    eh_entries is not 0 when eh_depth is > 0.
+    
+    Link: https://bugzilla.kernel.org/show_bug.cgi?id=215941
+    Link: https://bugzilla.kernel.org/show_bug.cgi?id=216283
+    Cc: Baokun Li <libaokun1@huawei.com>
+    Cc: stable@kernel.org
+    Signed-off-by: Luís Henriques <lhenriques@suse.de>
+    Reviewed-by: Jan Kara <jack@suse.cz>
+    Reviewed-by: Baokun Li <libaokun1@huawei.com>
+    Link: https://lore.kernel.org/r/20220822094235.2690-1-lhenriques@suse.de
+    Signed-off-by: Theodore Ts'o <tytso@mit.edu>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 25117265152ebc6d4f89b1a8ea6e336ea1e19a35
+Author: Dan Williams <dan.j.williams@intel.com>
+Date:   Fri Sep 23 15:05:56 2022 -0700
+
+    devdax: Fix soft-reservation memory description
+    
+    commit 67feaba413ec68daf4124e9870878899b4ed9a0e upstream.
+    
+    The "hmem" platform-devices that are created to represent the
+    platform-advertised "Soft Reserved" memory ranges end up inserting a
+    resource that causes the iomem_resource tree to look like this:
+    
+    340000000-43fffffff : hmem.0
+      340000000-43fffffff : Soft Reserved
+        340000000-43fffffff : dax0.0
+    
+    This is because insert_resource() reparents ranges when they completely
+    intersect an existing range.
+    
+    This matters because code that uses region_intersects() to scan for a
+    given IORES_DESC will only check that top-level 'hmem.0' resource and
+    not the 'Soft Reserved' descendant.
+    
+    So, to support EINJ (via einj_error_inject()) to inject errors into
+    memory hosted by a dax-device, be sure to describe the memory as
+    IORES_DESC_SOFT_RESERVED. This is a follow-on to:
+    
+    commit b13a3e5fd40b ("ACPI: APEI: Fix _EINJ vs EFI_MEMORY_SP")
+    
+    ...that fixed EINJ support for "Soft Reserved" ranges in the first
+    instance.
+    
+    Fixes: 262b45ae3ab4 ("x86/efi: EFI soft reservation to E820 enumeration")
+    Reported-by: Ricardo Sandoval Torres <ricardo.sandoval.torres@intel.com>
+    Tested-by: Ricardo Sandoval Torres <ricardo.sandoval.torres@intel.com>
+    Cc: <stable@vger.kernel.org>
+    Cc: Tony Luck <tony.luck@intel.com>
+    Cc: Omar Avelar <omar.avelar@intel.com>
+    Cc: Rafael J. Wysocki <rafael.j.wysocki@intel.com>
+    Cc: Mark Gross <markgross@kernel.org>
+    Link: https://lore.kernel.org/r/166397075670.389916.7435722208896316387.stgit@dwillia2-xfh.jf.intel.com
+    Signed-off-by: Dan Williams <dan.j.williams@intel.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 0fa11239c4d332e9b1db5b23e297bf19419bb7cc
+Author: Asmaa Mnebhi <asmaa@nvidia.com>
+Date:   Tue Sep 20 13:47:29 2022 -0400
+
+    i2c: mlxbf: Fix frequency calculation
+    
+    [ Upstream commit 37f071ec327b04c83d47637c5e5c2199b39899ca ]
+    
+    The i2c-mlxbf.c driver is currently broken because there is a bug
+    in the calculation of the frequency. core_f, core_r and core_od
+    are components read from hardware registers and are used to
+    compute the frequency used to compute different timing parameters.
+    The shifting mechanism used to get core_f, core_r and core_od is
+    wrong. Use FIELD_GET to mask and shift the bitfields properly.
+    
+    Fixes: b5b5b32081cd206b (i2c: mlxbf: I2C SMBus driver for Mellanox BlueField SoC)
+    Reviewed-by: Khalil Blaiech <kblaiech@nvidia.com>
+    Signed-off-by: Asmaa Mnebhi <asmaa@nvidia.com>
+    Signed-off-by: Wolfram Sang <wsa@kernel.org>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 48ee0a864d1af02eea98fc825cc230d61517a71e
+Author: Asmaa Mnebhi <asmaa@nvidia.com>
+Date:   Thu Sep 8 13:35:39 2022 -0400
+
+    i2c: mlxbf: prevent stack overflow in mlxbf_i2c_smbus_start_transaction()
+    
+    [ Upstream commit de24aceb07d426b6f1c59f33889d6a964770547b ]
+    
+    memcpy() is called in a loop while 'operation->length' upper bound
+    is not checked and 'data_idx' also increments.
+    
+    Fixes: b5b5b32081cd206b ("i2c: mlxbf: I2C SMBus driver for Mellanox BlueField SoC")
+    Reviewed-by: Khalil Blaiech <kblaiech@nvidia.com>
+    Signed-off-by: Asmaa Mnebhi <asmaa@nvidia.com>
+    Signed-off-by: Wolfram Sang <wsa@kernel.org>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 4f6db1f9219e8b122da64342b7daaf12eb8e8de2
+Author: Asmaa Mnebhi <asmaa@nvidia.com>
+Date:   Thu Sep 8 13:35:38 2022 -0400
+
+    i2c: mlxbf: incorrect base address passed during io write
+    
+    [ Upstream commit 2a5be6d1340c0fefcee8a6489cff7fd88a0d5b85 ]
+    
+    Correct the base address used during io write.
+    This bug had no impact over the overall functionality of the read and write
+    transactions. MLXBF_I2C_CAUSE_OR_CLEAR=0x18 so writing to (smbus->io + 0x18)
+    instead of (mst_cause->ioi + 0x18) actually writes to the sc_low_timeout
+    register which just sets the timeout value before a read/write aborts.
+    
+    Fixes: b5b5b32081cd206b (i2c: mlxbf: I2C SMBus driver for Mellanox BlueField SoC)
+    Reviewed-by: Khalil Blaiech <kblaiech@nvidia.com>
+    Signed-off-by: Asmaa Mnebhi <asmaa@nvidia.com>
+    Signed-off-by: Wolfram Sang <wsa@kernel.org>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 2f58c47c36d3f13c2c7368f9fd12636a22e1101a
+Author: Uwe Kleine-König <u.kleine-koenig@pengutronix.de>
+Date:   Mon Sep 12 15:20:40 2022 +0200
+
+    i2c: imx: If pm_runtime_get_sync() returned 1 device access is possible
+    
+    [ Upstream commit 085aacaa73163f4b8a89dec24ecb32cfacd34017 ]
+    
+    pm_runtime_get_sync() returning 1 also means the device is powered. So
+    resetting the chip registers in .remove() is possible and should be
+    done.
+    
+    Reported-by: Dan Carpenter <dan.carpenter@oracle.com>
+    Fixes: d98bdd3a5b50 ("i2c: imx: Make sure to unregister adapter on remove()")
+    Signed-off-by: Uwe Kleine-König <u.kleine-koenig@pengutronix.de>
+    Acked-by: Oleksij Rempel <o.rempel@pengutronix.de>
+    Signed-off-by: Wolfram Sang <wsa@kernel.org>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 90f1c0025be0ed341c5ba27aed58233de32c7d0a
+Author: Tetsuo Handa <penguin-kernel@I-love.SAKURA.ne.jp>
+Date:   Fri Jul 29 13:30:23 2022 +0900
+
+    workqueue: don't skip lockdep work dependency in cancel_work_sync()
+    
+    [ Upstream commit c0feea594e058223973db94c1c32a830c9807c86 ]
+    
+    Like Hillf Danton mentioned
+    
+      syzbot should have been able to catch cancel_work_sync() in work context
+      by checking lockdep_map in __flush_work() for both flush and cancel.
+    
+    in [1], being unable to report an obvious deadlock scenario shown below is
+    broken. From locking dependency perspective, sync version of cancel request
+    should behave as if flush request, for it waits for completion of work if
+    that work has already started execution.
+    
+      ----------
+      #include <linux/module.h>
+      #include <linux/sched.h>
+      static DEFINE_MUTEX(mutex);
+      static void work_fn(struct work_struct *work)
+      {
+        schedule_timeout_uninterruptible(HZ / 5);
+        mutex_lock(&mutex);
+        mutex_unlock(&mutex);
+      }
+      static DECLARE_WORK(work, work_fn);
+      static int __init test_init(void)
+      {
+        schedule_work(&work);
+        schedule_timeout_uninterruptible(HZ / 10);
+        mutex_lock(&mutex);
+        cancel_work_sync(&work);
+        mutex_unlock(&mutex);
+        return -EINVAL;
+      }
+      module_init(test_init);
+      MODULE_LICENSE("GPL");
+      ----------
+    
+    The check this patch restores was added by commit 0976dfc1d0cd80a4
+    ("workqueue: Catch more locking problems with flush_work()").
+    
+    Then, lockdep's crossrelease feature was added by commit b09be676e0ff25bd
+    ("locking/lockdep: Implement the 'crossrelease' feature"). As a result,
+    this check was once removed by commit fd1a5b04dfb899f8 ("workqueue: Remove
+    now redundant lock acquisitions wrt. workqueue flushes").
+    
+    But lockdep's crossrelease feature was removed by commit e966eaeeb623f099
+    ("locking/lockdep: Remove the cross-release locking checks"). At this
+    point, this check should have been restored.
+    
+    Then, commit d6e89786bed977f3 ("workqueue: skip lockdep wq dependency in
+    cancel_work_sync()") introduced a boolean flag in order to distinguish
+    flush_work() and cancel_work_sync(), for checking "struct workqueue_struct"
+    dependency when called from cancel_work_sync() was causing false positives.
+    
+    Then, commit 87915adc3f0acdf0 ("workqueue: re-add lockdep dependencies for
+    flushing") tried to restore "struct work_struct" dependency check, but by
+    error checked this boolean flag. Like an example shown above indicates,
+    "struct work_struct" dependency needs to be checked for both flush_work()
+    and cancel_work_sync().
+    
+    Link: https://lkml.kernel.org/r/20220504044800.4966-1-hdanton@sina.com [1]
+    Reported-by: Hillf Danton <hdanton@sina.com>
+    Suggested-by: Lai Jiangshan <jiangshanlai@gmail.com>
+    Fixes: 87915adc3f0acdf0 ("workqueue: re-add lockdep dependencies for flushing")
+    Cc: Johannes Berg <johannes.berg@intel.com>
+    Signed-off-by: Tetsuo Handa <penguin-kernel@I-love.SAKURA.ne.jp>
+    Signed-off-by: Tejun Heo <tj@kernel.org>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 4dfc96d8d730e8846a1b8a7c90e7059bae5426b6
+Author: Nathan Huckleberry <nhuck@google.com>
+Date:   Tue Sep 13 13:55:55 2022 -0700
+
+    drm/rockchip: Fix return type of cdn_dp_connector_mode_valid
+    
+    [ Upstream commit b0b9408f132623dc88e78adb5282f74e4b64bb57 ]
+    
+    The mode_valid field in drm_connector_helper_funcs is expected to be of
+    type:
+    enum drm_mode_status (* mode_valid) (struct drm_connector *connector,
+                                         struct drm_display_mode *mode);
+    
+    The mismatched return type breaks forward edge kCFI since the underlying
+    function definition does not match the function hook definition.
+    
+    The return type of cdn_dp_connector_mode_valid should be changed from
+    int to enum drm_mode_status.
+    
+    Reported-by: Dan Carpenter <error27@gmail.com>
+    Link: https://github.com/ClangBuiltLinux/linux/issues/1703
+    Cc: llvm@lists.linux.dev
+    Signed-off-by: Nathan Huckleberry <nhuck@google.com>
+    Reviewed-by: Nathan Chancellor <nathan@kernel.org>
+    Signed-off-by: Heiko Stuebner <heiko@sntech.de>
+    Link: https://patchwork.freedesktop.org/patch/msgid/20220913205555.155149-1-nhuck@google.com
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 58101a9cfc5f0a862637f8418bf935ec86031ba5
+Author: Nathan Chancellor <nathan@kernel.org>
+Date:   Tue Aug 30 13:34:09 2022 -0700
+
+    drm/amd/display: Mark dml30's UseMinimumDCFCLK() as noinline for stack usage
+    
+    [ Upstream commit 41012d715d5d7b9751ae84b8fb255e404ac9c5d0 ]
+    
+    This function consumes a lot of stack space and it blows up the size of
+    dml30_ModeSupportAndSystemConfigurationFull() with clang:
+    
+      drivers/gpu/drm/amd/amdgpu/../display/dc/dml/dcn30/display_mode_vba_30.c:3542:6: error: stack frame size (2200) exceeds limit (2048) in 'dml30_ModeSupportAndSystemConfigurationFull' [-Werror,-Wframe-larger-than]
+      void dml30_ModeSupportAndSystemConfigurationFull(struct display_mode_lib *mode_lib)
+           ^
+      1 error generated.
+    
+    Commit a0f7e7f759cf ("drm/amd/display: fix i386 frame size warning")
+    aimed to address this for i386 but it did not help x86_64.
+    
+    To reduce the amount of stack space that
+    dml30_ModeSupportAndSystemConfigurationFull() uses, mark
+    UseMinimumDCFCLK() as noinline, using the _for_stack variant for
+    documentation. While this will increase the total amount of stack usage
+    between the two functions (1632 and 1304 bytes respectively), it will
+    make sure both stay below the limit of 2048 bytes for these files. The
+    aforementioned change does help reduce UseMinimumDCFCLK()'s stack usage
+    so it should not be reverted in favor of this change.
+    
+    Link: https://github.com/ClangBuiltLinux/linux/issues/1681
+    Reported-by: "Sudip Mukherjee (Codethink)" <sudipm.mukherjee@gmail.com>
+    Tested-by: Maíra Canal <mairacanal@riseup.net>
+    Reviewed-by: Rodrigo Siqueira <Rodrigo.Siqueira@amd.com>
+    Signed-off-by: Nathan Chancellor <nathan@kernel.org>
+    Signed-off-by: Rodrigo Siqueira <Rodrigo.Siqueira@amd.com>
+    Signed-off-by: Alex Deucher <alexander.deucher@amd.com>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 3ae1dede22e380788dfa284e099a9b5c51951acd
+Author: Yao Wang1 <Yao.Wang1@amd.com>
+Date:   Mon Aug 22 18:30:31 2022 +0800
+
+    drm/amd/display: Limit user regamma to a valid value
+    
+    [ Upstream commit 3601d620f22e37740cf73f8278eabf9f2aa19eb7 ]
+    
+    [Why]
+    For HDR mode, we get total 512 tf_point and after switching to SDR mode
+    we actually get 400 tf_point and the rest of points(401~512) still use
+    dirty value from HDR mode. We should limit the rest of the points to max
+    value.
+    
+    [How]
+    Limit the value when coordinates_x.x > 1, just like what we do in
+    translate_from_linear_space for other re-gamma build paths.
+    
+    Tested-by: Daniel Wheeler <daniel.wheeler@amd.com>
+    Reviewed-by: Krunoslav Kovac <Krunoslav.Kovac@amd.com>
+    Reviewed-by: Aric Cyr <Aric.Cyr@amd.com>
+    Acked-by: Pavle Kotarac <Pavle.Kotarac@amd.com>
+    Signed-off-by: Yao Wang1 <Yao.Wang1@amd.com>
+    Signed-off-by: Alex Deucher <alexander.deucher@amd.com>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 867b2b2b6802fb3995a0065fc39e0e7e20d8004d
+Author: Hamza Mahfooz <hamza.mahfooz@amd.com>
+Date:   Tue Sep 6 15:01:49 2022 -0400
+
+    drm/amdgpu: use dirty framebuffer helper
+    
+    [ Upstream commit 66f99628eb24409cb8feb5061f78283c8b65f820 ]
+    
+    Currently, we aren't handling DRM_IOCTL_MODE_DIRTYFB. So, use
+    drm_atomic_helper_dirtyfb() as the dirty callback in the amdgpu_fb_funcs
+    struct.
+    
+    Signed-off-by: Hamza Mahfooz <hamza.mahfooz@amd.com>
+    Acked-by: Alex Deucher <alexander.deucher@amd.com>
+    Signed-off-by: Alex Deucher <alexander.deucher@amd.com>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit c5812807e416618477d1bb0049727ce8bb8292fd
+Author: Hans de Goede <hdegoede@redhat.com>
+Date:   Tue Sep 6 22:38:50 2022 +0200
+
+    drm/gma500: Fix BUG: sleeping function called from invalid context errors
+    
+    [ Upstream commit 63e37a79f7bd939314997e29c2f5a9f0ef184281 ]
+    
+    gma_crtc_page_flip() was holding the event_lock spinlock while calling
+    crtc_funcs->mode_set_base() which takes ww_mutex.
+    
+    The only reason to hold event_lock is to clear gma_crtc->page_flip_event
+    on mode_set_base() errors.
+    
+    Instead unlock it after setting gma_crtc->page_flip_event and on
+    errors re-take the lock and clear gma_crtc->page_flip_event it
+    it is still set.
+    
+    This fixes the following WARN/stacktrace:
+    
+    [  512.122953] BUG: sleeping function called from invalid context at kernel/locking/mutex.c:870
+    [  512.123004] in_atomic(): 1, irqs_disabled(): 1, non_block: 0, pid: 1253, name: gnome-shell
+    [  512.123031] preempt_count: 1, expected: 0
+    [  512.123048] RCU nest depth: 0, expected: 0
+    [  512.123066] INFO: lockdep is turned off.
+    [  512.123080] irq event stamp: 0
+    [  512.123094] hardirqs last  enabled at (0): [<0000000000000000>] 0x0
+    [  512.123134] hardirqs last disabled at (0): [<ffffffff8d0ec28c>] copy_process+0x9fc/0x1de0
+    [  512.123176] softirqs last  enabled at (0): [<ffffffff8d0ec28c>] copy_process+0x9fc/0x1de0
+    [  512.123207] softirqs last disabled at (0): [<0000000000000000>] 0x0
+    [  512.123233] Preemption disabled at:
+    [  512.123241] [<0000000000000000>] 0x0
+    [  512.123275] CPU: 3 PID: 1253 Comm: gnome-shell Tainted: G        W         5.19.0+ #1
+    [  512.123304] Hardware name: Packard Bell dot s/SJE01_CT, BIOS V1.10 07/23/2013
+    [  512.123323] Call Trace:
+    [  512.123346]  <TASK>
+    [  512.123370]  dump_stack_lvl+0x5b/0x77
+    [  512.123412]  __might_resched.cold+0xff/0x13a
+    [  512.123458]  ww_mutex_lock+0x1e/0xa0
+    [  512.123495]  psb_gem_pin+0x2c/0x150 [gma500_gfx]
+    [  512.123601]  gma_pipe_set_base+0x76/0x240 [gma500_gfx]
+    [  512.123708]  gma_crtc_page_flip+0x95/0x130 [gma500_gfx]
+    [  512.123808]  drm_mode_page_flip_ioctl+0x57d/0x5d0
+    [  512.123897]  ? drm_mode_cursor2_ioctl+0x10/0x10
+    [  512.123936]  drm_ioctl_kernel+0xa1/0x150
+    [  512.123984]  drm_ioctl+0x21f/0x420
+    [  512.124025]  ? drm_mode_cursor2_ioctl+0x10/0x10
+    [  512.124070]  ? rcu_read_lock_bh_held+0xb/0x60
+    [  512.124104]  ? lock_release+0x1ef/0x2d0
+    [  512.124161]  __x64_sys_ioctl+0x8d/0xd0
+    [  512.124203]  do_syscall_64+0x58/0x80
+    [  512.124239]  ? do_syscall_64+0x67/0x80
+    [  512.124267]  ? trace_hardirqs_on_prepare+0x55/0xe0
+    [  512.124300]  ? do_syscall_64+0x67/0x80
+    [  512.124340]  ? rcu_read_lock_sched_held+0x10/0x80
+    [  512.124377]  entry_SYSCALL_64_after_hwframe+0x63/0xcd
+    [  512.124411] RIP: 0033:0x7fcc4a70740f
+    [  512.124442] Code: 00 48 89 44 24 18 31 c0 48 8d 44 24 60 c7 04 24 10 00 00 00 48 89 44 24 08 48 8d 44 24 20 48 89 44 24 10 b8 10 00 00 00 0f 05 <89> c2 3d 00 f0 ff ff 77 18 48 8b 44 24 18 64 48 2b 04 25 28 00 00
+    [  512.124470] RSP: 002b:00007ffda73f5390 EFLAGS: 00000246 ORIG_RAX: 0000000000000010
+    [  512.124503] RAX: ffffffffffffffda RBX: 000055cc9e474500 RCX: 00007fcc4a70740f
+    [  512.124524] RDX: 00007ffda73f5420 RSI: 00000000c01864b0 RDI: 0000000000000009
+    [  512.124544] RBP: 00007ffda73f5420 R08: 000055cc9c0b0cb0 R09: 0000000000000034
+    [  512.124564] R10: 0000000000000000 R11: 0000000000000246 R12: 00000000c01864b0
+    [  512.124584] R13: 0000000000000009 R14: 000055cc9df484d0 R15: 000055cc9af5d0c0
+    [  512.124647]  </TASK>
+    
+    Signed-off-by: Hans de Goede <hdegoede@redhat.com>
+    Signed-off-by: Patrik Jakobsson <patrik.r.jakobsson@gmail.com>
+    Link: https://patchwork.freedesktop.org/patch/msgid/20220906203852.527663-2-hdegoede@redhat.com
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit ec2bf249bdff8d5eb56cba5665a685b602d045fb
+Author: Vitaly Kuznetsov <vkuznets@redhat.com>
+Date:   Sat Aug 27 15:03:45 2022 +0200
+
+    Drivers: hv: Never allocate anything besides framebuffer from framebuffer memory region
+    
+    [ Upstream commit f0880e2cb7e1f8039a048fdd01ce45ab77247221 ]
+    
+    Passed through PCI device sometimes misbehave on Gen1 VMs when Hyper-V
+    DRM driver is also loaded. Looking at IOMEM assignment, we can see e.g.
+    
+    $ cat /proc/iomem
+    ...
+    f8000000-fffbffff : PCI Bus 0000:00
+      f8000000-fbffffff : 0000:00:08.0
+        f8000000-f8001fff : bb8c4f33-2ba2-4808-9f7f-02f3b4da22fe
+    ...
+    fe0000000-fffffffff : PCI Bus 0000:00
+      fe0000000-fe07fffff : bb8c4f33-2ba2-4808-9f7f-02f3b4da22fe
+        fe0000000-fe07fffff : 2ba2:00:02.0
+          fe0000000-fe07fffff : mlx4_core
+    
+    the interesting part is the 'f8000000' region as it is actually the
+    VM's framebuffer:
+    
+    $ lspci -v
+    ...
+    0000:00:08.0 VGA compatible controller: Microsoft Corporation Hyper-V virtual VGA (prog-if 00 [VGA controller])
+            Flags: bus master, fast devsel, latency 0, IRQ 11
+            Memory at f8000000 (32-bit, non-prefetchable) [size=64M]
+    ...
+    
+     hv_vmbus: registering driver hyperv_drm
+     hyperv_drm 5620e0c7-8062-4dce-aeb7-520c7ef76171: [drm] Synthvid Version major 3, minor 5
+     hyperv_drm 0000:00:08.0: vgaarb: deactivate vga console
+     hyperv_drm 0000:00:08.0: BAR 0: can't reserve [mem 0xf8000000-0xfbffffff]
+     hyperv_drm 5620e0c7-8062-4dce-aeb7-520c7ef76171: [drm] Cannot request framebuffer, boot fb still active?
+    
+    Note: "Cannot request framebuffer" is not a fatal error in
+    hyperv_setup_gen1() as the code assumes there's some other framebuffer
+    device there but we actually have some other PCI device (mlx4 in this
+    case) config space there!
+    
+    The problem appears to be that vmbus_allocate_mmio() can use dedicated
+    framebuffer region to serve any MMIO request from any device. The
+    semantics one might assume of a parameter named "fb_overlap_ok"
+    aren't implemented because !fb_overlap_ok essentially has no effect.
+    The existing semantics are really "prefer_fb_overlap". This patch
+    implements the expected and needed semantics, which is to not allocate
+    from the frame buffer space when !fb_overlap_ok.
+    
+    Note, Gen2 VMs are usually unaffected by the issue because
+    framebuffer region is already taken by EFI fb (in case kernel supports
+    it) but Gen1 VMs may have this region unclaimed by the time Hyper-V PCI
+    pass-through driver tries allocating MMIO space if Hyper-V DRM/FB drivers
+    load after it. Devices can be brought up in any sequence so let's
+    resolve the issue by always ignoring 'fb_mmio' region for non-FB
+    requests, even if the region is unclaimed.
+    
+    Reviewed-by: Michael Kelley <mikelley@microsoft.com>
+    Signed-off-by: Vitaly Kuznetsov <vkuznets@redhat.com>
+    Link: https://lore.kernel.org/r/20220827130345.1320254-4-vkuznets@redhat.com
+    Signed-off-by: Wei Liu <wei.liu@kernel.org>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 2a2e503a62e5c3efdad7749bb13c64e09e8c377d
+Author: Stefan Metzmacher <metze@samba.org>
+Date:   Wed Sep 14 05:25:47 2022 +0200
+
+    cifs: always initialize struct msghdr smb_msg completely
+    
+    [ Upstream commit bedc8f76b3539ac4f952114b316bcc2251e808ce ]
+    
+    So far we were just lucky because the uninitialized members
+    of struct msghdr are not used by default on a SOCK_STREAM tcp
+    socket.
+    
+    But as new things like msg_ubuf and sg_from_iter where added
+    recently, we should play on the safe side and avoid potention
+    problems in future.
+    
+    Signed-off-by: Stefan Metzmacher <metze@samba.org>
+    Cc: stable@vger.kernel.org
+    Reviewed-by: Paulo Alcantara (SUSE) <pc@cjr.nz>
+    Reviewed-by: Ronnie Sahlberg <lsahlber@redhat.com>
+    Signed-off-by: Steve French <stfrench@microsoft.com>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 877231b0e67845c351b3ef4b5b5943c1e77b8ee9
+Author: David Howells <dhowells@redhat.com>
+Date:   Thu Feb 4 00:15:21 2021 -0600
+
+    cifs: use discard iterator to discard unneeded network data more efficiently
+    
+    [ Upstream commit cf0604a686b11175d8beae60281c4ccc95aaa5c2 ]
+    
+    The iterator, ITER_DISCARD, that can only be used in READ mode and
+    just discards any data copied to it, was added to allow a network
+    filesystem to discard any unwanted data sent by a server.
+    Convert cifs_discard_from_socket() to use this.
+    
+    Signed-off-by: David Howells <dhowells@redhat.com>
+    Signed-off-by: Steve French <stfrench@microsoft.com>
+    Stable-dep-of: bedc8f76b353 ("cifs: always initialize struct msghdr smb_msg completely")
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 09867977fcc258caab84031445345bdf3c2e0531
+Author: Luben Tuikov <luben.tuikov@amd.com>
+Date:   Thu Mar 11 19:11:01 2021 -0500
+
+    drm/amdgpu: Fix check for RAS support
+    
+    [ Upstream commit 084e2640e51626f413f85663e3ba7e32d4272477 ]
+    
+    Use positive logic to check for RAS
+    support. Rename the function to actually indicate
+    what it is testing for. Essentially, make the
+    function a predicate with the correct name.
+    
+    Cc: Stanley Yang <Stanley.Yang@amd.com>
+    Cc: Alexander Deucher <Alexander.Deucher@amd.com>
+    Signed-off-by: Luben Tuikov <luben.tuikov@amd.com>
+    Reviewed-by: Alex Deucher <alexander.deucher@amd.com>
+    Signed-off-by: Alex Deucher <alexander.deucher@amd.com>
+    Stable-dep-of: 6c2049066355 ("drm/amdgpu: Don't enable LTR if not supported")
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 8c6fd05cf8874e683dfb2749926363faeb3324e0
+Author: Daniel Jordan <daniel.m.jordan@oracle.com>
+Date:   Mon Mar 8 12:24:52 2021 -0500
+
+    vfio/type1: fix vaddr_get_pfns() return in vfio_pin_page_external()
+    
+    commit 4ab4fcfce5b540227d80eb32f1db45ab615f7c92 upstream.
+    
+    vaddr_get_pfns() now returns the positive number of pfns successfully
+    gotten instead of zero.  vfio_pin_page_external() might return 1 to
+    vfio_iommu_type1_pin_pages(), which will treat it as an error, if
+    vaddr_get_pfns() is successful but vfio_pin_page_external() doesn't
+    reach vfio_lock_acct().
+    
+    Fix it up in vfio_pin_page_external().  Found by inspection.
+    
+    Fixes: be16c1fd99f4 ("vfio/type1: Change success value of vaddr_get_pfn()")
+    Signed-off-by: Daniel Jordan <daniel.m.jordan@oracle.com>
+    Message-Id: <20210308172452.38864-1-daniel.m.jordan@oracle.com>
+    Signed-off-by: Alex Williamson <alex.williamson@redhat.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit f31ea57c1183415b7069853a8a57ec9288dc4aef
+Author: Chunfeng Yun <chunfeng.yun@mediatek.com>
+Date:   Tue Aug 17 16:36:25 2021 +0800
+
+    usb: xhci-mtk: fix issue of out-of-bounds array access
+    
+    commit de5107f473190538a65aac7edea85209cd5c1a8f upstream.
+    
+    Bus bandwidth array access is based on esit, increase one
+    will cause out-of-bounds issue; for example, when esit is
+    XHCI_MTK_MAX_ESIT, will overstep boundary.
+    
+    Fixes: 7c986fbc16ae ("usb: xhci-mtk: get the microframe boundary for ESIT")
+    Cc: <stable@vger.kernel.org>
+    Reported-by: Stan Lu <stan.lu@mediatek.com>
+    Signed-off-by: Chunfeng Yun <chunfeng.yun@mediatek.com>
+    Link: https://lore.kernel.org/r/1629189389-18779-5-git-send-email-chunfeng.yun@mediatek.com
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit f5fcc9d6d71d9ff7fdbdd4b89074e6e24fffc20b
+Author: Stefan Haberland <sth@linux.ibm.com>
+Date:   Mon Sep 19 17:49:31 2022 +0200
+
+    s390/dasd: fix Oops in dasd_alias_get_start_dev due to missing pavgroup
+    
+    commit db7ba07108a48c0f95b74fabbfd5d63e924f992d upstream.
+    
+    Fix Oops in dasd_alias_get_start_dev() function caused by the pavgroup
+    pointer being NULL.
+    
+    The pavgroup pointer is checked on the entrance of the function but
+    without the lcu->lock being held. Therefore there is a race window
+    between dasd_alias_get_start_dev() and _lcu_update() which sets
+    pavgroup to NULL with the lcu->lock held.
+    
+    Fix by checking the pavgroup pointer with lcu->lock held.
+    
+    Cc: <stable@vger.kernel.org> # 2.6.25+
+    Fixes: 8e09f21574ea ("[S390] dasd: add hyper PAV support to DASD device driver, part 1")
+    Signed-off-by: Stefan Haberland <sth@linux.ibm.com>
+    Reviewed-by: Jan Hoeppner <hoeppner@linux.ibm.com>
+    Link: https://lore.kernel.org/r/20220919154931.4123002-2-sth@linux.ibm.com
+    Signed-off-by: Jens Axboe <axboe@kernel.dk>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit fb189aa1be09a755683545cb451f764f4e636b38
+Author: Ilpo Järvinen <ilpo.jarvinen@linux.intel.com>
+Date:   Thu Sep 1 17:39:34 2022 +0300
+
+    serial: tegra-tcu: Use uart_xmit_advance(), fixes icount.tx accounting
+    
+    commit 1d10cd4da593bc0196a239dcc54dac24b6b0a74e upstream.
+    
+    Tx'ing does not correctly account Tx'ed characters into icount.tx.
+    Using uart_xmit_advance() fixes the problem.
+    
+    Fixes: 2d908b38d409 ("serial: Add Tegra Combined UART driver")
+    Cc: <stable@vger.kernel.org> # serial: Create uart_xmit_advance()
+    Reviewed-by: Andy Shevchenko <andy.shevchenko@gmail.com>
+    Signed-off-by: Ilpo Järvinen <ilpo.jarvinen@linux.intel.com>
+    Link: https://lore.kernel.org/r/20220901143934.8850-4-ilpo.jarvinen@linux.intel.com
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit e1993864a935cb2e0472f23a72f9cc7212f316ec
+Author: Ilpo Järvinen <ilpo.jarvinen@linux.intel.com>
+Date:   Thu Sep 1 17:39:33 2022 +0300
+
+    serial: tegra: Use uart_xmit_advance(), fixes icount.tx accounting
+    
+    commit 754f68044c7dd6c52534ba3e0f664830285c4b15 upstream.
+    
+    DMA complete & stop paths did not correctly account Tx'ed characters
+    into icount.tx. Using uart_xmit_advance() fixes the problem.
+    
+    Fixes: e9ea096dd225 ("serial: tegra: add serial driver")
+    Cc: <stable@vger.kernel.org> # serial: Create uart_xmit_advance()
+    Reviewed-by: Andy Shevchenko <andy.shevchenko@gmail.com>
+    Signed-off-by: Ilpo Järvinen <ilpo.jarvinen@linux.intel.com>
+    Link: https://lore.kernel.org/r/20220901143934.8850-3-ilpo.jarvinen@linux.intel.com
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 7f11386733abcc420ef1f11111bf32c6aeb80815
+Author: Ilpo Järvinen <ilpo.jarvinen@linux.intel.com>
+Date:   Thu Sep 1 17:39:32 2022 +0300
+
+    serial: Create uart_xmit_advance()
+    
+    commit e77cab77f2cb3a1ca2ba8df4af45bb35617ac16d upstream.
+    
+    A very common pattern in the drivers is to advance xmit tail
+    index and do bookkeeping of Tx'ed characters. Create
+    uart_xmit_advance() to handle it.
+    
+    Reviewed-by: Andy Shevchenko <andy.shevchenko@gmail.com>
+    Cc: stable <stable@kernel.org>
+    Signed-off-by: Ilpo Järvinen <ilpo.jarvinen@linux.intel.com>
+    Link: https://lore.kernel.org/r/20220901143934.8850-2-ilpo.jarvinen@linux.intel.com
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit fda04a0bab7fdc3ac17508f00584580f858ade76
+Author: Jingwen Chen <Jingwen.Chen2@amd.com>
+Date:   Thu Jan 13 19:06:59 2022 +0800
+
+    drm/amd/amdgpu: fixing read wrong pf2vf data in SRIOV
+    
+    commit 9a458402fb69bda886aa6cbe067311b6e3d9c52a upstream.
+    
+    [Why]
+    This fixes 892deb48269c ("drm/amdgpu: Separate vf2pf work item init from virt data exchange").
+    we should read pf2vf data based at mman.fw_vram_usage_va after gmc
+    sw_init. commit 892deb48269c breaks this logic.
+    
+    [How]
+    calling amdgpu_virt_exchange_data in amdgpu_virt_init_data_exchange to
+    set the right base in the right sequence.
+    
+    v2:
+    call amdgpu_virt_init_data_exchange after gmc sw_init to make data
+    exchange workqueue run
+    
+    v3:
+    clean up the code logic
+    
+    v4:
+    add some comment and make the code more readable
+    
+    Fixes: 892deb48269c ("drm/amdgpu: Separate vf2pf work item init from virt data exchange")
+    Signed-off-by: Jingwen Chen <Jingwen.Chen2@amd.com>
+    Reviewed-by: Horace Chen <horace.chen@amd.com>
+    Signed-off-by: Alex Deucher <alexander.deucher@amd.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 4bc4b6419e652905f71b12c70783954513d9d7f4
+Author: Hangbin Liu <liuhangbin@gmail.com>
+Date:   Thu Sep 22 10:44:53 2022 +0800
+
+    selftests: forwarding: add shebang for sch_red.sh
+    
+    [ Upstream commit 83e4b196838d90799a8879e5054a3beecf9ed256 ]
+    
+    RHEL/Fedora RPM build checks are stricter, and complain when executable
+    files don't have a shebang line, e.g.
+    
+    *** WARNING: ./kselftests/net/forwarding/sch_red.sh is executable but has no shebang, removing executable bit
+    
+    Fix it by adding shebang line.
+    
+    Fixes: 6cf0291f9517 ("selftests: forwarding: Add a RED test for SW datapath")
+    Signed-off-by: Hangbin Liu <liuhangbin@gmail.com>
+    Reviewed-by: Petr Machata <petrm@nvidia.com>
+    Link: https://lore.kernel.org/r/20220922024453.437757-1-liuhangbin@gmail.com
+    Signed-off-by: Jakub Kicinski <kuba@kernel.org>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 8844c750eeb03452e2b3319c27a526f447b82596
+Author: Hangyu Hua <hbh25y@gmail.com>
+Date:   Wed Sep 21 17:27:34 2022 +0800
+
+    net: sched: fix possible refcount leak in tc_new_tfilter()
+    
+    [ Upstream commit c2e1cfefcac35e0eea229e148c8284088ce437b5 ]
+    
+    tfilter_put need to be called to put the refount got by tp->ops->get to
+    avoid possible refcount leak when chain->tmplt_ops != NULL and
+    chain->tmplt_ops != tp->ops.
+    
+    Fixes: 7d5509fa0d3d ("net: sched: extend proto ops with 'put' callback")
+    Signed-off-by: Hangyu Hua <hbh25y@gmail.com>
+    Reviewed-by: Vlad Buslov <vladbu@nvidia.com>
+    Link: https://lore.kernel.org/r/20220921092734.31700-1-hbh25y@gmail.com
+    Signed-off-by: Jakub Kicinski <kuba@kernel.org>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 75ca7f44dab65b50c14e4838fc955fbcb6b87122
+Author: Sean Anderson <seanga2@gmail.com>
+Date:   Tue Sep 20 19:50:18 2022 -0400
+
+    net: sunhme: Fix packet reception for len < RX_COPY_THRESHOLD
+    
+    [ Upstream commit 878e2405710aacfeeb19364c300f38b7a9abfe8f ]
+    
+    There is a separate receive path for small packets (under 256 bytes).
+    Instead of allocating a new dma-capable skb to be used for the next packet,
+    this path allocates a skb and copies the data into it (reusing the existing
+    sbk for the next packet). There are two bytes of junk data at the beginning
+    of every packet. I believe these are inserted in order to allow aligned DMA
+    and IP headers. We skip over them using skb_reserve. Before copying over
+    the data, we must use a barrier to ensure we see the whole packet. The
+    current code only synchronizes len bytes, starting from the beginning of
+    the packet, including the junk bytes. However, this leaves off the final
+    two bytes in the packet. Synchronize the whole packet.
+    
+    To reproduce this problem, ping a HME with a payload size between 17 and
+    214
+    
+            $ ping -s 17 <hme_address>
+    
+    which will complain rather loudly about the data mismatch. Small packets
+    (below 60 bytes on the wire) do not have this issue. I suspect this is
+    related to the padding added to increase the minimum packet size.
+    
+    Fixes: 1da177e4c3f4 ("Linux-2.6.12-rc2")
+    Signed-off-by: Sean Anderson <seanga2@gmail.com>
+    Reviewed-by: Andrew Lunn <andrew@lunn.ch>
+    Link: https://lore.kernel.org/r/20220920235018.1675956-1-seanga2@gmail.com
+    Signed-off-by: Jakub Kicinski <kuba@kernel.org>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit d76151a8131e75e49ab65bc4ffa67dddc2ff6b3e
+Author: Wen Gu <guwen@linux.alibaba.com>
+Date:   Tue Sep 20 14:43:09 2022 +0800
+
+    net/smc: Stop the CLC flow if no link to map buffers on
+    
+    [ Upstream commit e738455b2c6dcdab03e45d97de36476f93f557d2 ]
+    
+    There might be a potential race between SMC-R buffer map and
+    link group termination.
+    
+    smc_smcr_terminate_all()     | smc_connect_rdma()
+    --------------------------------------------------------------
+                                 | smc_conn_create()
+    for links in smcibdev        |
+            schedule links down  |
+                                 | smc_buf_create()
+                                 |  \- smcr_buf_map_usable_links()
+                                 |      \- no usable links found,
+                                 |         (rmb->mr = NULL)
+                                 |
+                                 | smc_clc_send_confirm()
+                                 |  \- access conn->rmb_desc->mr[]->rkey
+                                 |     (panic)
+    
+    During reboot and IB device module remove, all links will be set
+    down and no usable links remain in link groups. In such situation
+    smcr_buf_map_usable_links() should return an error and stop the
+    CLC flow accessing to uninitialized mr.
+    
+    Fixes: b9247544c1bc ("net/smc: convert static link ID instances to support multiple links")
+    Signed-off-by: Wen Gu <guwen@linux.alibaba.com>
+    Link: https://lore.kernel.org/r/1663656189-32090-1-git-send-email-guwen@linux.alibaba.com
+    Signed-off-by: Paolo Abeni <pabeni@redhat.com>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit fd938b4ce0fb6a41e88711e87268dfafb2e6b18a
+Author: Nícolas F. R. A. Prado <nfraprado@collabora.com>
+Date:   Thu Aug 4 15:43:25 2022 -0400
+
+    drm/mediatek: dsi: Move mtk_dsi_stop() call back to mtk_dsi_poweroff()
+    
+    [ Upstream commit 90144dd8b0d137d9e78ef34b3c418e51a49299ad ]
+    
+    As the comment right before the mtk_dsi_stop() call advises,
+    mtk_dsi_stop() should only be called after
+    mtk_drm_crtc_atomic_disable(). That's because that function calls
+    drm_crtc_wait_one_vblank(), which requires the vblank irq to be enabled.
+    
+    Previously mtk_dsi_stop(), being in mtk_dsi_poweroff() and guarded by a
+    refcount, would only be called at the end of
+    mtk_drm_crtc_atomic_disable(), through the call to mtk_crtc_ddp_hw_fini().
+    Commit cde7e2e35c28 ("drm/mediatek: Separate poweron/poweroff from
+    enable/disable and define new funcs") moved the mtk_dsi_stop() call to
+    mtk_output_dsi_disable(), causing it to be called before
+    mtk_drm_crtc_atomic_disable(), and consequently generating vblank
+    timeout warnings during suspend.
+    
+    Move the mtk_dsi_stop() call back to mtk_dsi_poweroff() so that we have
+    a working vblank irq during mtk_drm_crtc_atomic_disable() and stop
+    getting vblank timeout warnings.
+    
+    Fixes: cde7e2e35c28 ("drm/mediatek: Separate poweron/poweroff from enable/disable and define new funcs")
+    Signed-off-by: Nícolas F. R. A. Prado <nfraprado@collabora.com>
+    Tested-by: Hsin-Yi Wang <hsinyi@chromium.org>
+    Reviewed-by: AngeloGioacchino Del Regno <angelogioacchino.delregno@collabora.com>
+    Tested-by: Allen-KH Cheng <allen-kh.cheng@mediatek.com>
+    Link: http://lists.infradead.org/pipermail/linux-mediatek/2022-August/046713.html
+    Signed-off-by: Chun-Kuang Hu <chunkuang.hu@kernel.org>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit c9906216068842693f44aa55b8721a1b84c5fa82
+Author: Adrian Hunter <adrian.hunter@intel.com>
+Date:   Wed Sep 14 15:24:29 2022 +0300
+
+    perf kcore_copy: Do not check /proc/modules is unchanged
+    
+    [ Upstream commit 5b427df27b94aec1312cace48a746782a0925c53 ]
+    
+    /proc/kallsyms and /proc/modules are compared before and after the copy
+    in order to ensure no changes during the copy.
+    
+    However /proc/modules also might change due to reference counts changing
+    even though that does not make any difference.
+    
+    Any modules loaded or unloaded should be visible in changes to kallsyms,
+    so it is not necessary to check /proc/modules also anyway.
+    
+    Remove the comparison checking that /proc/modules is unchanged.
+    
+    Fixes: fc1b691d7651d949 ("perf buildid-cache: Add ability to add kcore to the cache")
+    Reported-by: Daniel Dao <dqminh@cloudflare.com>
+    Signed-off-by: Adrian Hunter <adrian.hunter@intel.com>
+    Tested-by: Daniel Dao <dqminh@cloudflare.com>
+    Acked-by: Namhyung Kim <namhyung@kernel.org>
+    Cc: Ian Rogers <irogers@google.com>
+    Cc: Jiri Olsa <jolsa@kernel.org>
+    Link: https://lore.kernel.org/r/20220914122429.8770-1-adrian.hunter@intel.com
+    Signed-off-by: Arnaldo Carvalho de Melo <acme@redhat.com>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 28d185095e51777b71887491a87a7ea3458abbfe
+Author: Lieven Hey <lieven.hey@kdab.com>
+Date:   Thu Sep 15 11:29:10 2022 +0200
+
+    perf jit: Include program header in ELF files
+    
+    [ Upstream commit babd04386b1df8c364cdaa39ac0e54349502e1e5 ]
+    
+    The missing header makes it hard for programs like elfutils to open
+    these files.
+    
+    Fixes: 2d86612aacb7805f ("perf symbol: Correct address for bss symbols")
+    Reviewed-by: Leo Yan <leo.yan@linaro.org>
+    Signed-off-by: Lieven Hey <lieven.hey@kdab.com>
+    Tested-by: Leo Yan <leo.yan@linaro.org>
+    Cc: Leo Yan <leo.yan@linaro.org>
+    Link: https://lore.kernel.org/r/20220915092910.711036-1-lieven.hey@kdab.com
+    Signed-off-by: Arnaldo Carvalho de Melo <acme@redhat.com>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 78926cf7629126876b145fdb7b1a6d8d714369d8
+Author: Marc Kleine-Budde <mkl@pengutronix.de>
+Date:   Tue Sep 20 11:40:56 2022 +0200
+
+    can: gs_usb: gs_can_open(): fix race dev->can.state condition
+    
+    [ Upstream commit 5440428b3da65408dba0241985acb7a05258b85e ]
+    
+    The dev->can.state is set to CAN_STATE_ERROR_ACTIVE, after the device
+    has been started. On busy networks the CAN controller might receive
+    CAN frame between and go into an error state before the dev->can.state
+    is assigned.
+    
+    Assign dev->can.state before starting the controller to close the race
+    window.
+    
+    Fixes: d08e973a77d1 ("can: gs_usb: Added support for the GS_USB CAN devices")
+    Link: https://lore.kernel.org/all/20220920195216.232481-1-mkl@pengutronix.de
+    Signed-off-by: Marc Kleine-Budde <mkl@pengutronix.de>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit ebd97dbe3c55d68346b9c5fb00634a7f5b10bbee
+Author: Florian Westphal <fw@strlen.de>
+Date:   Tue Sep 20 14:20:17 2022 +0200
+
+    netfilter: ebtables: fix memory leak when blob is malformed
+    
+    [ Upstream commit 62ce44c4fff947eebdf10bb582267e686e6835c9 ]
+    
+    The bug fix was incomplete, it "replaced" crash with a memory leak.
+    The old code had an assignment to "ret" embedded into the conditional,
+    restore this.
+    
+    Fixes: 7997eff82828 ("netfilter: ebtables: reject blobs that don't provide all entry points")
+    Reported-and-tested-by: syzbot+a24c5252f3e3ab733464@syzkaller.appspotmail.com
+    Signed-off-by: Florian Westphal <fw@strlen.de>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit b043a525a3f5520abb676a7cd8f6328fdf959e88
+Author: Tetsuo Handa <penguin-kernel@I-love.SAKURA.ne.jp>
+Date:   Mon Sep 12 22:58:51 2022 +0900
+
+    netfilter: nf_tables: fix percpu memory leak at nf_tables_addchain()
+    
+    [ Upstream commit 9a4d6dd554b86e65581ef6b6638a39ae079b17ac ]
+    
+    It seems to me that percpu memory for chain stats started leaking since
+    commit 3bc158f8d0330f0a ("netfilter: nf_tables: map basechain priority to
+    hardware priority") when nft_chain_offload_priority() returned an error.
+    
+    Signed-off-by: Tetsuo Handa <penguin-kernel@I-love.SAKURA.ne.jp>
+    Fixes: 3bc158f8d0330f0a ("netfilter: nf_tables: map basechain priority to hardware priority")
+    Signed-off-by: Florian Westphal <fw@strlen.de>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 710e3f526bd23a0d33435dedc52c3144de284378
+Author: Tetsuo Handa <penguin-kernel@I-love.SAKURA.ne.jp>
+Date:   Mon Sep 12 21:41:00 2022 +0900
+
+    netfilter: nf_tables: fix nft_counters_enabled underflow at nf_tables_addchain()
+    
+    [ Upstream commit 921ebde3c0d22c8cba74ce8eb3cc4626abff1ccd ]
+    
+    syzbot is reporting underflow of nft_counters_enabled counter at
+    nf_tables_addchain() [1], for commit 43eb8949cfdffa76 ("netfilter:
+    nf_tables: do not leave chain stats enabled on error") missed that
+    nf_tables_chain_destroy() after nft_basechain_init() in the error path of
+    nf_tables_addchain() decrements the counter because nft_basechain_init()
+    makes nft_is_base_chain() return true by setting NFT_CHAIN_BASE flag.
+    
+    Increment the counter immediately after returning from
+    nft_basechain_init().
+    
+    Link:  https://syzkaller.appspot.com/bug?extid=b5d82a651b71cd8a75ab [1]
+    Reported-by: syzbot <syzbot+b5d82a651b71cd8a75ab@syzkaller.appspotmail.com>
+    Signed-off-by: Tetsuo Handa <penguin-kernel@I-love.SAKURA.ne.jp>
+    Tested-by: syzbot <syzbot+b5d82a651b71cd8a75ab@syzkaller.appspotmail.com>
+    Fixes: 43eb8949cfdffa76 ("netfilter: nf_tables: do not leave chain stats enabled on error")
+    Signed-off-by: Florian Westphal <fw@strlen.de>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 1e7e55374d01d124ea5c8843bd2c4aa08b139220
+Author: Vladimir Oltean <vladimir.oltean@nxp.com>
+Date:   Thu Sep 15 13:08:02 2022 +0300
+
+    net/sched: taprio: make qdisc_leaf() see the per-netdev-queue pfifo child qdiscs
+    
+    [ Upstream commit 1461d212ab277d8bba1a753d33e9afe03d81f9d4 ]
+    
+    taprio can only operate as root qdisc, and to that end, there exists the
+    following check in taprio_init(), just as in mqprio:
+    
+            if (sch->parent != TC_H_ROOT)
+                    return -EOPNOTSUPP;
+    
+    And indeed, when we try to attach taprio to an mqprio child, it fails as
+    expected:
+    
+    $ tc qdisc add dev swp0 root handle 1: mqprio num_tc 8 \
+            map 0 1 2 3 4 5 6 7 \
+            queues 1@0 1@1 1@2 1@3 1@4 1@5 1@6 1@7 hw 0
+    $ tc qdisc replace dev swp0 parent 1:2 taprio num_tc 8 \
+            map 0 1 2 3 4 5 6 7 \
+            queues 1@0 1@1 1@2 1@3 1@4 1@5 1@6 1@7 \
+            base-time 0 sched-entry S 0x7f 990000 sched-entry S 0x80 100000 \
+            flags 0x0 clockid CLOCK_TAI
+    Error: sch_taprio: Can only be attached as root qdisc.
+    
+    (extack message added by me)
+    
+    But when we try to attach a taprio child to a taprio root qdisc,
+    surprisingly it doesn't fail:
+    
+    $ tc qdisc replace dev swp0 root handle 1: taprio num_tc 8 \
+            map 0 1 2 3 4 5 6 7 queues 1@0 1@1 1@2 1@3 1@4 1@5 1@6 1@7 \
+            base-time 0 sched-entry S 0x7f 990000 sched-entry S 0x80 100000 \
+            flags 0x0 clockid CLOCK_TAI
+    $ tc qdisc replace dev swp0 parent 1:2 taprio num_tc 8 \
+            map 0 1 2 3 4 5 6 7 \
+            queues 1@0 1@1 1@2 1@3 1@4 1@5 1@6 1@7 \
+            base-time 0 sched-entry S 0x7f 990000 sched-entry S 0x80 100000 \
+            flags 0x0 clockid CLOCK_TAI
+    
+    This is because tc_modify_qdisc() behaves differently when mqprio is
+    root, vs when taprio is root.
+    
+    In the mqprio case, it finds the parent qdisc through
+    p = qdisc_lookup(dev, TC_H_MAJ(clid)), and then the child qdisc through
+    q = qdisc_leaf(p, clid). This leaf qdisc q has handle 0, so it is
+    ignored according to the comment right below ("It may be default qdisc,
+    ignore it"). As a result, tc_modify_qdisc() goes through the
+    qdisc_create() code path, and this gives taprio_init() a chance to check
+    for sch_parent != TC_H_ROOT and error out.
+    
+    Whereas in the taprio case, the returned q = qdisc_leaf(p, clid) is
+    different. It is not the default qdisc created for each netdev queue
+    (both taprio and mqprio call qdisc_create_dflt() and keep them in
+    a private q->qdiscs[], or priv->qdiscs[], respectively). Instead, taprio
+    makes qdisc_leaf() return the _root_ qdisc, aka itself.
+    
+    When taprio does that, tc_modify_qdisc() goes through the qdisc_change()
+    code path, because the qdisc layer never finds out about the child qdisc
+    of the root. And through the ->change() ops, taprio has no reason to
+    check whether its parent is root or not, just through ->init(), which is
+    not called.
+    
+    The problem is the taprio_leaf() implementation. Even though code wise,
+    it does the exact same thing as mqprio_leaf() which it is copied from,
+    it works with different input data. This is because mqprio does not
+    attach itself (the root) to each device TX queue, but one of the default
+    qdiscs from its private array.
+    
+    In fact, since commit 13511704f8d7 ("net: taprio offload: enforce qdisc
+    to netdev queue mapping"), taprio does this too, but just for the full
+    offload case. So if we tried to attach a taprio child to a fully
+    offloaded taprio root qdisc, it would properly fail too; just not to a
+    software root taprio.
+    
+    To fix the problem, stop looking at the Qdisc that's attached to the TX
+    queue, and instead, always return the default qdiscs that we've
+    allocated (and to which we privately enqueue and dequeue, in software
+    scheduling mode).
+    
+    Since Qdisc_class_ops :: leaf  is only called from tc_modify_qdisc(),
+    the risk of unforeseen side effects introduced by this change is
+    minimal.
+    
+    Fixes: 5a781ccbd19e ("tc: Add support for configuring the taprio scheduler")
+    Signed-off-by: Vladimir Oltean <vladimir.oltean@nxp.com>
+    Reviewed-by: Vinicius Costa Gomes <vinicius.gomes@intel.com>
+    Signed-off-by: Jakub Kicinski <kuba@kernel.org>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 586def6ebed195f3594a4884f7c5334d0e1ad1bb
+Author: Vladimir Oltean <vladimir.oltean@nxp.com>
+Date:   Thu Sep 15 13:08:01 2022 +0300
+
+    net/sched: taprio: avoid disabling offload when it was never enabled
+    
+    [ Upstream commit db46e3a88a09c5cf7e505664d01da7238cd56c92 ]
+    
+    In an incredibly strange API design decision, qdisc->destroy() gets
+    called even if qdisc->init() never succeeded, not exclusively since
+    commit 87b60cfacf9f ("net_sched: fix error recovery at qdisc creation"),
+    but apparently also earlier (in the case of qdisc_create_dflt()).
+    
+    The taprio qdisc does not fully acknowledge this when it attempts full
+    offload, because it starts off with q->flags = TAPRIO_FLAGS_INVALID in
+    taprio_init(), then it replaces q->flags with TCA_TAPRIO_ATTR_FLAGS
+    parsed from netlink (in taprio_change(), tail called from taprio_init()).
+    
+    But in taprio_destroy(), we call taprio_disable_offload(), and this
+    determines what to do based on FULL_OFFLOAD_IS_ENABLED(q->flags).
+    
+    But looking at the implementation of FULL_OFFLOAD_IS_ENABLED()
+    (a bitwise check of bit 1 in q->flags), it is invalid to call this macro
+    on q->flags when it contains TAPRIO_FLAGS_INVALID, because that is set
+    to U32_MAX, and therefore FULL_OFFLOAD_IS_ENABLED() will return true on
+    an invalid set of flags.
+    
+    As a result, it is possible to crash the kernel if user space forces an
+    error between setting q->flags = TAPRIO_FLAGS_INVALID, and the calling
+    of taprio_enable_offload(). This is because drivers do not expect the
+    offload to be disabled when it was never enabled.
+    
+    The error that we force here is to attach taprio as a non-root qdisc,
+    but instead as child of an mqprio root qdisc:
+    
+    $ tc qdisc add dev swp0 root handle 1: \
+            mqprio num_tc 8 map 0 1 2 3 4 5 6 7 \
+            queues 1@0 1@1 1@2 1@3 1@4 1@5 1@6 1@7 hw 0
+    $ tc qdisc replace dev swp0 parent 1:1 \
+            taprio num_tc 8 map 0 1 2 3 4 5 6 7 \
+            queues 1@0 1@1 1@2 1@3 1@4 1@5 1@6 1@7 base-time 0 \
+            sched-entry S 0x7f 990000 sched-entry S 0x80 100000 \
+            flags 0x0 clockid CLOCK_TAI
+    Unable to handle kernel paging request at virtual address fffffffffffffff8
+    [fffffffffffffff8] pgd=0000000000000000, p4d=0000000000000000
+    Internal error: Oops: 96000004 [#1] PREEMPT SMP
+    Call trace:
+     taprio_dump+0x27c/0x310
+     vsc9959_port_setup_tc+0x1f4/0x460
+     felix_port_setup_tc+0x24/0x3c
+     dsa_slave_setup_tc+0x54/0x27c
+     taprio_disable_offload.isra.0+0x58/0xe0
+     taprio_destroy+0x80/0x104
+     qdisc_create+0x240/0x470
+     tc_modify_qdisc+0x1fc/0x6b0
+     rtnetlink_rcv_msg+0x12c/0x390
+     netlink_rcv_skb+0x5c/0x130
+     rtnetlink_rcv+0x1c/0x2c
+    
+    Fix this by keeping track of the operations we made, and undo the
+    offload only if we actually did it.
+    
+    I've added "bool offloaded" inside a 4 byte hole between "int clockid"
+    and "atomic64_t picos_per_byte". Now the first cache line looks like
+    below:
+    
+    $ pahole -C taprio_sched net/sched/sch_taprio.o
+    struct taprio_sched {
+            struct Qdisc * *           qdiscs;               /*     0     8 */
+            struct Qdisc *             root;                 /*     8     8 */
+            u32                        flags;                /*    16     4 */
+            enum tk_offsets            tk_offset;            /*    20     4 */
+            int                        clockid;              /*    24     4 */
+            bool                       offloaded;            /*    28     1 */
+    
+            /* XXX 3 bytes hole, try to pack */
+    
+            atomic64_t                 picos_per_byte;       /*    32     0 */
+    
+            /* XXX 8 bytes hole, try to pack */
+    
+            spinlock_t                 current_entry_lock;   /*    40     0 */
+    
+            /* XXX 8 bytes hole, try to pack */
+    
+            struct sched_entry *       current_entry;        /*    48     8 */
+            struct sched_gate_list *   oper_sched;           /*    56     8 */
+            /* --- cacheline 1 boundary (64 bytes) --- */
+    
+    Fixes: 9c66d1564676 ("taprio: Add support for hardware offloading")
+    Signed-off-by: Vladimir Oltean <vladimir.oltean@nxp.com>
+    Reviewed-by: Vinicius Costa Gomes <vinicius.gomes@intel.com>
+    Signed-off-by: Jakub Kicinski <kuba@kernel.org>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit aa400ccadf5961154bc62d15b474eed8818d60bd
+Author: Arnd Bergmann <arnd@arndb.de>
+Date:   Thu Jul 22 16:29:01 2021 +0200
+
+    net: socket: remove register_gifconf
+    
+    [ Upstream commit b0e99d03778b2418aec20db99d97d19d25d198b6 ]
+    
+    Since dynamic registration of the gifconf() helper is only used for
+    IPv4, and this can not be in a loadable module, this can be simplified
+    noticeably by turning it into a direct function call as a preparation
+    for cleaning up the compat handling.
+    
+    Signed-off-by: Arnd Bergmann <arnd@arndb.de>
+    Reviewed-by: Christoph Hellwig <hch@lst.de>
+    Signed-off-by: David S. Miller <davem@davemloft.net>
+    Stable-dep-of: 5641c751fe2f ("net: enetc: deny offload of tc-based TSN features on VF interfaces")
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 8bd98cfbfcb031d1005ce9cc13a289908c045ef0
+Author: Vladimir Oltean <vladimir.oltean@nxp.com>
+Date:   Fri Sep 16 16:32:08 2022 +0300
+
+    net: enetc: move enetc_set_psfp() out of the common enetc_set_features()
+    
+    [ Upstream commit fed38e64d9b99d65a36c0dbadc3d3f8ddd9ea030 ]
+    
+    The VF netdev driver shouldn't respond to changes in the NETIF_F_HW_TC
+    flag; only PFs should. Moreover, TSN-specific code should go to
+    enetc_qos.c, which should not be included in the VF driver.
+    
+    Fixes: 79e499829f3f ("net: enetc: add hw tc hw offload features for PSPF capability")
+    Signed-off-by: Vladimir Oltean <vladimir.oltean@nxp.com>
+    Link: https://lore.kernel.org/r/20220916133209.3351399-1-vladimir.oltean@nxp.com
+    Signed-off-by: Jakub Kicinski <kuba@kernel.org>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit f0a057f49b8db5d9dd39769fecaae7a466825993
+Author: Jason A. Donenfeld <Jason@zx2c4.com>
+Date:   Fri Sep 16 15:37:40 2022 +0100
+
+    wireguard: netlink: avoid variable-sized memcpy on sockaddr
+    
+    [ Upstream commit 26c013108c12b94bc023bf19198a4300596c98b1 ]
+    
+    Doing a variable-sized memcpy is slower, and the compiler isn't smart
+    enough to turn this into a constant-size assignment.
+    
+    Further, Kees' latest fortified memcpy will actually bark, because the
+    destination pointer is type sockaddr, not explicitly sockaddr_in or
+    sockaddr_in6, so it thinks there's an overflow:
+    
+        memcpy: detected field-spanning write (size 28) of single field
+        "&endpoint.addr" at drivers/net/wireguard/netlink.c:446 (size 16)
+    
+    Fix this by just assigning by using explicit casts for each checked
+    case.
+    
+    Fixes: e7096c131e51 ("net: WireGuard secure network tunnel")
+    Signed-off-by: Jason A. Donenfeld <Jason@zx2c4.com>
+    Reviewed-by: Kees Cook <keescook@chromium.org>
+    Reported-by: syzbot+a448cda4dba2dac50de5@syzkaller.appspotmail.com
+    Signed-off-by: Jakub Kicinski <kuba@kernel.org>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit b7b38595989457e06beabccc84438ed843686a82
+Author: Jason A. Donenfeld <Jason@zx2c4.com>
+Date:   Fri Sep 16 15:37:38 2022 +0100
+
+    wireguard: ratelimiter: disable timings test by default
+    
+    [ Upstream commit 684dec3cf45da2b0848298efae4adf3b2aeafeda ]
+    
+    A previous commit tried to make the ratelimiter timings test more
+    reliable but in the process made it less reliable on other
+    configurations. This is an impossible problem to solve without
+    increasingly ridiculous heuristics. And it's not even a problem that
+    actually needs to be solved in any comprehensive way, since this is only
+    ever used during development. So just cordon this off with a DEBUG_
+    ifdef, just like we do for the trie's randomized tests, so it can be
+    enabled while hacking on the code, and otherwise disabled in CI. In the
+    process we also revert 151c8e499f47.
+    
+    Fixes: 151c8e499f47 ("wireguard: ratelimiter: use hrtimer in selftest")
+    Fixes: e7096c131e51 ("net: WireGuard secure network tunnel")
+    Signed-off-by: Jason A. Donenfeld <Jason@zx2c4.com>
+    Signed-off-by: Jakub Kicinski <kuba@kernel.org>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit ddd47f1cd67dfcaedaead3027053d5dc6e515815
+Author: Alex Elder <elder@linaro.org>
+Date:   Tue Sep 13 15:46:02 2022 -0500
+
+    net: ipa: properly limit modem routing table use
+    
+    [ Upstream commit cf412ec333250cb82bafe57169204e14a9f1c2ac ]
+    
+    IPA can route packets between IPA-connected entities.  The AP and
+    modem are currently the only such entities supported, and no routing
+    is required to transfer packets between them.
+    
+    The number of entries in each routing table is fixed, and defined at
+    initialization time.  Some of these entries are designated for use
+    by the modem, and the rest are available for the AP to use.  The AP
+    sends a QMI message to the modem which describes (among other
+    things) information about routing table memory available for the
+    modem to use.
+    
+    Currently the QMI initialization packet gives wrong information in
+    its description of routing tables.  What *should* be supplied is the
+    maximum index that the modem can use for the routing table memory
+    located at a given location.  The current code instead supplies the
+    total *number* of routing table entries.  Furthermore, the modem is
+    granted the entire table, not just the subset it's supposed to use.
+    
+    This patch fixes this.  First, the ipa_mem_bounds structure is
+    generalized so its "end" field can be interpreted either as a final
+    byte offset, or a final array index.  Second, the IPv4 and IPv6
+    (non-hashed and hashed) table information fields in the QMI
+    ipa_init_modem_driver_req structure are changed to be ipa_mem_bounds
+    rather than ipa_mem_array structures.  Third, we set the "end" value
+    for each routing table to be the last index, rather than setting the
+    "count" to be the number of indices.  Finally, instead of allowing
+    the modem to use all of a routing table's memory, it is limited to
+    just the portion meant to be used by the modem.  In all versions of
+    IPA currently supported, that is IPA_ROUTE_MODEM_COUNT (8) entries.
+    
+    Update a few comments for clarity.
+    
+    Fixes: 530f9216a9537 ("soc: qcom: ipa: AP/modem communications")
+    Signed-off-by: Alex Elder <elder@linaro.org>
+    Link: https://lore.kernel.org/r/20220913204602.1803004-1-elder@linaro.org
+    Signed-off-by: Jakub Kicinski <kuba@kernel.org>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 8c1454d5493b8f7ae3f377e5146855223e70cf18
+Author: Alex Elder <elder@linaro.org>
+Date:   Sun Mar 28 12:31:11 2021 -0500
+
+    net: ipa: kill IPA_TABLE_ENTRY_SIZE
+    
+    [ Upstream commit 4ea29143ebe6c453f5fddc80ffe4ed046f44aa3a ]
+    
+    Entries in an IPA route or filter table are 64-bit little-endian
+    addresses, each of which refers to a routing or filtering rule.
+    
+    The format of these table slots are fixed, but IPA_TABLE_ENTRY_SIZE
+    is used to define their size.  This symbol doesn't really add value,
+    and I think it unnecessarily obscures what a table entry *is*.
+    
+    So get rid of IPA_TABLE_ENTRY_SIZE, and just use sizeof(__le64) in
+    its place throughout the code.
+    
+    Update the comments in "ipa_table.c" to provide a little better
+    explanation of these table slots.
+    
+    Signed-off-by: Alex Elder <elder@linaro.org>
+    Signed-off-by: David S. Miller <davem@davemloft.net>
+    Stable-dep-of: cf412ec33325 ("net: ipa: properly limit modem routing table use")
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 53b1715e283e91e0230ea217a612ee6790607b43
+Author: Alex Elder <elder@linaro.org>
+Date:   Sun Mar 28 12:31:10 2021 -0500
+
+    net: ipa: DMA addresses are nicely aligned
+    
+    [ Upstream commit 19aaf72c0c7a26ab7ffc655a6d84da6a379f899b ]
+    
+    A recent patch avoided doing 64-bit modulo operations by checking
+    the alignment of some DMA allocations using only the lower 32 bits
+    of the address.
+    
+    David Laight pointed out (after the fix was committed) that DMA
+    allocations might already satisfy the alignment requirements.  And
+    he was right.
+    
+    Remove the alignment checks that occur after DMA allocation requests,
+    and update comments to explain why the constraint is satisfied.  The
+    only place IPA_TABLE_ALIGN was used was to check the alignment; it is
+    therefore no longer needed, so get rid of it.
+    
+    Add comments where GSI_RING_ELEMENT_SIZE and the tre_count and
+    event_count channel data fields are defined to make explicit they
+    are required to be powers of 2.
+    
+    Revise a comment in gsi_trans_pool_init_dma(), taking into account
+    that dma_alloc_coherent() guarantees its result is aligned to a page
+    size (or order thereof).
+    
+    Don't bother printing an error if a DMA allocation fails.
+    
+    Suggested-by: David Laight <David.Laight@ACULAB.COM>
+    Signed-off-by: Alex Elder <elder@linaro.org>
+    Signed-off-by: David S. Miller <davem@davemloft.net>
+    Stable-dep-of: cf412ec33325 ("net: ipa: properly limit modem routing table use")
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 48afea293a892e685b22d575393d5a4a662413b4
+Author: Alex Elder <elder@linaro.org>
+Date:   Mon Mar 22 20:05:05 2021 -0500
+
+    net: ipa: avoid 64-bit modulus
+    
+    [ Upstream commit 437c78f976f5b39fc4b2a1c65903a229f55912dd ]
+    
+    It is possible for a 32 bit x86 build to use a 64 bit DMA address.
+    
+    There are two remaining spots where the IPA driver does a modulo
+    operation to check alignment of a DMA address, and under certain
+    conditions this can lead to a build error on i386 (at least).
+    
+    The alignment checks we're doing are for power-of-2 values, and this
+    means the lower 32 bits of the DMA address can be used.  This ensures
+    both operands to the modulo operator are 32 bits wide.
+    
+    Reported-by: Randy Dunlap <rdunlap@infradead.org>
+    Signed-off-by: Alex Elder <elder@linaro.org>
+    Acked-by: Randy Dunlap <rdunlap@infradead.org> # build-tested
+    Signed-off-by: David S. Miller <davem@davemloft.net>
+    Stable-dep-of: cf412ec33325 ("net: ipa: properly limit modem routing table use")
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 3ae25aca3f892087737e6e25c8e0eb49eb8fe0fb
+Author: Alex Elder <elder@linaro.org>
+Date:   Thu Mar 18 13:59:29 2021 -0500
+
+    net: ipa: fix table alignment requirement
+    
+    [ Upstream commit e5d4e96b44cf20330c970c3e30ea0a8c3a23feca ]
+    
+    We currently have a build-time check to ensure that the minimum DMA
+    allocation alignment satisfies the constraint that IPA filter and
+    route tables must point to rules that are 128-byte aligned.
+    
+    But what's really important is that the actual allocated DMA memory
+    has that alignment, even if the minimum is smaller than that.
+    
+    Remove the BUILD_BUG_ON() call checking against minimim DMA alignment
+    and instead verify at rutime that the allocated memory is properly
+    aligned.
+    
+    Signed-off-by: Alex Elder <elder@linaro.org>
+    Signed-off-by: David S. Miller <davem@davemloft.net>
+    Stable-dep-of: cf412ec33325 ("net: ipa: properly limit modem routing table use")
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit c2cf0613d1ff43623f07c969357083aec4c15637
+Author: Alex Elder <elder@linaro.org>
+Date:   Thu Mar 18 13:59:27 2021 -0500
+
+    net: ipa: fix assumptions about DMA address size
+    
+    [ Upstream commit d2fd2311de909a7f4e99b4bd11a19e6b671d6a6b ]
+    
+    Some build time checks in ipa_table_validate_build() assume that a
+    DMA address is 64 bits wide.  That is more restrictive than it has
+    to be.  A route or filter table is 64 bits wide no matter what the
+    size of a DMA address is on the AP.  The code actually uses a
+    pointer to __le64 to access table entries, and a fixed constant
+    IPA_TABLE_ENTRY_SIZE to describe the size of those entries.
+    
+    Loosen up two checks so they still verify some requirements, but
+    such that they do not assume the size of a DMA address is 64 bits.
+    
+    Signed-off-by: Alex Elder <elder@linaro.org>
+    Signed-off-by: David S. Miller <davem@davemloft.net>
+    Stable-dep-of: cf412ec33325 ("net: ipa: properly limit modem routing table use")
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit d58815af89791b4514eae2083f6cf2df8cdf2798
+Author: Liang He <windhl@126.com>
+Date:   Tue Sep 13 20:56:59 2022 +0800
+
+    of: mdio: Add of_node_put() when breaking out of for_each_xx
+    
+    [ Upstream commit 1c48709e6d9d353acaaac1d8e33474756b121d78 ]
+    
+    In of_mdiobus_register(), we should call of_node_put() for 'child'
+    escaped out of for_each_available_child_of_node().
+    
+    Fixes: 66bdede495c7 ("of_mdio: Fix broken PHY IRQ in case of probe deferral")
+    Co-developed-by: Miaoqian Lin <linmq006@gmail.com>
+    Signed-off-by: Miaoqian Lin <linmq006@gmail.com>
+    Signed-off-by: Liang He <windhl@126.com>
+    Link: https://lore.kernel.org/r/20220913125659.3331969-1-windhl@126.com
+    Signed-off-by: Jakub Kicinski <kuba@kernel.org>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 9101e54c95cfad1008cff6fd5a6c3b4f18c6fb4a
+Author: Randy Dunlap <rdunlap@infradead.org>
+Date:   Mon May 30 19:55:57 2022 -0700
+
+    drm/hisilicon: Add depends on MMU
+    
+    [ Upstream commit d8a79c03054911c375a2252627a429c9bc4615b6 ]
+    
+    The Kconfig symbol depended on MMU but was dropped by the commit
+    acad3fe650a5 ("drm/hisilicon: Removed the dependency on the mmu")
+    because it already had as a dependency ARM64 that already selects MMU.
+    
+    But later, commit a0f25a6bb319 ("drm/hisilicon/hibmc: Allow to be built
+    if COMPILE_TEST is enabled") allowed the driver to be built for non-ARM64
+    when COMPILE_TEST is set but that could lead to unmet direct dependencies
+    and linking errors.
+    
+    Prevent a kconfig warning when MMU is not enabled by making
+    DRM_HISI_HIBMC depend on MMU.
+    
+    WARNING: unmet direct dependencies detected for DRM_TTM
+      Depends on [n]: HAS_IOMEM [=y] && DRM [=m] && MMU [=n]
+      Selected by [m]:
+      - DRM_TTM_HELPER [=m] && HAS_IOMEM [=y] && DRM [=m]
+      - DRM_HISI_HIBMC [=m] && HAS_IOMEM [=y] && DRM [=m] && PCI [=y] && (ARM64 || COMPILE_TEST [=y])
+    
+    Fixes: acad3fe650a5 ("drm/hisilicon: Removed the dependency on the mmu")
+    Signed-off-by: Randy Dunlap <rdunlap@infradead.org>
+    Cc: Gerd Hoffmann <kraxel@redhat.com>
+    Cc: Thomas Zimmermann <tzimmermann@suse.de>
+    Cc: Xinliang Liu <xinliang.liu@linaro.org>
+    Cc: Tian Tao  <tiantao6@hisilicon.com>
+    Cc: John Stultz <jstultz@google.com>
+    Cc: Xinwei Kong <kong.kongxinwei@hisilicon.com>
+    Cc: Chen Feng <puck.chen@hisilicon.com>
+    Cc: Christian Koenig <christian.koenig@amd.com>
+    Cc: Huang Rui <ray.huang@amd.com>
+    Cc: David Airlie <airlied@linux.ie>
+    Cc: Daniel Vetter <daniel@ffwll.ch>
+    Reviewed-by: Javier Martinez Canillas <javierm@redhat.com>
+    Signed-off-by: Javier Martinez Canillas <javierm@redhat.com>
+    Link: https://patchwork.freedesktop.org/patch/msgid/20220531025557.29593-1-rdunlap@infradead.org
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit bac7328fc0d7b30b80f85e8cc64e5c26044f48a7
+Author: Javier Martinez Canillas <javierm@redhat.com>
+Date:   Thu Dec 16 22:09:36 2021 +0100
+
+    drm/hisilicon/hibmc: Allow to be built if COMPILE_TEST is enabled
+    
+    [ Upstream commit a0f25a6bb319aa05e04dcf51707c97c2881b4f47 ]
+    
+    The commit feeb07d0ca5a ("drm/hisilicon/hibmc: Make CONFIG_DRM_HISI_HIBMC
+    depend on ARM64") made the driver Kconfig symbol to depend on ARM64 since
+    it only supports that architecture and loading the module on others would
+    lead to incorrect video modes being used.
+    
+    But it also prevented the driver to be built on other architectures which
+    is useful to have compile test coverage when doing subsystem wide changes.
+    
+    Make the dependency instead to be (ARM64 || COMPILE_TEST), so the driver
+    is buildable when the CONFIG_COMPILE_TEST option is enabled.
+    
+    Signed-off-by: Javier Martinez Canillas <javierm@redhat.com>
+    Acked-by: Thomas Zimmermann <tzimmermann@suse.de>
+    Link: https://patchwork.freedesktop.org/patch/msgid/20211216210936.3329977-1-javierm@redhat.com
+    Stable-dep-of: d8a79c030549 ("drm/hisilicon: Add depends on MMU")
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit b3b41d4d95d3822b2e459ecbc80d030ea6aec5e7
+Author: Íñigo Huguet <ihuguet@redhat.com>
+Date:   Wed Sep 14 13:11:35 2022 +0200
+
+    sfc: fix null pointer dereference in efx_hard_start_xmit
+    
+    [ Upstream commit 0a242eb2913a4aa3d6fbdb86559f27628e9466f3 ]
+    
+    Trying to get the channel from the tx_queue variable here is wrong
+    because we can only be here if tx_queue is NULL, so we shouldn't
+    dereference it. As the above comment in the code says, this is very
+    unlikely to happen, but it's wrong anyway so let's fix it.
+    
+    I hit this issue because of a different bug that caused tx_queue to be
+    NULL. If that happens, this is the error message that we get here:
+      BUG: unable to handle kernel NULL pointer dereference at 0000000000000020
+      [...]
+      RIP: 0010:efx_hard_start_xmit+0x153/0x170 [sfc]
+    
+    Fixes: 12804793b17c ("sfc: decouple TXQ type from label")
+    Reported-by: Tianhao Zhao <tizhao@redhat.com>
+    Signed-off-by: Íñigo Huguet <ihuguet@redhat.com>
+    Acked-by: Edward Cree <ecree.xilinx@gmail.com>
+    Link: https://lore.kernel.org/r/20220914111135.21038-1-ihuguet@redhat.com
+    Signed-off-by: Jakub Kicinski <kuba@kernel.org>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit b4afd3878f961d3517f27b3213730fceef77945c
+Author: Íñigo Huguet <ihuguet@redhat.com>
+Date:   Wed Sep 14 12:36:48 2022 +0200
+
+    sfc: fix TX channel offset when using legacy interrupts
+    
+    [ Upstream commit f232af4295653afa4ade3230462b3be15ad16419 ]
+    
+    In legacy interrupt mode the tx_channel_offset was hardcoded to 1, but
+    that's not correct if efx_sepparate_tx_channels is false. In that case,
+    the offset is 0 because the tx queues are in the single existing channel
+    at index 0, together with the rx queue.
+    
+    Without this fix, as soon as you try to send any traffic, it tries to
+    get the tx queues from an uninitialized channel getting these errors:
+      WARNING: CPU: 1 PID: 0 at drivers/net/ethernet/sfc/tx.c:540 efx_hard_start_xmit+0x12e/0x170 [sfc]
+      [...]
+      RIP: 0010:efx_hard_start_xmit+0x12e/0x170 [sfc]
+      [...]
+      Call Trace:
+       <IRQ>
+       dev_hard_start_xmit+0xd7/0x230
+       sch_direct_xmit+0x9f/0x360
+       __dev_queue_xmit+0x890/0xa40
+      [...]
+      BUG: unable to handle kernel NULL pointer dereference at 0000000000000020
+      [...]
+      RIP: 0010:efx_hard_start_xmit+0x153/0x170 [sfc]
+      [...]
+      Call Trace:
+       <IRQ>
+       dev_hard_start_xmit+0xd7/0x230
+       sch_direct_xmit+0x9f/0x360
+       __dev_queue_xmit+0x890/0xa40
+      [...]
+    
+    Fixes: c308dfd1b43e ("sfc: fix wrong tx channel offset with efx_separate_tx_channels")
+    Reported-by: Tianhao Zhao <tizhao@redhat.com>
+    Signed-off-by: Íñigo Huguet <ihuguet@redhat.com>
+    Acked-by: Edward Cree <ecree.xilinx@gmail.com>
+    Link: https://lore.kernel.org/r/20220914103648.16902-1-ihuguet@redhat.com
+    Signed-off-by: Jakub Kicinski <kuba@kernel.org>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 2dbf487d6b381942665166be528fc06a61457206
+Author: Michal Jaron <michalx.jaron@intel.com>
+Date:   Thu Sep 1 09:49:33 2022 +0200
+
+    i40e: Fix set max_tx_rate when it is lower than 1 Mbps
+    
+    [ Upstream commit 198eb7e1b81d8ba676d0f4f120c092032ae69a8e ]
+    
+    While converting max_tx_rate from bytes to Mbps, this value was set to 0,
+    if the original value was lower than 125000 bytes (1 Mbps). This would
+    cause no transmission rate limiting to occur. This happened due to lack of
+    check of max_tx_rate against the 1 Mbps value for max_tx_rate and the
+    following division by 125000. Fix this issue by adding a helper
+    i40e_bw_bytes_to_mbits() which sets max_tx_rate to minimum usable value of
+    50 Mbps, if its value is less than 1 Mbps, otherwise do the required
+    conversion by dividing by 125000.
+    
+    Fixes: 5ecae4120a6b ("i40e: Refactor VF BW rate limiting")
+    Signed-off-by: Michal Jaron <michalx.jaron@intel.com>
+    Signed-off-by: Andrii Staikov <andrii.staikov@intel.com>
+    Tested-by: Bharathi Sreenivas <bharathi.sreenivas@intel.com>
+    Signed-off-by: Tony Nguyen <anthony.l.nguyen@intel.com>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 65ee2bcc8990b0d0b2cf97eb89acebc0f1af0b05
+Author: Michal Jaron <michalx.jaron@intel.com>
+Date:   Tue Sep 13 15:38:36 2022 +0200
+
+    i40e: Fix VF set max MTU size
+    
+    [ Upstream commit 372539def2824c43b6afe2403045b140f65c5acc ]
+    
+    Max MTU sent to VF is set to 0 during memory allocation. It cause
+    that max MTU on VF is changed to IAVF_MAX_RXBUFFER and does not
+    depend on data from HW.
+    
+    Set max_mtu field in virtchnl_vf_resource struct to inform
+    VF in GET_VF_RESOURCES msg what size should be max frame.
+    
+    Fixes: dab86afdbbd1 ("i40e/i40evf: Change the way we limit the maximum frame size for Rx")
+    Signed-off-by: Michal Jaron <michalx.jaron@intel.com>
+    Signed-off-by: Mateusz Palczewski <mateusz.palczewski@intel.com>
+    Tested-by: Konrad Jankowski <konrad0.jankowski@intel.com>
+    Signed-off-by: Tony Nguyen <anthony.l.nguyen@intel.com>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 15e9724f6bb3cd50a902b53aaae5eb60a686cac3
+Author: Michal Jaron <michalx.jaron@intel.com>
+Date:   Tue Sep 13 15:38:35 2022 +0200
+
+    iavf: Fix set max MTU size with port VLAN and jumbo frames
+    
+    [ Upstream commit 399c98c4dc50b7eb7e9f24da7ffdda6f025676ef ]
+    
+    After setting port VLAN and MTU to 9000 on VF with ice driver there
+    was an iavf error
+    "PF returned error -5 (IAVF_ERR_PARAM) to our request 6".
+    
+    During queue configuration, VF's max packet size was set to
+    IAVF_MAX_RXBUFFER but on ice max frame size was smaller by VLAN_HLEN
+    due to making some space for port VLAN as VF is not aware whether it's
+    in a port VLAN. This mismatch in sizes caused ice to reject queue
+    configuration with ERR_PARAM error. Proper max_mtu is sent from ice PF
+    to VF with GET_VF_RESOURCES msg but VF does not look at this.
+    
+    In iavf change max_frame from IAVF_MAX_RXBUFFER to max_mtu
+    received from pf with GET_VF_RESOURCES msg to make vf's
+    max_frame_size dependent from pf. Add check if received max_mtu is
+    not in eligible range then set it to IAVF_MAX_RXBUFFER.
+    
+    Fixes: dab86afdbbd1 ("i40e/i40evf: Change the way we limit the maximum frame size for Rx")
+    Signed-off-by: Michal Jaron <michalx.jaron@intel.com>
+    Signed-off-by: Mateusz Palczewski <mateusz.palczewski@intel.com>
+    Tested-by: Konrad Jankowski <konrad0.jankowski@intel.com>
+    Signed-off-by: Tony Nguyen <anthony.l.nguyen@intel.com>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit ccddb1db4b3c738310d0e37c2ffb9f4d27053809
+Author: Norbert Zulinski <norbertx.zulinski@intel.com>
+Date:   Wed Sep 14 15:39:13 2022 +0200
+
+    iavf: Fix bad page state
+    
+    [ Upstream commit 66039eb9015eee4f7ff0c99b83c65c7ecb3c8190 ]
+    
+    Fix bad page state, free inappropriate page in handling dummy
+    descriptor. iavf_build_skb now has to check not only if rx_buffer is
+    NULL but also if size is zero, same thing in iavf_clean_rx_irq.
+    Without this patch driver would free page that will be used
+    by napi_build_skb.
+    
+    Fixes: a9f49e006030 ("iavf: Fix handling of dummy receive descriptors")
+    Signed-off-by: Norbert Zulinski <norbertx.zulinski@intel.com>
+    Signed-off-by: Mateusz Palczewski <mateusz.palczewski@intel.com>
+    Tested-by: Konrad Jankowski <konrad0.jankowski@intel.com>
+    Signed-off-by: Tony Nguyen <anthony.l.nguyen@intel.com>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 21b535fe5ecb10c872642013355433432bac88d6
+Author: Serge Semin <Sergey.Semin@baikalelectronics.ru>
+Date:   Mon Sep 12 00:10:09 2022 +0800
+
+    MIPS: Loongson32: Fix PHY-mode being left unspecified
+    
+    [ Upstream commit e9f3f8f488005f6da3cfb66070706770ecaef747 ]
+    
+    commit 0060c8783330 ("net: stmmac: implement support for passive mode
+    converters via dt") has changed the plat->interface field semantics from
+    containing the PHY-mode to specifying the MAC-PCS interface mode. Due to
+    that the loongson32 platform code will leave the phylink interface
+    uninitialized with the PHY-mode intended by the means of the actual
+    platform setup. The commit-author most likely has just missed the
+    arch-specific code to fix. Let's mend the Loongson32 platform code then by
+    assigning the PHY-mode to the phy_interface field of the STMMAC platform
+    data.
+    
+    Fixes: 0060c8783330 ("net: stmmac: implement support for passive mode converters via dt")
+    Signed-off-by: Serge Semin <Sergey.Semin@baikalelectronics.ru>
+    Signed-off-by: Keguang Zhang <keguang.zhang@gmail.com>
+    Tested-by: Keguang Zhang <keguang.zhang@gmail.com>
+    Signed-off-by: Thomas Bogendoerfer <tsbogend@alpha.franken.de>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit a4121785a3a3d6ab78c0c48c42c5c1be785484a5
+Author: Randy Dunlap <rdunlap@infradead.org>
+Date:   Sat Sep 17 16:25:40 2022 -0700
+
+    MIPS: lantiq: export clk_get_io() for lantiq_wdt.ko
+    
+    [ Upstream commit 502550123bee6a2ffa438409b5b9aad4d6db3a8c ]
+    
+    The lantiq WDT driver uses clk_get_io(), which is not exported,
+    so export it to fix a build error:
+    
+    ERROR: modpost: "clk_get_io" [drivers/watchdog/lantiq_wdt.ko] undefined!
+    
+    Fixes: 287e3f3f4e68 ("MIPS: lantiq: implement support for clkdev api")
+    Signed-off-by: Randy Dunlap <rdunlap@infradead.org>
+    Reported-by: kernel test robot <lkp@intel.com>
+    Cc: Thomas Bogendoerfer <tsbogend@alpha.franken.de>
+    Cc: John Crispin <john@phrozen.org>
+    Cc: linux-mips@vger.kernel.org
+    Signed-off-by: Thomas Bogendoerfer <tsbogend@alpha.franken.de>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 1ac50c1ad40fe39141ea930e659b1fff2f4452fe
+Author: Heiko Schocher <hs@denx.de>
+Date:   Fri Aug 26 13:50:21 2022 -0300
+
+    drm/panel: simple: Fix innolux_g121i1_l01 bus_format
+    
+    [ Upstream commit a7c48a0ab87ae52c087d663e83e56b8225ac4cce ]
+    
+    innolux_g121i1_l01 sets bpc to 6, so use the corresponding bus format:
+    MEDIA_BUS_FMT_RGB666_1X7X3_SPWG.
+    
+    Fixes: 4ae13e486866 ("drm/panel: simple: Add more properties to Innolux G121I1-L01")
+    Signed-off-by: Heiko Schocher <hs@denx.de>
+    Signed-off-by: Fabio Estevam <festevam@denx.de>
+    Signed-off-by: Marek Vasut <marex@denx.de>
+    Link: https://patchwork.freedesktop.org/patch/msgid/20220826165021.1592532-1-festevam@denx.de
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 90fbcb26d666b31ce6d78fdac73358b2f116eb4e
+Author: Benjamin Poirier <bpoirier@nvidia.com>
+Date:   Wed Sep 7 16:56:41 2022 +0900
+
+    net: team: Unsync device addresses on ndo_stop
+    
+    [ Upstream commit bd60234222b2fd5573526da7bcd422801f271f5f ]
+    
+    Netdev drivers are expected to call dev_{uc,mc}_sync() in their
+    ndo_set_rx_mode method and dev_{uc,mc}_unsync() in their ndo_stop method.
+    This is mentioned in the kerneldoc for those dev_* functions.
+    
+    The team driver calls dev_{uc,mc}_unsync() during ndo_uninit instead of
+    ndo_stop. This is ineffective because address lists (dev->{uc,mc}) have
+    already been emptied in unregister_netdevice_many() before ndo_uninit is
+    called. This mistake can result in addresses being leftover on former team
+    ports after a team device has been deleted; see test_LAG_cleanup() in the
+    last patch in this series.
+    
+    Add unsync calls at their expected location, team_close().
+    
+    v3:
+    * When adding or deleting a port, only sync/unsync addresses if the team
+      device is up. In other cases, it is taken care of at the right time by
+      ndo_open/ndo_set_rx_mode/ndo_stop.
+    
+    Fixes: 3d249d4ca7d0 ("net: introduce ethernet teaming device")
+    Signed-off-by: Benjamin Poirier <bpoirier@nvidia.com>
+    Signed-off-by: David S. Miller <davem@davemloft.net>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit e2b94a11223a8577657a66e5f8765ab8dabbdc54
+Author: Benjamin Poirier <bpoirier@nvidia.com>
+Date:   Wed Sep 7 16:56:40 2022 +0900
+
+    net: bonding: Unsync device addresses on ndo_stop
+    
+    [ Upstream commit 86247aba599e5b07d7e828e6edaaebb0ef2b1158 ]
+    
+    Netdev drivers are expected to call dev_{uc,mc}_sync() in their
+    ndo_set_rx_mode method and dev_{uc,mc}_unsync() in their ndo_stop method.
+    This is mentioned in the kerneldoc for those dev_* functions.
+    
+    The bonding driver calls dev_{uc,mc}_unsync() during ndo_uninit instead of
+    ndo_stop. This is ineffective because address lists (dev->{uc,mc}) have
+    already been emptied in unregister_netdevice_many() before ndo_uninit is
+    called. This mistake can result in addresses being leftover on former bond
+    slaves after a bond has been deleted; see test_LAG_cleanup() in the last
+    patch in this series.
+    
+    Add unsync calls, via bond_hw_addr_flush(), at their expected location,
+    bond_close().
+    Add dev_mc_add() call to bond_open() to match the above change.
+    
+    v3:
+    * When adding or deleting a slave, only sync/unsync, add/del addresses if
+      the bond is up. In other cases, it is taken care of at the right time by
+      ndo_open/ndo_set_rx_mode/ndo_stop.
+    
+    Fixes: 1da177e4c3f4 ("Linux-2.6.12-rc2")
+    Signed-off-by: Benjamin Poirier <bpoirier@nvidia.com>
+    Signed-off-by: David S. Miller <davem@davemloft.net>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit dc209962c09397c88da6ec8d9147f16331fcb2b0
+Author: Benjamin Poirier <bpoirier@nvidia.com>
+Date:   Wed Sep 7 16:56:39 2022 +0900
+
+    net: bonding: Share lacpdu_mcast_addr definition
+    
+    [ Upstream commit 1d9a143ee3408349700f44a9197b7ae0e4faae5d ]
+    
+    There are already a few definitions of arrays containing
+    MULTICAST_LACPDU_ADDR and the next patch will add one more use. These all
+    contain the same constant data so define one common instance for all
+    bonding code.
+    
+    Signed-off-by: Benjamin Poirier <bpoirier@nvidia.com>
+    Signed-off-by: David S. Miller <davem@davemloft.net>
+    Stable-dep-of: 86247aba599e ("net: bonding: Unsync device addresses on ndo_stop")
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 2b9aba0c5d58e141e32bb1bb4c7cd91d19f075b8
+Author: Sreekanth Reddy <sreekanth.reddy@broadcom.com>
+Date:   Tue Sep 13 17:35:38 2022 +0530
+
+    scsi: mpt3sas: Fix return value check of dma_get_required_mask()
+    
+    [ Upstream commit e0e0747de0ea3dd87cdbb0393311e17471a9baf1 ]
+    
+    Fix the incorrect return value check of dma_get_required_mask().  Due to
+    this incorrect check, the driver was always setting the DMA mask to 63 bit.
+    
+    Link: https://lore.kernel.org/r/20220913120538.18759-2-sreekanth.reddy@broadcom.com
+    Fixes: ba27c5cf286d ("scsi: mpt3sas: Don't change the DMA coherent mask after allocations")
+    Signed-off-by: Sreekanth Reddy <sreekanth.reddy@broadcom.com>
+    Signed-off-by: Martin K. Petersen <martin.petersen@oracle.com>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit e7fafef9830c4a01e60f76e3860a9bef0262378d
+Author: Suganath Prabu S <suganath-prabu.subramani@broadcom.com>
+Date:   Fri Mar 5 15:58:58 2021 +0530
+
+    scsi: mpt3sas: Force PCIe scatterlist allocations to be within same 4 GB region
+    
+    [ Upstream commit d6adc251dd2fede6aaaf6c39f7e4ad799eda3758 ]
+    
+    According to the MPI specification, PCIe SGL buffers can not cross a 4 GB
+    boundary.
+    
+    While allocating, if any buffer crosses the 4 GB boundary, then:
+    
+     - Release the already allocated memory pools; and
+    
+     - Reallocate them by changing the DMA coherent mask to 32-bit
+    
+    Link: https://lore.kernel.org/r/20210305102904.7560-2-suganath-prabu.subramani@broadcom.com
+    Signed-off-by: Suganath Prabu S <suganath-prabu.subramani@broadcom.com>
+    Signed-off-by: Martin K. Petersen <martin.petersen@oracle.com>
+    Stable-dep-of: e0e0747de0ea ("scsi: mpt3sas: Fix return value check of dma_get_required_mask()")
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 351f2d2c357f3470044c482bf30043c79c7bd174
+Author: Ioana Ciornei <ioana.ciornei@nxp.com>
+Date:   Tue Sep 6 16:04:51 2022 +0300
+
+    net: phy: aquantia: wait for the suspend/resume operations to finish
+    
+    [ Upstream commit ca2dccdeeb49a7e408112d681bf447984c845292 ]
+    
+    The Aquantia datasheet notes that after issuing a Processor-Intensive
+    MDIO operation, like changing the low-power state of the device, the
+    driver should wait for the operation to finish before issuing a new MDIO
+    command.
+    
+    The new aqr107_wait_processor_intensive_op() function is added which can
+    be used after these kind of MDIO operations. At the moment, we are only
+    adding it at the end of the suspend/resume calls.
+    
+    The issue was identified on a board featuring the AQR113C PHY, on
+    which commands like 'ip link (..) up / down' issued without any delays
+    between them would render the link on the PHY to remain down.
+    The issue was easy to reproduce with a one-liner:
+     $ ip link set dev ethX down; ip link set dev ethX up; \
+     ip link set dev ethX down; ip link set dev ethX up;
+    
+    Fixes: ac9e81c230eb ("net: phy: aquantia: add suspend / resume callbacks for AQR107 family")
+    Signed-off-by: Ioana Ciornei <ioana.ciornei@nxp.com>
+    Reviewed-by: Andrew Lunn <andrew@lunn.ch>
+    Link: https://lore.kernel.org/r/20220906130451.1483448-1-ioana.ciornei@nxp.com
+    Signed-off-by: Paolo Abeni <pabeni@redhat.com>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit d298fc2eefd6bdc72bd6f07c653dac9be92305b9
+Author: Ludovic Cintrat <ludovic.cintrat@gatewatcher.com>
+Date:   Wed Sep 7 12:08:13 2022 +0200
+
+    net: core: fix flow symmetric hash
+    
+    [ Upstream commit 64ae13ed478428135cddc2f1113dff162d8112d4 ]
+    
+    __flow_hash_consistentify() wrongly swaps ipv4 addresses in few cases.
+    This function is indirectly used by __skb_get_hash_symmetric(), which is
+    used to fanout packets in AF_PACKET.
+    Intrusion detection systems may be impacted by this issue.
+    
+    __flow_hash_consistentify() computes the addresses difference then swaps
+    them if the difference is negative. In few cases src - dst and dst - src
+    are both negative.
+    
+    The following snippet mimics __flow_hash_consistentify():
+    
+    ```
+     #include <stdio.h>
+     #include <stdint.h>
+    
+     int main(int argc, char** argv) {
+    
+         int diffs_d, diffd_s;
+         uint32_t dst  = 0xb225a8c0; /* 178.37.168.192 --> 192.168.37.178 */
+         uint32_t src  = 0x3225a8c0; /*  50.37.168.192 --> 192.168.37.50  */
+         uint32_t dst2 = 0x3325a8c0; /*  51.37.168.192 --> 192.168.37.51  */
+    
+         diffs_d = src - dst;
+         diffd_s = dst - src;
+    
+         printf("src:%08x dst:%08x, diff(s-d)=%d(0x%x) diff(d-s)=%d(0x%x)\n",
+                 src, dst, diffs_d, diffs_d, diffd_s, diffd_s);
+    
+         diffs_d = src - dst2;
+         diffd_s = dst2 - src;
+    
+         printf("src:%08x dst:%08x, diff(s-d)=%d(0x%x) diff(d-s)=%d(0x%x)\n",
+                 src, dst2, diffs_d, diffs_d, diffd_s, diffd_s);
+    
+         return 0;
+     }
+    ```
+    
+    Results:
+    
+    src:3225a8c0 dst:b225a8c0, \
+        diff(s-d)=-2147483648(0x80000000) \
+        diff(d-s)=-2147483648(0x80000000)
+    
+    src:3225a8c0 dst:3325a8c0, \
+        diff(s-d)=-16777216(0xff000000) \
+        diff(d-s)=16777216(0x1000000)
+    
+    In the first case the addresses differences are always < 0, therefore
+    __flow_hash_consistentify() always swaps, thus dst->src and src->dst
+    packets have differents hashes.
+    
+    Fixes: c3f8324188fa8 ("net: Add full IPv6 addresses to flow_keys")
+    Signed-off-by: Ludovic Cintrat <ludovic.cintrat@gatewatcher.com>
+    Signed-off-by: David S. Miller <davem@davemloft.net>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit e90001e1dd96cb98e53c6dab6d657df09d919e96
+Author: zhang kai <zhangkaiheb@126.com>
+Date:   Wed Jul 28 18:54:18 2021 +0800
+
+    net: let flow have same hash in two directions
+    
+    [ Upstream commit 1e60cebf82948cfdc9497ea4553bab125587593c ]
+    
+    using same source and destination ip/port for flow hash calculation
+    within the two directions.
+    
+    Signed-off-by: zhang kai <zhangkaiheb@126.com>
+    Signed-off-by: David S. Miller <davem@davemloft.net>
+    Stable-dep-of: 64ae13ed4784 ("net: core: fix flow symmetric hash")
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit ab4a733874ead120691e8038272d22f8444d3638
+Author: Lu Wei <luwei32@huawei.com>
+Date:   Wed Sep 7 18:12:04 2022 +0800
+
+    ipvlan: Fix out-of-bound bugs caused by unset skb->mac_header
+    
+    [ Upstream commit 81225b2ea161af48e093f58e8dfee6d705b16af4 ]
+    
+    If an AF_PACKET socket is used to send packets through ipvlan and the
+    default xmit function of the AF_PACKET socket is changed from
+    dev_queue_xmit() to packet_direct_xmit() via setsockopt() with the option
+    name of PACKET_QDISC_BYPASS, the skb->mac_header may not be reset and
+    remains as the initial value of 65535, this may trigger slab-out-of-bounds
+    bugs as following:
+    
+    =================================================================
+    UG: KASAN: slab-out-of-bounds in ipvlan_xmit_mode_l2+0xdb/0x330 [ipvlan]
+    PU: 2 PID: 1768 Comm: raw_send Kdump: loaded Not tainted 6.0.0-rc4+ #6
+    ardware name: QEMU Standard PC (i440FX + PIIX, 1996), BIOS 1.14.0-1.fc33
+    all Trace:
+    print_address_description.constprop.0+0x1d/0x160
+    print_report.cold+0x4f/0x112
+    kasan_report+0xa3/0x130
+    ipvlan_xmit_mode_l2+0xdb/0x330 [ipvlan]
+    ipvlan_start_xmit+0x29/0xa0 [ipvlan]
+    __dev_direct_xmit+0x2e2/0x380
+    packet_direct_xmit+0x22/0x60
+    packet_snd+0x7c9/0xc40
+    sock_sendmsg+0x9a/0xa0
+    __sys_sendto+0x18a/0x230
+    __x64_sys_sendto+0x74/0x90
+    do_syscall_64+0x3b/0x90
+    entry_SYSCALL_64_after_hwframe+0x63/0xcd
+    
+    The root cause is:
+      1. packet_snd() only reset skb->mac_header when sock->type is SOCK_RAW
+         and skb->protocol is not specified as in packet_parse_headers()
+    
+      2. packet_direct_xmit() doesn't reset skb->mac_header as dev_queue_xmit()
+    
+    In this case, skb->mac_header is 65535 when ipvlan_xmit_mode_l2() is
+    called. So when ipvlan_xmit_mode_l2() gets mac header with eth_hdr() which
+    use "skb->head + skb->mac_header", out-of-bound access occurs.
+    
+    This patch replaces eth_hdr() with skb_eth_hdr() in ipvlan_xmit_mode_l2()
+    and reset mac header in multicast to solve this out-of-bound bug.
+    
+    Fixes: 2ad7bf363841 ("ipvlan: Initial check-in of the IPVLAN driver.")
+    Signed-off-by: Lu Wei <luwei32@huawei.com>
+    Reviewed-by: Eric Dumazet <edumazet@google.com>
+    Signed-off-by: David S. Miller <davem@davemloft.net>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 14446a1bc2a8c7d1ddcc893bd503a74ae288ec0b
+Author: Brett Creeley <brett.creeley@intel.com>
+Date:   Thu Sep 1 16:34:40 2022 +0200
+
+    iavf: Fix cached head and tail value for iavf_get_tx_pending
+    
+    [ Upstream commit 809f23c0423a43266e47a7dc67e95b5cb4d1cbfc ]
+    
+    The underlying hardware may or may not allow reading of the head or tail
+    registers and it really makes no difference if we use the software
+    cached values. So, always used the software cached values.
+    
+    Fixes: 9c6c12595b73 ("i40e: Detection and recovery of TX queue hung logic moved to service_task from tx_timeout")
+    Signed-off-by: Brett Creeley <brett.creeley@intel.com>
+    Co-developed-by: Norbert Zulinski <norbertx.zulinski@intel.com>
+    Signed-off-by: Norbert Zulinski <norbertx.zulinski@intel.com>
+    Signed-off-by: Mateusz Palczewski <mateusz.palczewski@intel.com>
+    Tested-by: Konrad Jankowski <konrad0.jankowski@intel.com>
+    Signed-off-by: Tony Nguyen <anthony.l.nguyen@intel.com>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 5d75fef3e61e797fab5c3fbba88caa74ab92ad47
+Author: Pablo Neira Ayuso <pablo@netfilter.org>
+Date:   Wed Sep 7 10:26:18 2022 +0200
+
+    netfilter: nfnetlink_osf: fix possible bogus match in nf_osf_find()
+    
+    [ Upstream commit 559c36c5a8d730c49ef805a72b213d3bba155cc8 ]
+    
+    nf_osf_find() incorrectly returns true on mismatch, this leads to
+    copying uninitialized memory area in nft_osf which can be used to leak
+    stale kernel stack data to userspace.
+    
+    Fixes: 22c7652cdaa8 ("netfilter: nft_osf: Add version option support")
+    Signed-off-by: Pablo Neira Ayuso <pablo@netfilter.org>
+    Signed-off-by: Florian Westphal <fw@strlen.de>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 9a5d7e0acb41bb2aac552f8eeb4b404177f3f66d
+Author: David Leadbeater <dgl@dgl.cx>
+Date:   Fri Aug 26 14:56:57 2022 +1000
+
+    netfilter: nf_conntrack_irc: Tighten matching on DCC message
+    
+    [ Upstream commit e8d5dfd1d8747b56077d02664a8838c71ced948e ]
+    
+    CTCP messages should only be at the start of an IRC message, not
+    anywhere within it.
+    
+    While the helper only decodes packes in the ORIGINAL direction, its
+    possible to make a client send a CTCP message back by empedding one into
+    a PING request.  As-is, thats enough to make the helper believe that it
+    saw a CTCP message.
+    
+    Fixes: 869f37d8e48f ("[NETFILTER]: nf_conntrack/nf_nat: add IRC helper port")
+    Signed-off-by: David Leadbeater <dgl@dgl.cx>
+    Signed-off-by: Florian Westphal <fw@strlen.de>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 369ec4dab0972dd407d4ed9dae82f57a2a0fdf6e
+Author: Igor Ryzhov <iryzhov@nfware.com>
+Date:   Wed Jun 5 12:32:40 2019 +0300
+
+    netfilter: nf_conntrack_sip: fix ct_sip_walk_headers
+    
+    [ Upstream commit 39aebedeaaa95757f5c1f2ddb5f43fdddbf478ca ]
+    
+    ct_sip_next_header and ct_sip_get_header return an absolute
+    value of matchoff, not a shift from current dataoff.
+    So dataoff should be assigned matchoff, not incremented by it.
+    
+    This issue can be seen in the scenario when there are multiple
+    Contact headers and the first one is using a hostname and other headers
+    use IP addresses. In this case, ct_sip_walk_headers will work as follows:
+    
+    The first ct_sip_get_header call to will find the first Contact header
+    but will return -1 as the header uses a hostname. But matchoff will
+    be changed to the offset of this header. After that, dataoff should be
+    set to matchoff, so that the next ct_sip_get_header call find the next
+    Contact header. But instead of assigning dataoff to matchoff, it is
+    incremented by it, which is not correct, as matchoff is an absolute
+    value of the offset. So on the next call to the ct_sip_get_header,
+    dataoff will be incorrect, and the next Contact header may not be
+    found at all.
+    
+    Fixes: 05e3ced297fe ("[NETFILTER]: nf_conntrack_sip: introduce SIP-URI parsing helper")
+    Signed-off-by: Igor Ryzhov <iryzhov@nfware.com>
+    Signed-off-by: Florian Westphal <fw@strlen.de>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 66f9470ffe42c30688984d9aed0a2d236b19cbc8
+Author: Fabio Estevam <festevam@denx.de>
+Date:   Sat Aug 27 14:51:39 2022 -0300
+
+    arm64: dts: rockchip: Remove 'enable-active-low' from rk3399-puma
+    
+    [ Upstream commit a994b34b9abb9c08ee09e835b4027ff2147f9d94 ]
+    
+    The 'enable-active-low' property is not a valid one.
+    
+    Only 'enable-active-high' is valid, and when this property is absent
+    the gpio regulator will act as active low by default.
+    
+    Remove the invalid 'enable-active-low' property.
+    
+    Fixes: 2c66fc34e945 ("arm64: dts: rockchip: add RK3399-Q7 (Puma) SoM")
+    Signed-off-by: Fabio Estevam <festevam@denx.de>
+    Link: https://lore.kernel.org/r/20220827175140.1696699-1-festevam@denx.de
+    Signed-off-by: Heiko Stuebner <heiko@sntech.de>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit aa11dae059a439af82bae541b134f8f53ac177b5
+Author: Liang He <windhl@126.com>
+Date:   Wed Jul 20 15:32:34 2022 +0800
+
+    dmaengine: ti: k3-udma-private: Fix refcount leak bug in of_xudma_dev_get()
+    
+    [ Upstream commit f9fdb0b86f087c2b7f6c6168dd0985a3c1eda87e ]
+    
+    We should call of_node_put() for the reference returned by
+    of_parse_phandle() in fail path or when it is not used anymore.
+    Here we only need to move the of_node_put() before the check.
+    
+    Fixes: d70241913413 ("dmaengine: ti: k3-udma: Add glue layer for non DMAengine users")
+    Signed-off-by: Liang He <windhl@126.com>
+    Acked-by: Peter Ujfalusi <peter.ujfalusi@gmail.com>
+    Link: https://lore.kernel.org/r/20220720073234.1255474-1-windhl@126.com
+    Signed-off-by: Vinod Koul <vkoul@kernel.org>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 1cc871fe6d3153e0a782a118061ba2f62c2f6850
+Author: zain wang <wzz@rock-chips.com>
+Date:   Tue Aug 30 13:16:17 2022 -0700
+
+    arm64: dts: rockchip: Set RK3399-Gru PCLK_EDP to 24 MHz
+    
+    [ Upstream commit 8123437cf46ea5a0f6ca5cb3c528d8b6db97b9c2 ]
+    
+    We've found the AUX channel to be less reliable with PCLK_EDP at a
+    higher rate (typically 25 MHz). This is especially important on systems
+    with PSR-enabled panels (like Gru-Kevin), since we make heavy, constant
+    use of AUX.
+    
+    According to Rockchip, using any rate other than 24 MHz can cause
+    "problems between syncing the PHY an PCLK", which leads to all sorts of
+    unreliabilities around register operations.
+    
+    Fixes: d67a38c5a623 ("arm64: dts: rockchip: move core edp from rk3399-kevin to shared chromebook")
+    Reviewed-by: Douglas Anderson <dianders@chromium.org>
+    Signed-off-by: zain wang <wzz@rock-chips.com>
+    Signed-off-by: Brian Norris <briannorris@chromium.org>
+    Link: https://lore.kernel.org/r/20220830131212.v2.1.I98d30623f13b785ca77094d0c0fd4339550553b6@changeid
+    Signed-off-by: Heiko Stuebner <heiko@sntech.de>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 3ca272b231d633f60bc1ca99b94b5d1302fc2b44
+Author: AngeloGioacchino Del Regno <angelogioacchino.delregno@collabora.com>
+Date:   Thu Jul 21 19:27:27 2022 +0200
+
+    drm/mediatek: dsi: Add atomic {destroy,duplicate}_state, reset callbacks
+    
+    [ Upstream commit eeda05b5e92f51d9a09646ecb493f0a1e872a6ef ]
+    
+    Add callbacks for atomic_destroy_state, atomic_duplicate_state and
+    atomic_reset to restore functionality of the DSI driver: this solves
+    vblank timeouts when another bridge is present in the chain.
+    
+    Tested bridge chain: DSI <=> ANX7625 => aux-bus panel
+    
+    Fixes: 7f6335c6a258 ("drm/mediatek: Modify dsi funcs to atomic operations")
+    Signed-off-by: AngeloGioacchino Del Regno <angelogioacchino.delregno@collabora.com>
+    Tested-by: Chen-Yu Tsai <wenst@chromium.org>
+    Reviewed-by: Nícolas F. R. A. Prado <nfraprado@collabora.com>
+    Tested-by: Nícolas F. R. A. Prado <nfraprado@collabora.com>
+    Link: https://patchwork.kernel.org/project/linux-mediatek/patch/20220721172727.14624-1-angelogioacchino.delregno@collabora.com/
+    Signed-off-by: Chun-Kuang Hu <chunkuang.hu@kernel.org>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 39f97714f3e2e76ba87e58ba141509902d61970b
+Author: Brian Norris <briannorris@chromium.org>
+Date:   Mon Aug 22 16:45:04 2022 -0700
+
+    arm64: dts: rockchip: Pull up wlan wake# on Gru-Bob
+    
+    [ Upstream commit e5467359a725de90b6b8d0dd865500f6373828ca ]
+    
+    The Gru-Bob board does not have a pull-up resistor on its
+    WLAN_HOST_WAKE# pin, but Kevin does. The production/vendor kernel
+    specified the pin configuration correctly as a pull-up, but this didn't
+    get ported correctly to upstream.
+    
+    This means Bob's WLAN_HOST_WAKE# pin is floating, causing inconsistent
+    wakeup behavior.
+    
+    Note that bt_host_wake_l has a similar dynamic, but apparently the
+    upstream choice was to redundantly configure both internal and external
+    pull-up on Kevin (see the "Kevin has an external pull up" comment in
+    rk3399-gru.dtsi). This doesn't cause any functional problem, although
+    it's perhaps wasteful.
+    
+    Fixes: 8559bbeeb849 ("arm64: dts: rockchip: add Google Bob")
+    Signed-off-by: Brian Norris <briannorris@chromium.org>
+    Reviewed-by: Douglas Anderson <dianders@chromium.org>
+    Link: https://lore.kernel.org/r/20220822164453.1.I75c57b48b0873766ec993bdfb7bc1e63da5a1637@changeid
+    Signed-off-by: Heiko Stuebner <heiko@sntech.de>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit dce466286944389dd77b314e0d1eea6969d0e4d4
+Author: Dave Chinner <dchinner@redhat.com>
+Date:   Thu Sep 22 18:47:28 2022 +0300
+
+    xfs: validate inode fork size against fork format
+    
+    commit 1eb70f54c445fcbb25817841e774adb3d912f3e8 upstream.
+    
+    [backport for 5.10.y]
+    
+    xfs_repair catches fork size/format mismatches, but the in-kernel
+    verifier doesn't, leading to null pointer failures when attempting
+    to perform operations on the fork. This can occur in the
+    xfs_dir_is_empty() where the in-memory fork format does not match
+    the size and so the fork data pointer is accessed incorrectly.
+    
+    Note: this causes new failures in xfs/348 which is testing mode vs
+    ftype mismatches. We now detect a regular file that has been changed
+    to a directory or symlink mode as being corrupt because the data
+    fork is for a symlink or directory should be in local form when
+    there are only 3 bytes of data in the data fork. Hence the inode
+    verify for the regular file now fires w/ -EFSCORRUPTED because
+    the inode fork format does not match the format the corrupted mode
+    says it should be in.
+    
+    Signed-off-by: Dave Chinner <dchinner@redhat.com>
+    Reviewed-by: Christoph Hellwig <hch@lst.de>
+    Reviewed-by: Darrick J. Wong <djwong@kernel.org>
+    Signed-off-by: Dave Chinner <david@fromorbit.com>
+    Signed-off-by: Amir Goldstein <amir73il@gmail.com>
+    Acked-by: Darrick J. Wong <djwong@kernel.org>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit a6bfdc157f853004c47e93357303f3626afaa872
+Author: Dave Chinner <dchinner@redhat.com>
+Date:   Thu Sep 22 18:47:27 2022 +0300
+
+    xfs: reorder iunlink remove operation in xfs_ifree
+    
+    commit 9a5280b312e2e7898b6397b2ca3cfd03f67d7be1 upstream.
+    
+    [backport for 5.10.y]
+    
+    The O_TMPFILE creation implementation creates a specific order of
+    operations for inode allocation/freeing and unlinked list
+    modification. Currently both are serialised by the AGI, so the order
+    doesn't strictly matter as long as the are both in the same
+    transaction.
+    
+    However, if we want to move the unlinked list insertions largely out
+    from under the AGI lock, then we have to be concerned about the
+    order in which we do unlinked list modification operations.
+    O_TMPFILE creation tells us this order is inode allocation/free,
+    then unlinked list modification.
+    
+    Change xfs_ifree() to use this same ordering on unlinked list
+    removal. This way we always guarantee that when we enter the
+    iunlinked list removal code from this path, we already have the AGI
+    locked and we don't have to worry about lock nesting AGI reads
+    inside unlink list locks because it's already locked and attached to
+    the transaction.
+    
+    We can do this safely as the inode freeing and unlinked list removal
+    are done in the same transaction and hence are atomic operations
+    with respect to log recovery.
+    
+    Reported-by: Frank Hofmann <fhofmann@cloudflare.com>
+    Fixes: 298f7bec503f ("xfs: pin inode backing buffer to the inode log item")
+    Signed-off-by: Dave Chinner <dchinner@redhat.com>
+    Reviewed-by: Darrick J. Wong <darrick.wong@oracle.com>
+    Signed-off-by: Dave Chinner <david@fromorbit.com>
+    Signed-off-by: Amir Goldstein <amir73il@gmail.com>
+    Acked-by: Darrick J. Wong <djwong@kernel.org>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit e811a534ec2f7f6c0d27532c0915715427b7cab1
+Author: Christoph Hellwig <hch@lst.de>
+Date:   Fri Jan 22 16:48:18 2021 -0800
+
+    xfs: fix up non-directory creation in SGID directories
+    
+    commit 01ea173e103edd5ec41acec65b9261b87e123fc2 upstream.
+    
+    XFS always inherits the SGID bit if it is set on the parent inode, while
+    the generic inode_init_owner does not do this in a few cases where it can
+    create a possible security problem, see commit 0fa3ecd87848
+    ("Fix up non-directory creation in SGID directories") for details.
+    
+    Switch XFS to use the generic helper for the normal path to fix this,
+    just keeping the simple field inheritance open coded for the case of the
+    non-sgid case with the bsdgrpid mount option.
+    
+    Fixes: 1da177e4c3f4 ("Linux-2.6.12-rc2")
+    Reported-by: Christian Brauner <christian.brauner@ubuntu.com>
+    Signed-off-by: Christoph Hellwig <hch@lst.de>
+    Reviewed-by: Darrick J. Wong <djwong@kernel.org>
+    Signed-off-by: Darrick J. Wong <djwong@kernel.org>
+    Signed-off-by: Amir Goldstein <amir73il@gmail.com>
+    Acked-by: Darrick J. Wong <djwong@kernel.org>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 4e74179a164dcafc113e602413439ce1c332e7c6
+Author: Mike Tipton <mdtipton@codeaurora.org>
+Date:   Thu Nov 25 19:47:51 2021 +0200
+
+    interconnect: qcom: icc-rpmh: Add BCMs to commit list in pre_aggregate
+    
+    commit b95b668eaaa2574e8ee72f143c52075e9955177e upstream.
+    
+    We're only adding BCMs to the commit list in aggregate(), but there are
+    cases where pre_aggregate() is called without subsequently calling
+    aggregate(). In particular, in icc_sync_state() when a node with initial
+    BW has zero requests. Since BCMs aren't added to the commit list in
+    these cases, we don't actually send the zero BW request to HW. So the
+    resources remain on unnecessarily.
+    
+    Add BCMs to the commit list in pre_aggregate() instead, which is always
+    called even when there are no requests.
+    
+    Signed-off-by: Mike Tipton <mdtipton@codeaurora.org>
+    [georgi: remove icc_sync_state for platforms with incomplete support]
+    Link: https://lore.kernel.org/r/20211125174751.25317-1-djakov@kernel.org
+    Signed-off-by: Georgi Djakov <djakov@kernel.org>
+    [dianders: dropped sm8350.c which isn't present in 5.10]
+    Signed-off-by: Douglas Anderson <dianders@chromium.org>
+    Acked-by: Alex Elder <elder@linaro.org>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit a60babeb60ff276963d4756c7fd2e7bf242bb777
+Author: Mingwei Zhang <mizhang@google.com>
+Date:   Thu Apr 21 03:14:07 2022 +0000
+
+    KVM: SEV: add cache flush to solve SEV cache incoherency issues
+    
+    commit 683412ccf61294d727ead4a73d97397396e69a6b upstream.
+    
+    Flush the CPU caches when memory is reclaimed from an SEV guest (where
+    reclaim also includes it being unmapped from KVM's memslots).  Due to lack
+    of coherency for SEV encrypted memory, failure to flush results in silent
+    data corruption if userspace is malicious/broken and doesn't ensure SEV
+    guest memory is properly pinned and unpinned.
+    
+    Cache coherency is not enforced across the VM boundary in SEV (AMD APM
+    vol.2 Section 15.34.7). Confidential cachelines, generated by confidential
+    VM guests have to be explicitly flushed on the host side. If a memory page
+    containing dirty confidential cachelines was released by VM and reallocated
+    to another user, the cachelines may corrupt the new user at a later time.
+    
+    KVM takes a shortcut by assuming all confidential memory remain pinned
+    until the end of VM lifetime. Therefore, KVM does not flush cache at
+    mmu_notifier invalidation events. Because of this incorrect assumption and
+    the lack of cache flushing, malicous userspace can crash the host kernel:
+    creating a malicious VM and continuously allocates/releases unpinned
+    confidential memory pages when the VM is running.
+    
+    Add cache flush operations to mmu_notifier operations to ensure that any
+    physical memory leaving the guest VM get flushed. In particular, hook
+    mmu_notifier_invalidate_range_start and mmu_notifier_release events and
+    flush cache accordingly. The hook after releasing the mmu lock to avoid
+    contention with other vCPUs.
+    
+    Cc: stable@vger.kernel.org
+    Suggested-by: Sean Christpherson <seanjc@google.com>
+    Reported-by: Mingwei Zhang <mizhang@google.com>
+    Signed-off-by: Mingwei Zhang <mizhang@google.com>
+    Message-Id: <20220421031407.2516575-4-mizhang@google.com>
+    Signed-off-by: Paolo Bonzini <pbonzini@redhat.com>
+    [OP: applied kvm_arch_guest_memory_reclaimed() calls in kvm_set_memslot() and
+    kvm_mmu_notifier_invalidate_range_start();
+    OP: adjusted kvm_arch_guest_memory_reclaimed() to not use static_call_cond()]
+    Signed-off-by: Ovidiu Panait <ovidiu.panait@windriver.com>
+    Reviewed-by: Liam Merwick <liam.merwick@oracle.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 379ac7905ff3f0a6a4e507d3e9f710ec4fab9124
+Author: Chao Yu <chao.yu@oppo.com>
+Date:   Wed Aug 31 22:54:54 2022 +0800
+
+    mm/slub: fix to return errno if kmalloc() fails
+    
+    commit 7e9c323c52b379d261a72dc7bd38120a761a93cd upstream.
+    
+    In create_unique_id(), kmalloc(, GFP_KERNEL) can fail due to
+    out-of-memory, if it fails, return errno correctly rather than
+    triggering panic via BUG_ON();
+    
+    kernel BUG at mm/slub.c:5893!
+    Internal error: Oops - BUG: 0 [#1] PREEMPT SMP
+    
+    Call trace:
+     sysfs_slab_add+0x258/0x260 mm/slub.c:5973
+     __kmem_cache_create+0x60/0x118 mm/slub.c:4899
+     create_cache mm/slab_common.c:229 [inline]
+     kmem_cache_create_usercopy+0x19c/0x31c mm/slab_common.c:335
+     kmem_cache_create+0x1c/0x28 mm/slab_common.c:390
+     f2fs_kmem_cache_create fs/f2fs/f2fs.h:2766 [inline]
+     f2fs_init_xattr_caches+0x78/0xb4 fs/f2fs/xattr.c:808
+     f2fs_fill_super+0x1050/0x1e0c fs/f2fs/super.c:4149
+     mount_bdev+0x1b8/0x210 fs/super.c:1400
+     f2fs_mount+0x44/0x58 fs/f2fs/super.c:4512
+     legacy_get_tree+0x30/0x74 fs/fs_context.c:610
+     vfs_get_tree+0x40/0x140 fs/super.c:1530
+     do_new_mount+0x1dc/0x4e4 fs/namespace.c:3040
+     path_mount+0x358/0x914 fs/namespace.c:3370
+     do_mount fs/namespace.c:3383 [inline]
+     __do_sys_mount fs/namespace.c:3591 [inline]
+     __se_sys_mount fs/namespace.c:3568 [inline]
+     __arm64_sys_mount+0x2f8/0x408 fs/namespace.c:3568
+    
+    Cc: <stable@kernel.org>
+    Fixes: 81819f0fc8285 ("SLUB core")
+    Reported-by: syzbot+81684812ea68216e08c5@syzkaller.appspotmail.com
+    Reviewed-by: Muchun Song <songmuchun@bytedance.com>
+    Reviewed-by: Hyeonggon Yoo <42.hyeyoo@gmail.com>
+    Signed-off-by: Chao Yu <chao.yu@oppo.com>
+    Acked-by: David Rientjes <rientjes@google.com>
+    Signed-off-by: Vlastimil Babka <vbabka@suse.cz>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit fa57bb9b1ab5b970d70b0e9012af235ac15ae3db
+Author: Marc Kleine-Budde <mkl@pengutronix.de>
+Date:   Thu Aug 11 10:25:44 2022 +0200
+
+    can: flexcan: flexcan_mailbox_read() fix return value for drop = true
+    
+    commit a09721dd47c8468b3f2fdd73f40422699ffe26dd upstream.
+    
+    The following happened on an i.MX25 using flexcan with many packets on
+    the bus:
+    
+    The rx-offload queue reached a length more than skb_queue_len_max. In
+    can_rx_offload_offload_one() the drop variable was set to true which
+    made the call to .mailbox_read() (here: flexcan_mailbox_read()) to
+    _always_ return ERR_PTR(-ENOBUFS) and drop the rx'ed CAN frame. So
+    can_rx_offload_offload_one() returned ERR_PTR(-ENOBUFS), too.
+    
+    can_rx_offload_irq_offload_fifo() looks as follows:
+    
+    |       while (1) {
+    |               skb = can_rx_offload_offload_one(offload, 0);
+    |               if (IS_ERR(skb))
+    |                       continue;
+    |               if (!skb)
+    |                       break;
+    |               ...
+    |       }
+    
+    The flexcan driver wrongly always returns ERR_PTR(-ENOBUFS) if drop is
+    requested, even if there is no CAN frame pending. As the i.MX25 is a
+    single core CPU, while the rx-offload processing is active, there is
+    no thread to process packets from the offload queue. So the queue
+    doesn't get any shorter and this results is a tight loop.
+    
+    Instead of always returning ERR_PTR(-ENOBUFS) if drop is requested,
+    return NULL if no CAN frame is pending.
+    
+    Changes since v1: https://lore.kernel.org/all/20220810144536.389237-1-u.kleine-koenig@pengutronix.de
+    - don't break in can_rx_offload_irq_offload_fifo() in case of an error,
+      return NULL in flexcan_mailbox_read() in case of no pending CAN frame
+      instead
+    
+    Fixes: 4e9c9484b085 ("can: rx-offload: Prepare for CAN FD support")
+    Link: https://lore.kernel.org/all/20220811094254.1864367-1-mkl@pengutronix.de
+    Cc: stable@vger.kernel.org # v5.5
+    Suggested-by: Uwe Kleine-König <u.kleine-koenig@pengutronix.de>
+    Reviewed-by: Uwe Kleine-König <u.kleine-koenig@pengutronix.de>
+    Tested-by: Thorsten Scherer <t.scherer@eckelmann.de>
+    Signed-off-by: Marc Kleine-Budde <mkl@pengutronix.de>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 12fda27a412b62cf136dd2600bff11bc814ee86a
+Author: Al Viro <viro@zeniv.linux.org.uk>
+Date:   Fri Sep 24 01:55:27 2021 +0000
+
+    riscv: fix a nasty sigreturn bug...
+    
+    commit 762df359aa5849e010ef04c3ed79d57588ce17d9 upstream.
+    
+    riscv has an equivalent of arm bug fixed by 653d48b22166 ("arm: fix
+    really nasty sigreturn bug"); if signal gets caught by an interrupt that
+    hits when we have the right value in a0 (-513), *and* another signal
+    gets delivered upon sigreturn() (e.g. included into the blocked mask for
+    the first signal and posted while the handler had been running), the
+    syscall restart logics will see regs->cause equal to EXC_SYSCALL (we are
+    in a syscall, after all) and a0 already restored to its original value
+    (-513, which happens to be -ERESTARTNOINTR) and assume that we need to
+    apply the usual syscall restart logics.
+    
+    Signed-off-by: Al Viro <viro@zeniv.linux.org.uk>
+    Fixes: e2c0cdfba7f6 ("RISC-V: User-facing API")
+    Cc: stable@vger.kernel.org
+    Link: https://lore.kernel.org/r/YxJEiSq%2FCGaL6Gm9@ZenIV/
+    Signed-off-by: Palmer Dabbelt <palmer@rivosinc.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 657803b918e097e47d99d1489da83a603c36bcdd
+Author: Meng Li <Meng.Li@windriver.com>
+Date:   Wed Sep 21 11:20:20 2022 +0800
+
+    gpiolib: cdev: Set lineevent_state::irq after IRQ register successfully
+    
+    commit 69bef19d6b9700e96285f4b4e28691cda3dcd0d1 upstream.
+    
+    When running gpio test on nxp-ls1028 platform with below command
+    gpiomon --num-events=3 --rising-edge gpiochip1 25
+    There will be a warning trace as below:
+    Call trace:
+    free_irq+0x204/0x360
+    lineevent_free+0x64/0x70
+    gpio_ioctl+0x598/0x6a0
+    __arm64_sys_ioctl+0xb4/0x100
+    invoke_syscall+0x5c/0x130
+    ......
+    el0t_64_sync+0x1a0/0x1a4
+    The reason of this issue is that calling request_threaded_irq()
+    function failed, and then lineevent_free() is invoked to release
+    the resource. Since the lineevent_state::irq was already set, so
+    the subsequent invocation of free_irq() would trigger the above
+    warning call trace. To fix this issue, set the lineevent_state::irq
+    after the IRQ register successfully.
+    
+    Fixes: 468242724143 ("gpiolib: cdev: refactor lineevent cleanup into lineevent_free")
+    Cc: stable@vger.kernel.org
+    Signed-off-by: Meng Li <Meng.Li@windriver.com>
+    Reviewed-by: Kent Gibson <warthog618@gmail.com>
+    Signed-off-by: Bartosz Golaszewski <brgl@bgdev.pl>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit bdea98b98f844bd8a983ca880893e509a8b4162f
+Author: Bartosz Golaszewski <brgl@bgdev.pl>
+Date:   Tue Sep 20 09:18:41 2022 +0200
+
+    gpio: mockup: fix NULL pointer dereference when removing debugfs
+    
+    commit b7df41a6f79dfb18ba2203f8c5f0e9c0b9b57f68 upstream.
+    
+    We now remove the device's debugfs entries when unbinding the driver.
+    This now causes a NULL-pointer dereference on module exit because the
+    platform devices are unregistered *after* the global debugfs directory
+    has been recursively removed. Fix it by unregistering the devices first.
+    
+    Fixes: 303e6da99429 ("gpio: mockup: remove gpio debugfs when remove device")
+    Cc: Wei Yongjun <weiyongjun1@huawei.com>
+    Cc: stable@vger.kernel.org
+    Signed-off-by: Bartosz Golaszewski <brgl@bgdev.pl>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit bd5958ccfc451d3b61c7eb305fd53d9728791f79
+Author: Felix Fietkau <nbd@nbd.name>
+Date:   Fri Aug 26 20:23:29 2022 +0200
+
+    wifi: mt76: fix reading current per-tid starting sequence number for aggregation
+    
+    commit c3a510e2b53785df31d882a773c4c0780b4c825f upstream.
+    
+    The code was accidentally shifting register values down by tid % 32 instead of
+    (tid * field_size) % 32.
+    
+    Cc: stable@vger.kernel.org
+    Fixes: a28bef561a5c ("mt76: mt7615: re-enable offloading of sequence number assignment")
+    Signed-off-by: Felix Fietkau <nbd@nbd.name>
+    Signed-off-by: Kalle Valo <kvalo@kernel.org>
+    Link: https://lore.kernel.org/r/20220826182329.18155-1-nbd@nbd.name
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 85f9a2d51e72f558c9bbf94cd1ae7c73f80034de
+Author: Ard Biesheuvel <ardb@kernel.org>
+Date:   Tue Sep 20 17:08:23 2022 +0200
+
+    efi: libstub: check Shim mode using MokSBStateRT
+    
+    commit 5f56a74cc0a6d9b9f8ba89cea29cd7c4774cb2b1 upstream.
+    
+    We currently check the MokSBState variable to decide whether we should
+    treat UEFI secure boot as being disabled, even if the firmware thinks
+    otherwise. This is used by shim to indicate that it is not checking
+    signatures on boot images. In the kernel, we use this to relax lockdown
+    policies.
+    
+    However, in cases where shim is not even being used, we don't want this
+    variable to interfere with lockdown, given that the variable may be
+    non-volatile and therefore persist across a reboot. This means setting
+    it once will persistently disable lockdown checks on a given system.
+    
+    So switch to the mirrored version of this variable, called MokSBStateRT,
+    which is supposed to be volatile, and this is something we can check.
+    
+    Cc: <stable@vger.kernel.org> # v4.19+
+    Signed-off-by: Ard Biesheuvel <ardb@kernel.org>
+    Reviewed-by: Ilias Apalodimas <ilias.apalodimas@linaro.org>
+    Reviewed-by: Peter Jones <pjones@redhat.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 3490ebe43505fb7b91e88a14019753a6c3f12d88
+Author: Ard Biesheuvel <ardb@kernel.org>
+Date:   Thu Aug 4 15:39:48 2022 +0200
+
+    efi: x86: Wipe setup_data on pure EFI boot
+    
+    commit 63bf28ceb3ebbe76048c3fb2987996ca1ae64f83 upstream.
+    
+    When booting the x86 kernel via EFI using the LoadImage/StartImage boot
+    services [as opposed to the deprecated EFI handover protocol], the setup
+    header is taken from the image directly, and given that EFI's LoadImage
+    has no Linux/x86 specific knowledge regarding struct bootparams or
+    struct setup_header, any absolute addresses in the setup header must
+    originate from the file and not from a prior loading stage.
+    
+    Since we cannot generally predict where LoadImage() decides to load an
+    image (*), such absolute addresses must be treated as suspect: even if a
+    prior boot stage intended to make them point somewhere inside the
+    [signed] image, there is no way to validate that, and if they point at
+    an arbitrary location in memory, the setup_data nodes will not be
+    covered by any signatures or TPM measurements either, and could be made
+    to contain an arbitrary sequence of SETUP_xxx nodes, which could
+    interfere quite badly with the early x86 boot sequence.
+    
+    (*) Note that, while LoadImage() does take a buffer/size tuple in
+    addition to a device path, which can be used to provide the image
+    contents directly, it will re-allocate such images, as the memory
+    footprint of an image is generally larger than the PE/COFF file
+    representation.
+    
+    Cc: <stable@vger.kernel.org> # v5.10+
+    Link: https://lore.kernel.org/all/20220904165321.1140894-1-Jason@zx2c4.com/
+    Signed-off-by: Ard Biesheuvel <ardb@kernel.org>
+    Acked-by: Jason A. Donenfeld <Jason@zx2c4.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit c5ee36018d320c16713711e68e13dbef4a31ffee
+Author: Johan Hovold <johan@kernel.org>
+Date:   Mon Aug 22 17:10:27 2022 +0200
+
+    media: flexcop-usb: fix endpoint type check
+    
+    commit 763679f0eeff0185fc431498849bbc1c24460875 upstream.
+    
+    Commit d725d20e81c2 ("media: flexcop-usb: sanity checking of endpoint
+    type") tried to add an endpoint type sanity check for the single
+    isochronous endpoint but instead broke the driver by checking the wrong
+    descriptor or random data beyond the last endpoint descriptor.
+    
+    Make sure to check the right endpoint descriptor.
+    
+    Fixes: d725d20e81c2 ("media: flexcop-usb: sanity checking of endpoint type")
+    Cc: Oliver Neukum <oneukum@suse.com>
+    Cc: stable@vger.kernel.org      # 5.9
+    Reported-by: Dongliang Mu <mudongliangabcd@gmail.com>
+    Signed-off-by: Johan Hovold <johan@kernel.org>
+    Link: https://lore.kernel.org/r/20220822151027.27026-1-johan@kernel.org
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 0d99b180ce68a691d835c8292bc260379f1e20ba
+Author: Yi Liu <yi.l.liu@intel.com>
+Date:   Wed Sep 21 10:40:54 2022 +0800
+
+    iommu/vt-d: Check correct capability for sagaw determination
+    
+    commit 154897807050c1161cb2660e502fc0470d46b986 upstream.
+    
+    Check 5-level paging capability for 57 bits address width instead of
+    checking 1GB large page capability.
+    
+    Fixes: 53fc7ad6edf2 ("iommu/vt-d: Correctly calculate sagaw value of IOMMU")
+    Cc: stable@vger.kernel.org
+    Reported-by: Raghunathan Srinivasan <raghunathan.srinivasan@intel.com>
+    Signed-off-by: Yi Liu <yi.l.liu@intel.com>
+    Reviewed-by: Jerry Snitselaar <jsnitsel@redhat.com>
+    Reviewed-by: Kevin Tian <kevin.tian@intel.com>
+    Reviewed-by: Raghunathan Srinivasan <raghunathan.srinivasan@intel.com>
+    Link: https://lore.kernel.org/r/20220916071212.2223869-2-yi.l.liu@intel.com
+    Signed-off-by: Lu Baolu <baolu.lu@linux.intel.com>
+    Signed-off-by: Joerg Roedel <jroedel@suse.de>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 213cdb2901e9a898a7f1657b749af798a599002b
+Author: Callum Osmotherly <callum.osmotherly@gmail.com>
+Date:   Thu Sep 15 22:36:08 2022 +0930
+
+    ALSA: hda/realtek: Enable 4-speaker output Dell Precision 5530 laptop
+    
+    commit 1885ff13d4c42910b37a0e3f7c2f182520f4eed1 upstream.
+    
+    Just as with the 5570 (and the other Dell laptops), this enables the two
+    subwoofer speakers on the Dell Precision 5530 together with the main
+    ones, significantly increasing the audio quality. I've tested this
+    myself on a 5530 and can confirm it's working as expected.
+    
+    Signed-off-by: Callum Osmotherly <callum.osmotherly@gmail.com>
+    Cc: <stable@vger.kernel.org>
+    Link: https://lore.kernel.org/r/YyMjQO3mhyXlMbCf@piranha
+    Signed-off-by: Takashi Iwai <tiwai@suse.de>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 10c7e52d9585c7ceca8afd0d29c2c26ef238e889
+Author: Luke D. Jones <luke@ljones.dev>
+Date:   Thu Sep 15 20:09:21 2022 +1200
+
+    ALSA: hda/realtek: Add quirk for ASUS GA503R laptop
+    
+    commit ba1f818053b0668a1ce2fe86b840e81b592cc560 upstream.
+    
+    The ASUS G15 2022 (GA503R) series laptop has the same node-to-DAC pairs
+    as early models and the G14, this includes bass speakers which are by
+    default mapped incorrectly to the 0x06 node.
+    
+    Add a quirk to use the same DAC pairs as the G14.
+    
+    Signed-off-by: Luke D. Jones <luke@ljones.dev>
+    Cc: <stable@vger.kernel.org>
+    Link: https://lore.kernel.org/r/20220915080921.35563-4-luke@ljones.dev
+    Signed-off-by: Takashi Iwai <tiwai@suse.de>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 4cd84a9518e0ace5b758905684790018323584ee
+Author: Luke D. Jones <luke@ljones.dev>
+Date:   Thu Sep 15 20:09:20 2022 +1200
+
+    ALSA: hda/realtek: Add pincfg for ASUS G533Z HP jack
+    
+    commit bc2c23549ccd7105eb6ff0d4f0ac519285628673 upstream.
+    
+    Fixes up the pincfg for ASUS ROG Strix G15 (G533Z) headphone combo jack
+    
+    [ Fixed the position in the quirk table by tiwai ]
+    
+    Signed-off-by: Luke D. Jones <luke@ljones.dev>
+    Cc: <stable@vger.kernel.org>
+    Link: https://lore.kernel.org/r/20220915080921.35563-3-luke@ljones.dev
+    Signed-off-by: Takashi Iwai <tiwai@suse.de>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 2f7cad4ecd0b93cd445b9eb364d446257aecddcd
+Author: Luke D. Jones <luke@ljones.dev>
+Date:   Thu Sep 15 20:09:19 2022 +1200
+
+    ALSA: hda/realtek: Add pincfg for ASUS G513 HP jack
+    
+    commit c611e659044168e7abcbae8ba1ea833521498fbb upstream.
+    
+    Fixes up the pincfg for ASUS ROG Strix G513 headphone and mic combo jack
+    
+    [ Fixed the position in the quirk table by tiwai ]
+    
+    Signed-off-by: Luke D. Jones <luke@ljones.dev>
+    Cc: <stable@vger.kernel.org>
+    Link: https://lore.kernel.org/r/20220915080921.35563-2-luke@ljones.dev
+    Signed-off-by: Takashi Iwai <tiwai@suse.de>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 62ce31979fd525fb8046e4f18de0123cbb767be4
+Author: Takashi Iwai <tiwai@suse.de>
+Date:   Thu Sep 15 17:47:24 2022 +0200
+
+    ALSA: hda/realtek: Re-arrange quirk table entries
+    
+    commit b16c8f229a58eaddfc58aab447253464abd3c85e upstream.
+    
+    A few entries have been mistakenly inserted in wrong positions without
+    considering the SSID ordering.  Place them at right positions.
+    
+    Fixes: b7557267c233 ("ALSA: hda/realtek: Add quirk for ASUS GA402")
+    Fixes: 94db9cc8f8fa ("ALSA: hda/realtek: Add quirk for ASUS GU603")
+    Fixes: 739d0959fbed ("ALSA: hda: Add quirk for ASUS Flow x13")
+    Cc: <stable@vger.kernel.org>
+    Link: https://lore.kernel.org/r/20220915154724.31634-1-tiwai@suse.de
+    Signed-off-by: Takashi Iwai <tiwai@suse.de>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit d4bad13828f0da2d2f8b521de580b8a2aa211ba4
+Author: Callum Osmotherly <callum.osmotherly@gmail.com>
+Date:   Wed Sep 14 18:44:00 2022 +0930
+
+    ALSA: hda/realtek: Enable 4-speaker output Dell Precision 5570 laptop
+    
+    commit bdc9b7396f7d4d6533e70fd8d5472f505b5ef58f upstream.
+    
+    The Dell Precision 5570 uses the same 4-speakers-on-ALC289 just like the
+    previous Precision 5560. I replicated that patch onto this one, and can
+    confirm that the audio is much better (the woofers are now working);
+    I've tested it on my Dell Precision 5570.
+    
+    Signed-off-by: Callum Osmotherly <callum.osmotherly@gmail.com>
+    Cc: <stable@vger.kernel.org>
+    Link: https://lore.kernel.org/r/YyGbWM5wEoFMbW2v@piranha
+    Signed-off-by: Takashi Iwai <tiwai@suse.de>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 62b0824c2c691fc55e8c8c6115f926a069bd579e
+Author: huangwenhui <huangwenhuia@uniontech.com>
+Date:   Tue Sep 13 13:46:22 2022 +0800
+
+    ALSA: hda/realtek: Add quirk for Huawei WRT-WX9
+    
+    commit cbcdf8c4d35cd74aee8581eb2f0453e0ecab7b05 upstream.
+    
+    Fixes headphone and headset microphone detection on Huawei WRT-WX9.
+    
+    Signed-off-by: huangwenhui <huangwenhuia@uniontech.com>
+    Cc: <stable@vger.kernel.org>
+    Link: https://lore.kernel.org/r/20220913054622.15979-1-huangwenhuia@uniontech.com
+    Signed-off-by: Takashi Iwai <tiwai@suse.de>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit c78bce842d476ddcbf18b2431178a72568ab726d
+Author: Kai Vehmanen <kai.vehmanen@linux.intel.com>
+Date:   Mon Sep 12 21:37:16 2022 +0300
+
+    ALSA: hda: add Intel 5 Series / 3400 PCI DID
+    
+    commit 4d40ceef4745536289012670103c59264e0fb3ec upstream.
+    
+    Handle 0x3b57 variant with same AZX_DCAPS_INTEL_PCH_NOPM
+    capabilities as 0x3b56. In practise this allow use of HDMI/DP
+    display audio via i915.
+    
+    BugLink: https://gitlab.freedesktop.org/drm/intel/-/issues/2751
+    Signed-off-by: Kai Vehmanen <kai.vehmanen@linux.intel.com>
+    Cc: <stable@vger.kernel.org>
+    Link: https://lore.kernel.org/r/20220912183716.2126312-1-kai.vehmanen@linux.intel.com
+    Signed-off-by: Takashi Iwai <tiwai@suse.de>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit f109dd1607f83fbf7f28e59e7a1857a9ebccd9cc
+Author: Mohan Kumar <mkumard@nvidia.com>
+Date:   Tue Sep 13 11:06:41 2022 +0530
+
+    ALSA: hda/tegra: set depop delay for tegra
+    
+    commit 3c4d8c24fb6c44f426e447b04800b0ed61a7b5ae upstream.
+    
+    Reduce the suspend time by setting depop delay to 10ms for
+    tegra.
+    
+    Signed-off-by: Mohan Kumar <mkumard@nvidia.com>
+    Cc: <stable@vger.kernel.org>
+    Link: https://lore.kernel.org/r/20220913053641.23299-1-mkumard@nvidia.com
+    Signed-off-by: Takashi Iwai <tiwai@suse.de>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit a1926f11d9aa69ecca29cde7958d9a6dbdccc4aa
+Author: jerry meng <jerry-meng@foxmail.com>
+Date:   Mon Sep 5 14:35:33 2022 +0800
+
+    USB: serial: option: add Quectel RM520N
+    
+    commit d640c4cb8f2f933c0ca896541f9de7fb1ae245f4 upstream.
+    
+    add support for Quectel RM520N which is based on Qualcomm SDX62 chip.
+    
+    0x0801: DIAG + NMEA + AT + MODEM + RMNET
+    
+    T:  Bus=03 Lev=01 Prnt=01 Port=01 Cnt=02 Dev#= 10 Spd=480  MxCh= 0
+    D:  Ver= 2.10 Cls=00(>ifc ) Sub=00 Prot=00 MxPS=64 #Cfgs=  1
+    P:  Vendor=2c7c ProdID=0801 Rev= 5.04
+    S:  Manufacturer=Quectel
+    S:  Product=RM520N-GL
+    S:  SerialNumber=384af524
+    C:* #Ifs= 5 Cfg#= 1 Atr=a0 MxPwr=500mA
+    I:* If#= 0 Alt= 0 #EPs= 2 Cls=ff(vend.) Sub=ff Prot=30 Driver=option
+    E:  Ad=01(O) Atr=02(Bulk) MxPS= 512 Ivl=0ms
+    E:  Ad=81(I) Atr=02(Bulk) MxPS= 512 Ivl=0ms
+    I:* If#= 1 Alt= 0 #EPs= 3 Cls=ff(vend.) Sub=00 Prot=40 Driver=option
+    E:  Ad=83(I) Atr=03(Int.) MxPS=  10 Ivl=32ms
+    E:  Ad=82(I) Atr=02(Bulk) MxPS= 512 Ivl=0ms
+    E:  Ad=02(O) Atr=02(Bulk) MxPS= 512 Ivl=0ms
+    I:* If#= 2 Alt= 0 #EPs= 3 Cls=ff(vend.) Sub=00 Prot=00 Driver=option
+    E:  Ad=85(I) Atr=03(Int.) MxPS=  10 Ivl=32ms
+    E:  Ad=84(I) Atr=02(Bulk) MxPS= 512 Ivl=0ms
+    E:  Ad=03(O) Atr=02(Bulk) MxPS= 512 Ivl=0ms
+    I:* If#= 3 Alt= 0 #EPs= 3 Cls=ff(vend.) Sub=00 Prot=00 Driver=option
+    E:  Ad=87(I) Atr=03(Int.) MxPS=  10 Ivl=32ms
+    E:  Ad=86(I) Atr=02(Bulk) MxPS= 512 Ivl=0ms
+    E:  Ad=04(O) Atr=02(Bulk) MxPS= 512 Ivl=0ms
+    I:* If#= 4 Alt= 0 #EPs= 3 Cls=ff(vend.) Sub=ff Prot=ff Driver=qmi_wwan
+    E:  Ad=88(I) Atr=03(Int.) MxPS=   8 Ivl=32ms
+    E:  Ad=8e(I) Atr=02(Bulk) MxPS= 512 Ivl=0ms
+    E:  Ad=0f(O) Atr=02(Bulk) MxPS= 512 Ivl=0ms
+    
+    Signed-off-by: jerry meng <jerry-meng@foxmail.com>
+    Cc: stable@vger.kernel.org
+    Signed-off-by: Johan Hovold <johan@kernel.org>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 4d1d91a6343ee000c16778a8f28d9ad2b8116d39
+Author: Carl Yin(殷张成) <carl.yin@quectel.com>
+Date:   Fri Sep 2 09:49:43 2022 +0000
+
+    USB: serial: option: add Quectel BG95 0x0203 composition
+    
+    commit f8f67eff6847f9b8d753fa029723bcc54296055a upstream.
+    
+    Add support for the following Quectel BG95 composition:
+    
+    0x0203: Diag + GNSS + Modem + ECM
+    
+    usb-devices output:
+    T:  Bus=01 Lev=01 Prnt=01 Port=03 Cnt=01 Dev#=  2 Spd=480  MxCh= 0
+    D:  Ver= 2.00 Cls=ef(misc ) Sub=02 Prot=01 MxPS=64 #Cfgs=  1
+    P:  Vendor=2c7c ProdID=0203 Rev= 0.00
+    S:  Manufacturer=Quectel, Incorporated
+    S:  Product=Quectel LPWA Module
+    S:  SerialNumber=71d3a21b
+    C:* #Ifs= 5 Cfg#= 1 Atr=e0 MxPwr=500mA
+    A:  FirstIf#= 3 IfCount= 2 Cls=02(comm.) Sub=00 Prot=00
+    I:* If#= 0 Alt= 0 #EPs= 2 Cls=ff(vend.) Sub=ff Prot=30 Driver=option
+    E:  Ad=81(I) Atr=02(Bulk) MxPS= 512 Ivl=0ms
+    E:  Ad=01(O) Atr=02(Bulk) MxPS= 512 Ivl=0ms
+    I:* If#= 1 Alt= 0 #EPs= 2 Cls=ff(vend.) Sub=ff Prot=60 Driver=option
+    E:  Ad=82(I) Atr=02(Bulk) MxPS= 512 Ivl=0ms
+    E:  Ad=02(O) Atr=02(Bulk) MxPS= 512 Ivl=0ms
+    I:* If#= 2 Alt= 0 #EPs= 3 Cls=ff(vend.) Sub=ff Prot=ff Driver=option
+    E:  Ad=83(I) Atr=03(Int.) MxPS=  64 Ivl=2ms
+    E:  Ad=84(I) Atr=02(Bulk) MxPS= 512 Ivl=0ms
+    E:  Ad=03(O) Atr=02(Bulk) MxPS= 512 Ivl=0ms
+    I:* If#= 3 Alt= 0 #EPs= 1 Cls=02(comm.) Sub=06 Prot=00 Driver=cdc_ether
+    E:  Ad=85(I) Atr=03(Int.) MxPS=  64 Ivl=2ms
+    I:  If#= 4 Alt= 0 #EPs= 0 Cls=0a(data ) Sub=00 Prot=00 Driver=cdc_ether
+    I:* If#= 4 Alt= 1 #EPs= 2 Cls=0a(data ) Sub=00 Prot=00 Driver=cdc_ether
+    E:  Ad=86(I) Atr=02(Bulk) MxPS= 512 Ivl=0ms
+    E:  Ad=04(O) Atr=02(Bulk) MxPS= 512 Ivl=0ms
+    
+    Signed-off-by: Carl Yin <carl.yin@quectel.com>
+    Cc: stable@vger.kernel.org
+    Signed-off-by: Johan Hovold <johan@kernel.org>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 3a26651a785625dd1b86834f34ca6163bf0fce79
+Author: Alan Stern <stern@rowland.harvard.edu>
+Date:   Thu Sep 1 10:36:34 2022 -0400
+
+    USB: core: Fix RST error in hub.c
+    
+    commit 766a96dc558385be735a370db867e302c8f22153 upstream.
+    
+    A recent commit added an invalid RST expression to a kerneldoc comment
+    in hub.c.  The fix is trivial.
+    
+    Fixes: 9c6d778800b9 ("USB: core: Prevent nested device-reset calls")
+    Cc: <stable@vger.kernel.org>
+    Reported-by: Stephen Rothwell <sfr@canb.auug.org.au>
+    Reviewed-by: Bagas Sanjaya <bagasdotme@gmail.com>
+    Signed-off-by: Alan Stern <stern@rowland.harvard.edu>
+    Link: https://lore.kernel.org/r/YxDDcsLtRZ7c20pq@rowland.harvard.edu
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 381f77b6a69a998a3c60ffea5c81965192ddc3d0
+Author: Mark Brown <broonie@kernel.org>
+Date:   Mon Sep 5 15:22:55 2022 +0100
+
+    arm64/bti: Disable in kernel BTI when cross section thunks are broken
+    
+    [ Upstream commit c0a454b9044fdc99486853aa424e5b3be2107078 ]
+    
+    GCC does not insert a `bti c` instruction at the beginning of a function
+    when it believes that all callers reach the function through a direct
+    branch[1]. Unfortunately the logic it uses to determine this is not
+    sufficiently robust, for example not taking account of functions being
+    placed in different sections which may be loaded separately, so we may
+    still see thunks being generated to these functions. If that happens,
+    the first instruction in the callee function will result in a Branch
+    Target Exception due to the missing landing pad.
+    
+    While this has currently only been observed in the case of modules
+    having their main code loaded sufficiently far from their init section
+    to require thunks it could potentially happen for other cases so the
+    safest thing is to disable BTI for the kernel when building with an
+    affected toolchain.
+    
+    [1]: https://gcc.gnu.org/bugzilla/show_bug.cgi?id=106671
+    
+    Reported-by: D Scott Phillips <scott@os.amperecomputing.com>
+    [Bits of the commit message are lifted from his report & workaround]
+    Signed-off-by: Mark Brown <broonie@kernel.org>
+    Link: https://lore.kernel.org/r/20220905142255.591990-1-broonie@kernel.org
+    Cc: <stable@vger.kernel.org> # v5.10+
+    Signed-off-by: Will Deacon <will@kernel.org>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 050de2898039560060dc2edca3d032ef62132fc1
+Author: Nathan Chancellor <nathan@kernel.org>
+Date:   Mon Jul 12 14:46:37 2021 -0700
+
+    arm64: Restrict ARM64_BTI_KERNEL to clang 12.0.0 and newer
+    
+    [ Upstream commit 8cdd23c23c3d481a43b4aa03dcb5738812831115 ]
+    
+    Commit 97fed779f2a6 ("arm64: bti: Provide Kconfig for kernel mode BTI")
+    disabled CONFIG_ARM64_BTI_KERNEL when CONFIG_GCOV_KERNEL was enabled and
+    compiling with clang because of warnings that were seen with
+    allmodconfig because LLVM was not emitting PAC/BTI instructions for
+    compiler generated functions:
+    
+      | warning: some functions compiled with BTI and some compiled without BTI
+      | warning: not setting BTI in feature flags
+    
+    This dependency was fine for avoiding the warnings with allmodconfig
+    until commit 51c2ee6d121c ("Kconfig: Introduce ARCH_WANTS_NO_INSTR and
+    CC_HAS_NO_PROFILE_FN_ATTR"), which prevents CONFIG_GCOV_KERNEL from
+    being enabled with clang 12.0.0 or older because those versions do not
+    support the no_profile_instrument_function attribute.
+    
+    As a result, CONFIG_ARM64_BTI_KERNEL gets enabled with allmodconfig and
+    there are more warnings like the ones above due to CONFIG_KASAN, which
+    suffers from the same problem as CONFIG_GCOV_KERNEL. This was most
+    likely not noticed at the time because allmodconfig +
+    CONFIG_GCOV_KERNEL=n was not tested. defconfig + CONFIG_KASAN=y is
+    enough to reproduce the same warnings as above.
+    
+    The root cause of the warnings was resolved in LLVM during the 12.0.0
+    release so rather than play whack-a-mole with the dependencies, just
+    update CONFIG_ARM64_BTI_KERNEL to require clang 12.0.0, which will have
+    all of the issues ironed out.
+    
+    Link: https://github.com/ClangBuiltLinux/linux/issues/1428
+    Link: https://github.com/ClangBuiltLinux/continuous-integration2/runs/3010034706?check_suite_focus=true
+    Link: https://github.com/ClangBuiltLinux/continuous-integration2/runs/3010035725?check_suite_focus=true
+    Link: https://github.com/llvm/llvm-project/commit/a88c722e687e6780dcd6a58718350dc76fcc4cc9
+    Signed-off-by: Nathan Chancellor <nathan@kernel.org>
+    Reviewed-by: Nick Desaulniers <ndesaulniers@google.com>
+    Link: https://lore.kernel.org/r/20210712214636.3134425-1-nathan@kernel.org
+    Signed-off-by: Will Deacon <will@kernel.org>
+    Stable-dep-of: c0a454b9044f ("arm64/bti: Disable in kernel BTI when cross section thunks are broken")
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 561d86bd0e288ad236e4f208ce2ae418a6e0e431
+Author: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+Date:   Fri Sep 2 09:10:08 2022 +0200
+
+    Revert "usb: gadget: udc-xilinx: replace memcpy with memcpy_toio"
+    
+    [ Upstream commit fe0a2ac7c627b064c479ad0c3b25e531d342e048 ]
+    
+    This reverts commit 8cb339f1c1f04baede9d54c1e40ac96247a6393b as it
+    throws up a bunch of sparse warnings as reported by the kernel test
+    robot.
+    
+    Reported-by: kernel test robot <lkp@intel.com>
+    Link: https://lore.kernel.org/r/202209020044.CX2PfZzM-lkp@intel.com
+    Fixes: 8cb339f1c1f0 ("usb: gadget: udc-xilinx: replace memcpy with memcpy_toio")
+    Cc: stable@vger.kernel.org
+    Cc: Linus Walleij <linus.walleij@linaro.org>
+    Cc: Piyush Mehta <piyush.mehta@amd.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 578d644edc7d2c1ff53f7e4d0a25da473deb4a03
+Author: Alex Williamson <alex.williamson@redhat.com>
+Date:   Mon Aug 29 21:05:40 2022 -0600
+
+    vfio/type1: Unpin zero pages
+    
+    [ Upstream commit 873aefb376bbc0ed1dd2381ea1d6ec88106fdbd4 ]
+    
+    There's currently a reference count leak on the zero page.  We increment
+    the reference via pin_user_pages_remote(), but the page is later handled
+    as an invalid/reserved page, therefore it's not accounted against the
+    user and not unpinned by our put_pfn().
+    
+    Introducing special zero page handling in put_pfn() would resolve the
+    leak, but without accounting of the zero page, a single user could
+    still create enough mappings to generate a reference count overflow.
+    
+    The zero page is always resident, so for our purposes there's no reason
+    to keep it pinned.  Therefore, add a loop to walk pages returned from
+    pin_user_pages_remote() and unpin any zero pages.
+    
+    Cc: stable@vger.kernel.org
+    Reported-by: Luboslav Pivarc <lpivarc@redhat.com>
+    Reviewed-by: David Hildenbrand <david@redhat.com>
+    Link: https://lore.kernel.org/r/166182871735.3518559.8884121293045337358.stgit@omen
+    Signed-off-by: Alex Williamson <alex.williamson@redhat.com>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit abb560abdf47f3091eb45d345b28397bb852ccc7
+Author: Daniel Jordan <daniel.m.jordan@oracle.com>
+Date:   Fri Feb 19 11:13:04 2021 -0500
+
+    vfio/type1: Prepare for batched pinning with struct vfio_batch
+    
+    [ Upstream commit 4b6c33b3229678e38a6b0bbd4367d4b91366b523 ]
+    
+    Get ready to pin more pages at once with struct vfio_batch, which
+    represents a batch of pinned pages.
+    
+    The struct has a fallback page pointer to avoid two unlikely scenarios:
+    pointlessly allocating a page if disable_hugepages is enabled or failing
+    the whole pinning operation if the kernel can't allocate memory.
+    
+    vaddr_get_pfn() becomes vaddr_get_pfns() to prepare for handling
+    multiple pages, though for now only one page is stored in the pages
+    array.
+    
+    Signed-off-by: Daniel Jordan <daniel.m.jordan@oracle.com>
+    Signed-off-by: Alex Williamson <alex.williamson@redhat.com>
+    Stable-dep-of: 873aefb376bb ("vfio/type1: Unpin zero pages")
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 38cb9b868369c42a240de5b0da4bff226b1df953
+Author: Daniel Jordan <daniel.m.jordan@oracle.com>
+Date:   Fri Feb 19 11:13:03 2021 -0500
+
+    vfio/type1: Change success value of vaddr_get_pfn()
+    
+    [ Upstream commit be16c1fd99f41abebc0bf965d5d29cd18c9d271e ]
+    
+    vaddr_get_pfn() simply returns 0 on success.  Have it report the number
+    of pfns successfully gotten instead, whether from page pinning or
+    follow_fault_pfn(), which will be used later when batching pinning.
+    
+    Change the last check in vfio_pin_pages_remote() for consistency with
+    the other two.
+    
+    Signed-off-by: Daniel Jordan <daniel.m.jordan@oracle.com>
+    Signed-off-by: Alex Williamson <alex.williamson@redhat.com>
+    Stable-dep-of: 873aefb376bb ("vfio/type1: Unpin zero pages")
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit c4adbfa9cea72ab192c68043ebc0b8203d5ada27
+Author: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+Date:   Wed Aug 31 10:34:25 2022 +0200
+
+    Revert "usb: add quirks for Lenovo OneLink+ Dock"
+    
+    [ Upstream commit 58bfe7d8e31014d7ce246788df99c56e3cfe6c68 ]
+    
+    This reverts commit 3d5f70949f1b1168fbb17d06eb5c57e984c56c58.
+    
+    The quirk does not work properly, more work is needed to determine what
+    should be done here.
+    
+    Reported-by: Oliver Neukum <oneukum@suse.com>
+    Cc: Jean-Francois Le Fillatre <jflf_kernel@gmx.com>
+    Cc: stable <stable@kernel.org>
+    Fixes: 3d5f70949f1b ("usb: add quirks for Lenovo OneLink+ Dock")
+    Link: https://lore.kernel.org/r/9a17ea86-079f-510d-e919-01bc53a6d09f@gmx.com
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 905e8be5284b09e69cb16a384f796c61a54c0bb1
+Author: Pawel Laszczak <pawell@cadence.com>
+Date:   Thu Aug 25 08:21:37 2022 +0200
+
+    usb: cdns3: fix issue with rearming ISO OUT endpoint
+    
+    [ Upstream commit b46a6b09fa056042a302b181a1941f0056944603 ]
+    
+    ISO OUT endpoint is enabled during queuing first usb request
+    in transfer ring and disabled when TRBERR is reported by controller.
+    After TRBERR and before next transfer added to TR driver must again
+    reenable endpoint but does not.
+    To solve this issue during processing TRBERR event driver must
+    set the flag EP_UPDATE_EP_TRBADDR in priv_ep->flags field.
+    
+    Fixes: 7733f6c32e36 ("usb: cdns3: Add Cadence USB3 DRD Driver")
+    cc: <stable@vger.kernel.org>
+    Acked-by: Peter Chen <peter.chen@kernel.org>
+    Signed-off-by: Pawel Laszczak <pawell@cadence.com>
+    Link: https://lore.kernel.org/r/20220825062137.5766-1-pawell@cadence.com
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 8fcb5f027b3967cba11f941c459f9834ea3a7a35
+Author: Pawel Laszczak <pawell@cadence.com>
+Date:   Thu Aug 25 08:22:07 2022 +0200
+
+    usb: cdns3: fix incorrect handling TRB_SMM flag for ISOC transfer
+    
+    [ Upstream commit d5dcc33677d7415c5f23b3c052f9e80cbab9ea4e ]
+    
+    The TRB_SMM flag indicates that DMA has completed the TD service with
+    this TRB. Usually it’s a last TRB in TD. In case of ISOC transfer for
+    bInterval > 1 each ISOC transfer contains more than one TD associated
+    with usb request (one TD per ITP). In such case the TRB_SMM flag will
+    be set in every TD and driver will recognize the end of transfer after
+    processing the first TD with TRB_SMM. In result driver stops updating
+    request->actual and returns incorrect actual length.
+    To fix this issue driver additionally must check TRB_CHAIN which is not
+    used for isochronous transfers.
+    
+    Fixes: 249f0a25e8be ("usb: cdns3: gadget: handle sg list use case at completion correctly")
+    cc: <stable@vger.kernel.org>
+    Acked-by: Peter Chen <peter.chen@kernel.org>
+    Signed-off-by: Pawel Laszczak <pawell@cadence.com>
+    Link: https://lore.kernel.org/r/20220825062207.5824-1-pawell@cadence.com
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit f457bb21984b9e412a7bb56ea74482da621e6046
+Author: Piyush Mehta <piyush.mehta@amd.com>
+Date:   Wed Aug 24 12:42:53 2022 +0530
+
+    usb: gadget: udc-xilinx: replace memcpy with memcpy_toio
+    
+    [ Upstream commit 8cb339f1c1f04baede9d54c1e40ac96247a6393b ]
+    
+    For ARM processor, unaligned access to device memory is not allowed.
+    Method memcpy does not take care of alignment.
+    
+    USB detection failure with the unaligned address of memory access, with
+    below kernel crash. To fix the unaligned address the kernel panic issue,
+    replace memcpy with memcpy_toio method.
+    
+    Kernel crash:
+    Unable to handle kernel paging request at virtual address ffff80000c05008a
+    Mem abort info:
+      ESR = 0x96000061
+      EC = 0x25: DABT (current EL), IL = 32 bits
+      SET = 0, FnV = 0
+      EA = 0, S1PTW = 0
+      FSC = 0x21: alignment fault
+    Data abort info:
+      ISV = 0, ISS = 0x00000061
+      CM = 0, WnR = 1
+    swapper pgtable: 4k pages, 48-bit VAs, pgdp=000000000143b000
+    [ffff80000c05008a] pgd=100000087ffff003, p4d=100000087ffff003,
+    pud=100000087fffe003, pmd=1000000800bcc003, pte=00680000a0010713
+    Internal error: Oops: 96000061 [#1] SMP
+    Modules linked in:
+    CPU: 0 PID: 0 Comm: swapper/0 Not tainted 5.15.19-xilinx-v2022.1 #1
+    Hardware name: ZynqMP ZCU102 Rev1.0 (DT)
+    pstate: 200000c5 (nzCv daIF -PAN -UAO -TCO -DIT -SSBS BTYPE=--)
+    pc : __memcpy+0x30/0x260
+    lr : __xudc_ep0_queue+0xf0/0x110
+    sp : ffff800008003d00
+    x29: ffff800008003d00 x28: ffff800009474e80 x27: 00000000000000a0
+    x26: 0000000000000100 x25: 0000000000000012 x24: ffff000800bc8080
+    x23: 0000000000000001 x22: 0000000000000012 x21: ffff000800bc8080
+    x20: 0000000000000012 x19: ffff000800bc8080 x18: 0000000000000000
+    x17: ffff800876482000 x16: ffff800008004000 x15: 0000000000004000
+    x14: 00001f09785d0400 x13: 0103020101005567 x12: 0781400000000200
+    x11: 00000000c5672a10 x10: 00000000000008d0 x9 : ffff800009463cf0
+    x8 : ffff8000094757b0 x7 : 0201010055670781 x6 : 4000000002000112
+    x5 : ffff80000c05009a x4 : ffff000800a15012 x3 : ffff00080362ad80
+    x2 : 0000000000000012 x1 : ffff000800a15000 x0 : ffff80000c050088
+    Call trace:
+     __memcpy+0x30/0x260
+     xudc_ep0_queue+0x3c/0x60
+     usb_ep_queue+0x38/0x44
+     composite_ep0_queue.constprop.0+0x2c/0xc0
+     composite_setup+0x8d0/0x185c
+     configfs_composite_setup+0x74/0xb0
+     xudc_irq+0x570/0xa40
+     __handle_irq_event_percpu+0x58/0x170
+     handle_irq_event+0x60/0x120
+     handle_fasteoi_irq+0xc0/0x220
+     handle_domain_irq+0x60/0x90
+     gic_handle_irq+0x74/0xa0
+     call_on_irq_stack+0x2c/0x60
+     do_interrupt_handler+0x54/0x60
+     el1_interrupt+0x30/0x50
+     el1h_64_irq_handler+0x18/0x24
+     el1h_64_irq+0x78/0x7c
+     arch_cpu_idle+0x18/0x2c
+     do_idle+0xdc/0x15c
+     cpu_startup_entry+0x28/0x60
+     rest_init+0xc8/0xe0
+     arch_call_rest_init+0x10/0x1c
+     start_kernel+0x694/0x6d4
+     __primary_switched+0xa4/0xac
+    
+    Fixes: 1f7c51660034 ("usb: gadget: Add xilinx usb2 device support")
+    Cc: stable@vger.kernel.org
+    Reviewed-by: Linus Walleij <linus.walleij@linaro.org>
+    Signed-off-by: Piyush Mehta <piyush.mehta@amd.com>
+    Link: https://lore.kernel.org/r/20220824071253.1261096-1-piyush.mehta@amd.com
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit b9e5c47e335781e371cd89a025dd5fc36f2ec1cd
+Author: Jean-Francois Le Fillatre <jflf_kernel@gmx.com>
+Date:   Wed Aug 24 21:13:21 2022 +0200
+
+    usb: add quirks for Lenovo OneLink+ Dock
+    
+    [ Upstream commit 3d5f70949f1b1168fbb17d06eb5c57e984c56c58 ]
+    
+    The Lenovo OneLink+ Dock contains two VL812 USB3.0 controllers:
+    17ef:1018 upstream
+    17ef:1019 downstream
+    
+    Those two controllers both have problems with some USB3.0 devices,
+    particularly self-powered ones. Typical error messages include:
+    
+      Timeout while waiting for setup device command
+      device not accepting address X, error -62
+      unable to enumerate USB device
+    
+    By process of elimination the controllers themselves were identified as
+    the cause of the problem. Through trial and error the issue was solved
+    by using USB_QUIRK_RESET_RESUME for both chips.
+    
+    Signed-off-by: Jean-Francois Le Fillatre <jflf_kernel@gmx.com>
+    Cc: stable <stable@kernel.org>
+    Link: https://lore.kernel.org/r/20220824191320.17883-1-jflf_kernel@gmx.com
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 345bdea212e341cc55e1105283a7787edcbca448
+Author: Sergiu Moga <sergiu.moga@microchip.com>
+Date:   Wed Aug 24 17:29:03 2022 +0300
+
+    tty: serial: atmel: Preserve previous USART mode if RS485 disabled
+    
+    [ Upstream commit 692a8ebcfc24f4a5bea0eb2967e450f584193da6 ]
+    
+    Whenever the atmel_rs485_config() driver method would be called,
+    the USART mode is reset to normal mode before even checking if
+    RS485 flag is set, thus resulting in losing the previous USART
+    mode in the case where the checking fails.
+    
+    Some tools, such as `linux-serial-test`, lead to the driver calling
+    this method when doing the setup of the serial port: after setting the
+    port mode (Hardware Flow Control, Normal Mode, RS485 Mode, etc.),
+    `linux-serial-test` tries to enable/disable RS485 depending on
+    the commandline arguments that were passed.
+    
+    Example of how this issue could reveal itself:
+    When doing a serial communication with Hardware Flow Control through
+    `linux-serial-test`, the tool would lead to the driver roughly doing
+    the following:
+    - set the corresponding bit to 1 (ATMEL_US_USMODE_HWHS bit in the
+    ATMEL_US_MR register) through the atmel_set_termios() to enable
+    Hardware Flow Control
+    - disable RS485 through the atmel_config_rs485() method
+    Thus, when the latter is called, the mode will be reset and the
+    previously set bit is unset, leaving USART in normal mode instead of
+    the expected Hardware Flow Control mode.
+    
+    This fix ensures that this reset is only done if the checking for
+    RS485 succeeds and that the previous mode is preserved otherwise.
+    
+    Fixes: e8faff7330a35 ("ARM: 6092/1: atmel_serial: support for RS485 communications")
+    Cc: stable <stable@kernel.org>
+    Reviewed-by: Ilpo Järvinen <ilpo.jarvinen@linux.intel.com>
+    Signed-off-by: Sergiu Moga <sergiu.moga@microchip.com>
+    Link: https://lore.kernel.org/r/20220824142902.502596-1-sergiu.moga@microchip.com
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 730f78c51bdc148aa2bb477c34dfeec9bca68896
+Author: Lino Sanfilippo <LinoSanfilippo@gmx.de>
+Date:   Sun Apr 10 12:46:42 2022 +0200
+
+    serial: atmel: remove redundant assignment in rs485_config
+    
+    [ Upstream commit 60efd0513916f195dd85bfbf21653f74f9ab019c ]
+    
+    In uart_set_rs485_config() the serial core already assigns the passed
+    serial_rs485 struct to the uart port.
+    
+    So remove the assignment from the drivers rs485_config() function to avoid
+    redundancy.
+    
+    Reviewed-by: Claudiu Beznea <claudiu.beznea@microchip.com>
+    Acked-by: Richard Genoud <richard.genoud@gmail.com>
+    Signed-off-by: Lino Sanfilippo <LinoSanfilippo@gmx.de>
+    Link: https://lore.kernel.org/r/20220410104642.32195-10-LinoSanfilippo@gmx.de
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+    Stable-dep-of: 692a8ebcfc24 ("tty: serial: atmel: Preserve previous USART mode if RS485 disabled")
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit b3f2adf4262135a8b71f329da82b5c60a51309c6
+Author: Adrian Hunter <adrian.hunter@intel.com>
+Date:   Mon Aug 15 10:33:21 2022 +0300
+
+    mmc: core: Fix inconsistent sd3_bus_mode at UHS-I SD voltage switch failure
+    
+    [ Upstream commit 63f1560930e4e1c4f6279b8ae715c9841fe1a6d3 ]
+    
+    If re-initialization results is a different signal voltage, because the
+    voltage switch failed previously, but not this time (or vice versa), then
+    sd3_bus_mode will be inconsistent with the card because the SD_SWITCH
+    command is done only upon first initialization.
+    
+    Fix by always reading SD_SWITCH information during re-initialization, which
+    also means it does not need to be re-read later for the 1.8V fixup
+    workaround.
+    
+    Note, brief testing showed SD_SWITCH took about 1.8ms to 2ms which added
+    about 1% to 1.5% to the re-initialization time, so it's not particularly
+    significant.
+    
+    Reported-by: Seunghui Lee <sh043.lee@samsung.com>
+    Signed-off-by: Adrian Hunter <adrian.hunter@intel.com>
+    Reviewed-by: Seunghui Lee <sh043.lee@samsung.com>
+    Tested-by: Seunghui Lee <sh043.lee@samsung.com>
+    Cc: stable@vger.kernel.org
+    Link: https://lore.kernel.org/r/20220815073321.63382-3-adrian.hunter@intel.com
+    Signed-off-by: Ulf Hansson <ulf.hansson@linaro.org>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 7780b3dda212babc7b8988c9f8f82f5324e8f7cf
+Author: Ikjoon Jang <ikjn@chromium.org>
+Date:   Thu Aug 5 13:39:57 2021 +0800
+
+    usb: xhci-mtk: relax TT periodic bandwidth allocation
+    
+    [ Upstream commit 548011957d1d72e0b662300c8b32b81d593b796e ]
+    
+    Currently xhci-mtk needs software-managed bandwidth allocation for
+    periodic endpoints, it allocates the microframe index for the first
+    start-split packet for each endpoint. As this index allocation logic
+    should avoid the conflicts with other full/low-speed periodic endpoints,
+    it uses the worst case byte budgets on high-speed bus bandwidth
+    For example, for an isochronos IN endpoint with 192 bytes budget,
+    it will consume the whole 4 u-frames(188 * 4) while the actual
+    full-speed bus budget should be just 192bytes.
+    
+    This patch changes the low/full-speed bandwidth allocation logic
+    to use "approximate" best case budget for lower speed bandwidth
+    management. For the same endpoint from the above example, the
+    approximate best case budget is now reduced to (188 * 2) bytes.
+    
+    Without this patch, many usb audio headsets with 3 interfaces
+    (audio input, audio output, and HID) cannot be configured
+    on xhci-mtk.
+    
+    Signed-off-by: Ikjoon Jang <ikjn@chromium.org>
+    Link: https://lore.kernel.org/r/20210805133937.1.Ia8174b875bc926c12ce427a5a1415dea31cc35ae@changeid
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 99f48a3a6eecb57a4378f414bee5aa1a81270f8c
+Author: Chunfeng Yun <chunfeng.yun@mediatek.com>
+Date:   Fri Jun 18 13:46:05 2021 +0800
+
+    usb: xhci-mtk: allow multiple Start-Split in a microframe
+    
+    [ Upstream commit d3997fce189fc4423169c51a81ba5ca01144d886 ]
+    
+    This patch is used to relax bandwidth schedule by allowing multiple
+    Start-Split in the same microframe.
+    
+    Reviewed-and-Tested-by: Ikjoon Jang <ikjn@chromium.org>
+    Signed-off-by: Chunfeng Yun <chunfeng.yun@mediatek.com>
+    Link: https://lore.kernel.org/r/1623995165-25759-1-git-send-email-chunfeng.yun@mediatek.com
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+    Stable-dep-of: 548011957d1d ("usb: xhci-mtk: relax TT periodic bandwidth allocation")
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit b19f9f412216a128ae4d7d50970ab5bf0537afc3
+Author: Chunfeng Yun <chunfeng.yun@mediatek.com>
+Date:   Mon Mar 8 10:52:02 2021 +0800
+
+    usb: xhci-mtk: add some schedule error number
+    
+    [ Upstream commit ccda8c224c0701caac007311d06a2de9543a7590 ]
+    
+    This is used to provide more information about which case
+    causes bandwidth schedule failure.
+    
+    Signed-off-by: Chunfeng Yun <chunfeng.yun@mediatek.com>
+    Link: https://lore.kernel.org/r/9771f44093053b581e9c4be4b7fb68d9fcecad08.1615170625.git.chunfeng.yun@mediatek.com
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+    Stable-dep-of: 548011957d1d ("usb: xhci-mtk: relax TT periodic bandwidth allocation")
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 402fa9214e128ee6fc5d7dd82c3b81a41264bbfb
+Author: Chunfeng Yun <chunfeng.yun@mediatek.com>
+Date:   Mon Mar 8 10:51:55 2021 +0800
+
+    usb: xhci-mtk: add a function to (un)load bandwidth info
+    
+    [ Upstream commit 338af695fffb12a9407c376ce0cebce896c15050 ]
+    
+    Extract a function to load/unload bandwidth info, and remove
+    a dummy check of TT offset.
+    
+    Signed-off-by: Chunfeng Yun <chunfeng.yun@mediatek.com>
+    Link: https://lore.kernel.org/r/6fbc000756a4a4a7efbce651b785fee7561becb6.1615170625.git.chunfeng.yun@mediatek.com
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+    Stable-dep-of: 548011957d1d ("usb: xhci-mtk: relax TT periodic bandwidth allocation")
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit c2e7000b137bd5ab8979b409afa39c9e87ff4b51
+Author: Chunfeng Yun <chunfeng.yun@mediatek.com>
+Date:   Mon Mar 8 10:51:54 2021 +0800
+
+    usb: xhci-mtk: use @sch_tt to check whether need do TT schedule
+    
+    [ Upstream commit 4a56adf4fafbc41ceffce0c3f385f59d4fc3c16a ]
+    
+    It's clearer to use @sch_tt to check whether need do TT schedule,
+    no function is changed.
+    
+    Signed-off-by: Chunfeng Yun <chunfeng.yun@mediatek.com>
+    Link: https://lore.kernel.org/r/324a76782ccaf857a8f01f67aee435e8ec7d0e28.1615170625.git.chunfeng.yun@mediatek.com
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+    Stable-dep-of: 548011957d1d ("usb: xhci-mtk: relax TT periodic bandwidth allocation")
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit a2566a8dc5dac79718b3a1b685d9b27ca91c449b
+Author: Chunfeng Yun <chunfeng.yun@mediatek.com>
+Date:   Mon Mar 8 10:51:53 2021 +0800
+
+    usb: xhci-mtk: add only one extra CS for FS/LS INTR
+    
+    [ Upstream commit 1bf661daf6b084bc4d753f55b54f35dc98709685 ]
+    
+    In USB2 Spec:
+    "11.18.5 TT Response Generation
+    In general, there will be two (or more) complete-split
+    transactions scheduled for a periodic endpoint.
+    However, for interrupt endpoints, the maximum size of
+    the full-/low-speed transaction guarantees that it can
+    never require more than two complete-split transactions.
+    Two complete-split transactions are only required
+    when the transaction spans a microframe boundary."
+    
+    Due to the maxp is 64, and less then 188 (at most in one
+    microframe), seems never span boundary, so use only one CS
+    for FS/LS interrupt transfer, this will save some bandwidth.
+    
+    Signed-off-by: Chunfeng Yun <chunfeng.yun@mediatek.com>
+    Link: https://lore.kernel.org/r/5b9ff09f53d23cf9e5c5437db4ffc18b798bf60c.1615170625.git.chunfeng.yun@mediatek.com
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+    Stable-dep-of: 548011957d1d ("usb: xhci-mtk: relax TT periodic bandwidth allocation")
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit b1e11bc66cfd320a72e89d138102aa2cdb530a67
+Author: Chunfeng Yun <chunfeng.yun@mediatek.com>
+Date:   Mon Mar 8 10:51:52 2021 +0800
+
+    usb: xhci-mtk: get the microframe boundary for ESIT
+    
+    [ Upstream commit 7c986fbc16ae6b2f914a3ebf06a3a4a8d9bb0b7c ]
+    
+    Tune the boundary for FS/LS ESIT due to CS:
+    For ISOC out-ep, the controller starts transfer data after
+    the first SS; for others, the data is already transferred
+    before the last CS.
+    
+    Signed-off-by: Chunfeng Yun <chunfeng.yun@mediatek.com>
+    Link: https://lore.kernel.org/r/49e5a269a47984f3126a70c3fb471b0c2874b8c2.1615170625.git.chunfeng.yun@mediatek.com
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+    Stable-dep-of: 548011957d1d ("usb: xhci-mtk: relax TT periodic bandwidth allocation")
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 9c28189bb654a97efadbdb78c6ef67564b03eb3e
+Author: Wesley Cheng <quic_wcheng@quicinc.com>
+Date:   Wed Jul 27 19:06:47 2022 -0700
+
+    usb: dwc3: gadget: Avoid duplicate requests to enable Run/Stop
+    
+    [ Upstream commit 040f2dbd2010c43f33ad27249e6dac48456f4d99 ]
+    
+    Relocate the pullups_connected check until after it is ensured that there
+    are no runtime PM transitions.  If another context triggered the DWC3
+    core's runtime resume, it may have already enabled the Run/Stop.  Do not
+    re-run the entire pullup sequence again, as it may issue a core soft
+    reset while Run/Stop is already set.
+    
+    This patch depends on
+      commit 69e131d1ac4e ("usb: dwc3: gadget: Prevent repeat pullup()")
+    
+    Fixes: 77adb8bdf422 ("usb: dwc3: gadget: Allow runtime suspend if UDC unbinded")
+    Cc: stable <stable@kernel.org>
+    Signed-off-by: Wesley Cheng <quic_wcheng@quicinc.com>
+    Link: https://lore.kernel.org/r/20220728020647.9377-1-quic_wcheng@quicinc.com
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit ff23c7277fb41fe13283b1b3edd997cbddd7a18c
+Author: Thinh Nguyen <Thinh.Nguyen@synopsys.com>
+Date:   Thu Apr 21 19:22:44 2022 -0700
+
+    usb: dwc3: gadget: Don't modify GEVNTCOUNT in pullup()
+    
+    [ Upstream commit 8f8034f493b5eb1ad21ff392fd30c0cf9e71f73f ]
+    
+    If the GEVNTCOUNT indicates events in the event buffer, the driver needs
+    to acknowledge them before the controller can halt. Simply let the
+    interrupt handler acknowledges the remaining event generated by the
+    controller while polling for DSTS.DEVCTLHLT. This avoids disabling irq
+    and taking care of race condition between the interrupt handlers and
+    pullup().
+    
+    Signed-off-by: Thinh Nguyen <Thinh.Nguyen@synopsys.com>
+    Link: https://lore.kernel.org/r/ea306ec93c41ccafbdb5d16404ff3b6eca299613.1650593829.git.Thinh.Nguyen@synopsys.com
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+    Stable-dep-of: 040f2dbd2010 ("usb: dwc3: gadget: Avoid duplicate requests to enable Run/Stop")
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit ab046365c91c5444c3f0354665859726a3d5e378
+Author: Thinh Nguyen <Thinh.Nguyen@synopsys.com>
+Date:   Thu Apr 21 19:22:38 2022 -0700
+
+    usb: dwc3: gadget: Refactor pullup()
+    
+    [ Upstream commit 861c010a2ee1bc4a66d23f0da4aa22e75d8eaa24 ]
+    
+    Move soft-disconnect sequence out of dwc3_gadget_pullup(). No
+    functional change here.
+    
+    Signed-off-by: Thinh Nguyen <Thinh.Nguyen@synopsys.com>
+    Link: https://lore.kernel.org/r/4c0f259b17d95acaaa931f90276683a48a32fe22.1650593829.git.Thinh.Nguyen@synopsys.com
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+    Stable-dep-of: 040f2dbd2010 ("usb: dwc3: gadget: Avoid duplicate requests to enable Run/Stop")
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit db27874477fd5772e1a87e292e807a834d49e9f6
+Author: Thinh Nguyen <Thinh.Nguyen@synopsys.com>
+Date:   Thu Apr 21 19:22:31 2022 -0700
+
+    usb: dwc3: gadget: Prevent repeat pullup()
+    
+    [ Upstream commit 69e131d1ac4e52a59ec181ab4f8aa8c48cd8fb64 ]
+    
+    Don't do soft-disconnect if it's previously done. Likewise, don't do
+    soft-connect if the device is currently connected and running. It would
+    break normal operation.
+    
+    Currently the caller of pullup() (udc's sysfs soft_connect) only checks
+    if it had initiated disconnect to prevent repeating soft-disconnect. It
+    doesn't check for soft-connect. To be safe, let's keep the check here
+    regardless whether the udc core is fixed.
+    
+    Signed-off-by: Thinh Nguyen <Thinh.Nguyen@synopsys.com>
+    Link: https://lore.kernel.org/r/1c1345bd66c97a9d32f77d63aaadd04b7b037143.1650593829.git.Thinh.Nguyen@synopsys.com
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+    Stable-dep-of: 040f2dbd2010 ("usb: dwc3: gadget: Avoid duplicate requests to enable Run/Stop")
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 6bd182beef5deaf5ceaa5d658f22e46cc3014912
+Author: Wesley Cheng <quic_wcheng@quicinc.com>
+Date:   Tue Mar 15 18:13:58 2022 -0700
+
+    usb: dwc3: Issue core soft reset before enabling run/stop
+    
+    [ Upstream commit 0066472de157439d58454f4a55786f1045ea5681 ]
+    
+    It is recommended by the Synopsis databook to issue a DCTL.CSftReset
+    when reconnecting from a device-initiated disconnect routine.  This
+    resolves issues with enumeration during fast composition switching
+    cases, which result in an unknown device on the host.
+    
+    Reviewed-by: Thinh Nguyen <Thinh.Nguyen@synopsys.com>
+    Signed-off-by: Wesley Cheng <quic_wcheng@quicinc.com>
+    Link: https://lore.kernel.org/r/20220316011358.3057-1-quic_wcheng@quicinc.com
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+    Stable-dep-of: 040f2dbd2010 ("usb: dwc3: gadget: Avoid duplicate requests to enable Run/Stop")
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit b83692feb09c1817674839f5b0ad68e630f61e51
+Author: Wesley Cheng <wcheng@codeaurora.org>
+Date:   Thu Sep 16 19:18:52 2021 -0700
+
+    usb: dwc3: gadget: Avoid starting DWC3 gadget during UDC unbind
+    
+    [ Upstream commit 8217f07a50236779880f13e87f99224cd9117f83 ]
+    
+    There is a race present where the DWC3 runtime resume runs in parallel
+    to the UDC unbind sequence.  This will eventually lead to a possible
+    scenario where we are enabling the run/stop bit, without a valid
+    composition defined.
+    
+    Thread#1 (handling UDC unbind):
+    usb_gadget_remove_driver()
+    -->usb_gadget_disconnect()
+      -->dwc3_gadget_pullup(0)
+    --> continue UDC unbind sequence
+    -->Thread#2 is running in parallel here
+    
+    Thread#2 (handing next cable connect)
+    __dwc3_set_mode()
+      -->pm_runtime_get_sync()
+        -->dwc3_gadget_resume()
+          -->dwc->gadget_driver is NOT NULL yet
+          -->dwc3_gadget_run_stop(1)
+          --> _dwc3gadget_start()
+    ...
+    
+    Fix this by tracking the pullup disable routine, and avoiding resuming
+    of the DWC3 gadget.  Once the UDC is re-binded, that will trigger the
+    pullup enable routine, which would handle enabling the DWC3 gadget.
+    
+    Acked-by: Felipe Balbi <balbi@kernel.org>
+    Signed-off-by: Wesley Cheng <wcheng@codeaurora.org>
+    Link: https://lore.kernel.org/r/20210917021852.2037-1-wcheng@codeaurora.org
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+    Stable-dep-of: 040f2dbd2010 ("usb: dwc3: gadget: Avoid duplicate requests to enable Run/Stop")
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 2a358ad19c3ef46cdc67f69ff4782c1c1fcfa7a7
+Author: Utkarsh Patel <utkarsh.h.patel@intel.com>
+Date:   Tue Aug 16 13:16:24 2022 +0300
+
+    usb: typec: intel_pmc_mux: Add new ACPI ID for Meteor Lake IOM device
+    
+    [ Upstream commit 1b1b672cc1d4fb3065dac79efb8901bd6244ef69 ]
+    
+    This adds the necessary ACPI ID for Intel Meteor Lake
+    IOM devices.
+    
+    The callback function is_memory() is modified so that it
+    also checks if the resource descriptor passed to it is a
+    memory type "Address Space Resource Descriptor".
+    
+    On Intel Meteor Lake the ACPI memory resource is not
+    described using the "32-bit Memory Range Descriptor" because
+    the memory is outside of the 32-bit address space. The
+    memory resource is described using the "Address Space
+    Resource Descriptor" instead.
+    
+    Intel Meteor Lake is the first platform to describe the
+    memory resource for this device with Address Space Resource
+    Descriptor, but it most likely will not be the last.
+    Therefore the change to the is_memory() callback function
+    is made generic.
+    
+    Signed-off-by: Utkarsh Patel <utkarsh.h.patel@intel.com>
+    Cc: stable@vger.kernel.org
+    [ heikki: Rewrote the commit message. ]
+    Signed-off-by: Heikki Krogerus <heikki.krogerus@linux.intel.com>
+    Link: https://lore.kernel.org/r/20220816101629.69054-2-heikki.krogerus@linux.intel.com
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit c267bb83340e1831bfa30521deee6d82b09daaa4
+Author: Azhar Shaikh <azhar.shaikh@intel.com>
+Date:   Mon May 31 20:58:43 2021 -0700
+
+    usb: typec: intel_pmc_mux: Update IOM port status offset for AlderLake
+    
+    [ Upstream commit ca5ce82529104e96ccc5e1888979258e233e1644 ]
+    
+    Intel AlderLake(ADL) IOM has a different IOM port status offset than
+    Intel TigerLake.
+    Add a new ACPI ID for ADL and use the IOM port status offset as per
+    the platform.
+    
+    Acked-by: Heikki Krogerus <heikki.krogerus@linux.intel.com>
+    Signed-off-by: Azhar Shaikh <azhar.shaikh@intel.com>
+    Link: https://lore.kernel.org/r/20210601035843.71150-1-azhar.shaikh@intel.com
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+    Stable-dep-of: 1b1b672cc1d4 ("usb: typec: intel_pmc_mux: Add new ACPI ID for Meteor Lake IOM device")
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 7b0db849ea030a70b8fb9c9afec67c81f955482e
+Author: Alex Deucher <alexander.deucher@amd.com>
+Date:   Tue Aug 30 10:59:49 2022 -0400
+
+    drm/amdgpu: make sure to init common IP before gmc
+    
+    [ Upstream commit a8671493d2074950553da3cf07d1be43185ef6c6 ]
+    
+    Move common IP init before GMC init so that HDP gets
+    remapped before GMC init which uses it.
+    
+    This fixes the Unsupported Request error reported through
+    AER during driver load. The error happens as a write happens
+    to the remap offset before real remapping is done.
+    
+    Link: https://bugzilla.kernel.org/show_bug.cgi?id=216373
+    
+    The error was unnoticed before and got visible because of the commit
+    referenced below. This doesn't fix anything in the commit below, rather
+    fixes the issue in amdgpu exposed by the commit. The reference is only
+    to associate this commit with below one so that both go together.
+    
+    Fixes: 8795e182b02d ("PCI/portdrv: Don't disable AER reporting in get_port_device_capability()")
+    
+    Acked-by: Christian König <christian.koenig@amd.com>
+    Reviewed-by: Lijo Lazar <lijo.lazar@amd.com>
+    Signed-off-by: Alex Deucher <alexander.deucher@amd.com>
+    Cc: stable@vger.kernel.org
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 9d18013dac863377c5a2acc27eebcbfb4450df5c
+Author: Victor Skvortsov <victor.skvortsov@amd.com>
+Date:   Thu Dec 16 17:01:45 2021 +0000
+
+    drm/amdgpu: Separate vf2pf work item init from virt data exchange
+    
+    [ Upstream commit 892deb48269c65376f3eeb5b4c032ff2c2979bd7 ]
+    
+    We want to be able to call virt data exchange conditionally
+    after gmc sw init to reserve bad pages as early as possible.
+    Since this is a conditional call, we will need
+    to call it again unconditionally later in the init sequence.
+    
+    Refactor the data exchange function so it can be
+    called multiple times without re-initializing the work item.
+    
+    v2: Cleaned up the code. Kept the original call to init_exchange_data()
+    inside early init to initialize the work item, afterwards call
+    exchange_data() when needed.
+    
+    Signed-off-by: Victor Skvortsov <victor.skvortsov@amd.com>
+    Reviewed By: Shaoyun.liu <Shaoyun.liu@amd.com>
+    Signed-off-by: Alex Deucher <alexander.deucher@amd.com>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 87a4e51fb8d6de643851c376a8ee9239d94f303c
+Author: Peng Ju Zhou <PengJu.Zhou@amd.com>
+Date:   Mon Mar 29 15:47:20 2021 +0800
+
+    drm/amdgpu: indirect register access for nv12 sriov
+    
+    [ Upstream commit 8b8a162da820d48bb94261ae4684f2c839ce148c ]
+    
+    unify host driver and guest driver indirect access
+    control bits names
+    
+    Signed-off-by: Peng Ju Zhou <PengJu.Zhou@amd.com>
+    Reviewed-by: Emily.Deng <Emily.Deng@amd.com>
+    Signed-off-by: Alex Deucher <alexander.deucher@amd.com>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 9f55f36f749a7608eeef57d7d72991a9bd557341
+Author: Alex Deucher <alexander.deucher@amd.com>
+Date:   Fri Sep 9 11:53:27 2022 -0400
+
+    drm/amdgpu: move nbio sdma_doorbell_range() into sdma code for vega
+    
+    [ Upstream commit e3163bc8ffdfdb405e10530b140135b2ee487f89 ]
+    
+    This mirrors what we do for other asics and this way we are
+    sure the sdma doorbell range is properly initialized.
+    
+    There is a comment about the way doorbells on gfx9 work that
+    requires that they are initialized for other IPs before GFX
+    is initialized.  However, the statement says that it applies to
+    multimedia as well, but the VCN code currently initializes
+    doorbells after GFX and there are no known issues there.  In my
+    testing at least I don't see any problems on SDMA.
+    
+    This is a prerequisite for fixing the Unsupported Request error
+    reported through AER during driver load.
+    
+    Link: https://bugzilla.kernel.org/show_bug.cgi?id=216373
+    
+    The error was unnoticed before and got visible because of the commit
+    referenced below. This doesn't fix anything in the commit below, rather
+    fixes the issue in amdgpu exposed by the commit. The reference is only
+    to associate this commit with below one so that both go together.
+    
+    Fixes: 8795e182b02d ("PCI/portdrv: Don't disable AER reporting in get_port_device_capability()")
+    
+    Acked-by: Christian König <christian.koenig@amd.com>
+    Reviewed-by: Lijo Lazar <lijo.lazar@amd.com>
+    Signed-off-by: Alex Deucher <alexander.deucher@amd.com>
+    Cc: stable@vger.kernel.org
+    Signed-off-by: Sasha Levin <sashal@kernel.org>

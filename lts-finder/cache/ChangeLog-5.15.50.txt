@@ -1,0 +1,341 @@
+commit 18a33c8dabb88b50b860e0177a73933f2c0ddf68
+Author: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+Date:   Sat Jun 25 15:18:40 2022 +0200
+
+    Linux 5.15.50
+    
+    Link: https://lore.kernel.org/r/20220623164322.288837280@linuxfoundation.org
+    Tested-by: Florian Fainelli <f.fainelli@gmail.com>
+    Tested-by: Shuah Khan <skhan@linuxfoundation.org>
+    Tested-by: Bagas Sanjaya <bagasdotme@gmail.com>
+    Tested-by: Jon Hunter <jonathanh@nvidia.com>
+    Tested-by: Sudip Mukherjee <sudip.mukherjee@codethink.co.uk>
+    Tested-by: Ron Economos <re@w6rz.net>
+    Tested-by: Guenter Roeck <linux@roeck-us.net>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit f1304f9763954fa7738b4cc7564a8f70244fa989
+Author: Will Deacon <will@kernel.org>
+Date:   Fri Jun 10 16:12:27 2022 +0100
+
+    arm64: mm: Don't invalidate FROM_DEVICE buffers at start of DMA transfer
+    
+    commit c50f11c6196f45c92ca48b16a5071615d4ae0572 upstream.
+    
+    Invalidating the buffer memory in arch_sync_dma_for_device() for
+    FROM_DEVICE transfers
+    
+    When using the streaming DMA API to map a buffer prior to inbound
+    non-coherent DMA (i.e. DMA_FROM_DEVICE), we invalidate any dirty CPU
+    cachelines so that they will not be written back during the transfer and
+    corrupt the buffer contents written by the DMA. This, however, poses two
+    potential problems:
+    
+      (1) If the DMA transfer does not write to every byte in the buffer,
+          then the unwritten bytes will contain stale data once the transfer
+          has completed.
+    
+      (2) If the buffer has a virtual alias in userspace, then stale data
+          may be visible via this alias during the period between performing
+          the cache invalidation and the DMA writes landing in memory.
+    
+    Address both of these issues by cleaning (aka writing-back) the dirty
+    lines in arch_sync_dma_for_device(DMA_FROM_DEVICE) instead of discarding
+    them using invalidation.
+    
+    Cc: Ard Biesheuvel <ardb@kernel.org>
+    Cc: Christoph Hellwig <hch@lst.de>
+    Cc: Robin Murphy <robin.murphy@arm.com>
+    Cc: Russell King <linux@armlinux.org.uk>
+    Cc: <stable@vger.kernel.org>
+    Link: https://lore.kernel.org/r/20220606152150.GA31568@willie-the-truck
+    Signed-off-by: Will Deacon <will@kernel.org>
+    Reviewed-by: Ard Biesheuvel <ardb@kernel.org>
+    Link: https://lore.kernel.org/r/20220610151228.4562-2-will@kernel.org
+    Signed-off-by: Catalin Marinas <catalin.marinas@arm.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 7c622181faeb28bb7976a47e8c6179061d4d760f
+Author: Lukas Wunner <lukas@wunner.de>
+Date:   Sun Jan 23 05:21:14 2022 +0100
+
+    serial: core: Initialize rs485 RTS polarity already on probe
+    
+    commit 2dd8a74fddd21b95dcc60a2d3c9eaec993419d69 upstream.
+    
+    RTS polarity of rs485-enabled ports is currently initialized on uart
+    open via:
+    
+    tty_port_open()
+      tty_port_block_til_ready()
+        tty_port_raise_dtr_rts()  # if (C_BAUD(tty))
+          uart_dtr_rts()
+            uart_port_dtr_rts()
+    
+    There's at least three problems here:
+    
+    First, if no baud rate is set, RTS polarity is not initialized.
+    That's the right thing to do for rs232, but not for rs485, which
+    requires that RTS is deasserted unconditionally.
+    
+    Second, if the DeviceTree property "linux,rs485-enabled-at-boot-time" is
+    present, RTS should be deasserted as early as possible, i.e. on probe.
+    Otherwise it may remain asserted until first open.
+    
+    Third, even though RTS is deasserted on open and close, it may
+    subsequently be asserted by uart_throttle(), uart_unthrottle() or
+    uart_set_termios() because those functions aren't rs485-aware.
+    (Only uart_tiocmset() is.)
+    
+    To address these issues, move RTS initialization from uart_port_dtr_rts()
+    to uart_configure_port().  Prevent subsequent modification of RTS
+    polarity by moving the existing rs485 check from uart_tiocmget() to
+    uart_update_mctrl().
+    
+    That way, RTS is initialized on probe and then remains unmodified unless
+    the uart transmits data.  If rs485 is enabled at runtime (instead of at
+    boot) through a TIOCSRS485 ioctl(), RTS is initialized by the uart
+    driver's ->rs485_config() callback and then likewise remains unmodified.
+    
+    The PL011 driver initializes RTS on uart open and prevents subsequent
+    modification in its ->set_mctrl() callback.  That code is obsoleted by
+    the present commit, so drop it.
+    
+    Cc: Jan Kiszka <jan.kiszka@siemens.com>
+    Cc: Su Bao Cheng <baocheng.su@siemens.com>
+    Signed-off-by: Lukas Wunner <lukas@wunner.de>
+    Link: https://lore.kernel.org/r/2d2acaf3a69e89b7bf687c912022b11fd29dfa1e.1642909284.git.lukas@wunner.de
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 8e57da591f63c07e4ccf6da3150b3ddafe56bd3d
+Author: Toke Høiland-Jørgensen <toke@redhat.com>
+Date:   Mon Jun 6 09:52:52 2022 +0200
+
+    selftests/bpf: Add selftest for calling global functions from freplace
+    
+    commit 2cf7b7ffdae519b284f1406012b52e2282fa36bf upstream.
+    
+    Add a selftest that calls a global function with a context object parameter
+    from an freplace function to check that the program context type is
+    correctly converted to the freplace target when fetching the context type
+    from the kernel BTF.
+    
+    v2:
+    - Trim includes
+    - Get rid of global function
+    - Use __noinline
+    
+    Signed-off-by: Toke Høiland-Jørgensen <toke@redhat.com>
+    Link: https://lore.kernel.org/r/20220606075253.28422-2-toke@redhat.com
+    Signed-off-by: Alexei Starovoitov <ast@kernel.org>
+    [ backport: fix conflict because tests were not serialised ]
+    Signed-off-by: Toke Høiland-Jørgensen <toke@redhat.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 5c0ab17c536012eed4cb9533a1b4b1af777c048e
+Author: Toke Høiland-Jørgensen <toke@redhat.com>
+Date:   Mon Jun 6 09:52:51 2022 +0200
+
+    bpf: Fix calling global functions from BPF_PROG_TYPE_EXT programs
+    
+    commit f858c2b2ca04fc7ead291821a793638ae120c11d upstream.
+    
+    The verifier allows programs to call global functions as long as their
+    argument types match, using BTF to check the function arguments. One of the
+    allowed argument types to such global functions is PTR_TO_CTX; however the
+    check for this fails on BPF_PROG_TYPE_EXT functions because the verifier
+    uses the wrong type to fetch the vmlinux BTF ID for the program context
+    type. This failure is seen when an XDP program is loaded using
+    libxdp (which loads it as BPF_PROG_TYPE_EXT and attaches it to a global XDP
+    type program).
+    
+    Fix the issue by passing in the target program type instead of the
+    BPF_PROG_TYPE_EXT type to bpf_prog_get_ctx() when checking function
+    argument compatibility.
+    
+    The first Fixes tag refers to the latest commit that touched the code in
+    question, while the second one points to the code that first introduced
+    the global function call verification.
+    
+    v2:
+    - Use resolve_prog_type()
+    
+    Fixes: 3363bd0cfbb8 ("bpf: Extend kfunc with PTR_TO_CTX, PTR_TO_MEM argument support")
+    Fixes: 51c39bb1d5d1 ("bpf: Introduce function-by-function verification")
+    Reported-by: Simon Sundberg <simon.sundberg@kau.se>
+    Signed-off-by: Toke Høiland-Jørgensen <toke@redhat.com>
+    Link: https://lore.kernel.org/r/20220606075253.28422-1-toke@redhat.com
+    Signed-off-by: Alexei Starovoitov <ast@kernel.org>
+    [ backport: open-code missing resolve_prog_type() helper, resolve context diff ]
+    Signed-off-by: Toke Høiland-Jørgensen <toke@redhat.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit cfb68b072cbfec32392562892ee2197b7fe6f481
+Author: Marian Postevca <posteuca@mutex.one>
+Date:   Fri Jun 3 18:34:59 2022 +0300
+
+    usb: gadget: u_ether: fix regression in setting fixed MAC address
+    
+    commit b337af3a4d6147000b7ca6b3438bf5c820849b37 upstream.
+    
+    In systemd systems setting a fixed MAC address through
+    the "dev_addr" module argument fails systematically.
+    When checking the MAC address after the interface is created
+    it always has the same but different MAC address to the one
+    supplied as argument.
+    
+    This is partially caused by systemd which by default will
+    set an internally generated permanent MAC address for interfaces
+    that are marked as having a randomly generated address.
+    
+    Commit 890d5b40908bfd1a ("usb: gadget: u_ether: fix race in
+    setting MAC address in setup phase") didn't take into account
+    the fact that the interface must be marked as having a set
+    MAC address when it's set as module argument.
+    
+    Fixed by marking the interface with NET_ADDR_SET when
+    the "dev_addr" module argument is supplied.
+    
+    Fixes: 890d5b40908bfd1a ("usb: gadget: u_ether: fix race in setting MAC address in setup phase")
+    Cc: stable@vger.kernel.org
+    Signed-off-by: Marian Postevca <posteuca@mutex.one>
+    Link: https://lore.kernel.org/r/20220603153459.32722-1-posteuca@mutex.one
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit c2f71b9bb398e2e573bdc2574149f42b45efe410
+Author: Damien Le Moal <damien.lemoal@opensource.wdc.com>
+Date:   Mon May 23 16:29:10 2022 +0900
+
+    zonefs: fix zonefs_iomap_begin() for reads
+    
+    commit c1c1204c0d0c1dccc1310b9277fb2bd8b663d8fe upstream.
+    
+    If a readahead is issued to a sequential zone file with an offset
+    exactly equal to the current file size, the iomap type is set to
+    IOMAP_UNWRITTEN, which will prevent an IO, but the iomap length is
+    calculated as 0. This causes a WARN_ON() in iomap_iter():
+    
+    [17309.548939] WARNING: CPU: 3 PID: 2137 at fs/iomap/iter.c:34 iomap_iter+0x9cf/0xe80
+    [...]
+    [17309.650907] RIP: 0010:iomap_iter+0x9cf/0xe80
+    [...]
+    [17309.754560] Call Trace:
+    [17309.757078]  <TASK>
+    [17309.759240]  ? lock_is_held_type+0xd8/0x130
+    [17309.763531]  iomap_readahead+0x1a8/0x870
+    [17309.767550]  ? iomap_read_folio+0x4c0/0x4c0
+    [17309.771817]  ? lockdep_hardirqs_on_prepare+0x400/0x400
+    [17309.778848]  ? lock_release+0x370/0x750
+    [17309.784462]  ? folio_add_lru+0x217/0x3f0
+    [17309.790220]  ? reacquire_held_locks+0x4e0/0x4e0
+    [17309.796543]  read_pages+0x17d/0xb60
+    [17309.801854]  ? folio_add_lru+0x238/0x3f0
+    [17309.807573]  ? readahead_expand+0x5f0/0x5f0
+    [17309.813554]  ? policy_node+0xb5/0x140
+    [17309.819018]  page_cache_ra_unbounded+0x27d/0x450
+    [17309.825439]  filemap_get_pages+0x500/0x1450
+    [17309.831444]  ? filemap_add_folio+0x140/0x140
+    [17309.837519]  ? lock_is_held_type+0xd8/0x130
+    [17309.843509]  filemap_read+0x28c/0x9f0
+    [17309.848953]  ? zonefs_file_read_iter+0x1ea/0x4d0 [zonefs]
+    [17309.856162]  ? trace_contention_end+0xd6/0x130
+    [17309.862416]  ? __mutex_lock+0x221/0x1480
+    [17309.868151]  ? zonefs_file_read_iter+0x166/0x4d0 [zonefs]
+    [17309.875364]  ? filemap_get_pages+0x1450/0x1450
+    [17309.881647]  ? __mutex_unlock_slowpath+0x15e/0x620
+    [17309.888248]  ? wait_for_completion_io_timeout+0x20/0x20
+    [17309.895231]  ? lock_is_held_type+0xd8/0x130
+    [17309.901115]  ? lock_is_held_type+0xd8/0x130
+    [17309.906934]  zonefs_file_read_iter+0x356/0x4d0 [zonefs]
+    [17309.913750]  new_sync_read+0x2d8/0x520
+    [17309.919035]  ? __x64_sys_lseek+0x1d0/0x1d0
+    
+    Furthermore, this causes iomap_readahead() to loop forever as
+    iomap_readahead_iter() always returns 0, making no progress.
+    
+    Fix this by treating reads after the file size as access to holes,
+    setting the iomap type to IOMAP_HOLE, the iomap addr to IOMAP_NULL_ADDR
+    and using the length argument as is for the iomap length. To simplify
+    the code with this change, zonefs_iomap_begin() is split into the read
+    variant, zonefs_read_iomap_begin() and zonefs_read_iomap_ops, and the
+    write variant, zonefs_write_iomap_begin() and zonefs_write_iomap_ops.
+    
+    Reported-by: Jorgen Hansen <Jorgen.Hansen@wdc.com>
+    Fixes: 8dcc1a9d90c1 ("fs: New zonefs file system")
+    Signed-off-by: Damien Le Moal <damien.lemoal@opensource.wdc.com>
+    Reviewed-by: Christoph Hellwig <hch@lst.de>
+    Reviewed-by: Johannes Thumshirn <johannes.thumshirn@wdc.com>
+    Reviewed-by: Jorgen Hansen <Jorgen.Hansen@wdc.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 04dcef44f6f4dda2f097bbd32e4f4c59951dae56
+Author: Haiyang Zhang <haiyangz@microsoft.com>
+Date:   Fri Feb 4 14:45:44 2022 -0800
+
+    net: mana: Add handling of CQE_RX_TRUNCATED
+    
+    commit e4b7621982d29f26ff4d39af389e5e675a4ffed4 upstream.
+    
+    The proper way to drop this kind of CQE is advancing rxq tail
+    without indicating the packet to the upper network layer.
+    
+    Signed-off-by: Haiyang Zhang <haiyangz@microsoft.com>
+    Reviewed-by: Dexuan Cui <decui@microsoft.com>
+    Signed-off-by: David S. Miller <davem@davemloft.net>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 7fd1d002852f93f5c03b3188f585245c50b52aea
+Author: Nicholas Kazlauskas <nicholas.kazlauskas@amd.com>
+Date:   Wed Dec 15 18:18:41 2021 -0500
+
+    drm/amd/display: Don't reinitialize DMCUB on s0ix resume
+    
+    commit 79d6b9351f086e0f914a26915d96ab52286ec46c upstream.
+    
+    [Why]
+    PSP will suspend and resume DMCUB. Driver should just wait for DMCUB to
+    finish the auto load before continuining instead of placing it into
+    reset, wiping its firmware state and reinitializing.
+    
+    If we don't let DMCUB fully finish initializing for S0ix then some state
+    will be lost and screen corruption can occur due to incorrect address
+    translation.
+    
+    [How]
+    Use dmub_srv callbacks to determine in DMCUB is running and wait for
+    auto-load to complete before continuining.
+    
+    In S0ix DMCUB will be running and DAL fw so initialize will skip.
+    
+    In S3 DMCUB will not be running and we will do a full hardware init.
+    
+    In S3 DMCUB will be running but will not be DAL fw so we will also do
+    a full hardware init.
+    
+    Tested-by: Daniel Wheeler <daniel.wheeler@amd.com>
+    Reviewed-by: Mikita Lipski <Mikita.Lipski@amd.com>
+    Acked-by: Rodrigo Siqueira <Rodrigo.Siqueira@amd.com>
+    Signed-off-by: Nicholas Kazlauskas <nicholas.kazlauskas@amd.com>
+    Signed-off-by: Alex Deucher <alexander.deucher@amd.com>
+    Cc: "Limonciello, Mario" <Mario.Limonciello@amd.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 48543509f4c584754a28083b2e9a59e3c65f34ba
+Author: Christian Borntraeger <borntraeger@linux.ibm.com>
+Date:   Mon May 30 11:27:06 2022 +0200
+
+    s390/mm: use non-quiescing sske for KVM switch to keyed guest
+    
+    commit 3ae11dbcfac906a8c3a480e98660a823130dc16a upstream.
+    
+    The switch to a keyed guest does not require a classic sske as the other
+    guest CPUs are not accessing the key before the switch is complete.
+    By using the NQ SSKE things are faster especially with multiple guests.
+    
+    Signed-off-by: Christian Borntraeger <borntraeger@linux.ibm.com>
+    Suggested-by: Janis Schoetterl-Glausch <scgl@linux.ibm.com>
+    Reviewed-by: Claudio Imbrenda <imbrenda@linux.ibm.com>
+    Link: https://lore.kernel.org/r/20220530092706.11637-3-borntraeger@linux.ibm.com
+    Signed-off-by: Christian Borntraeger <borntraeger@linux.ibm.com>
+    Signed-off-by: Heiko Carstens <hca@linux.ibm.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>

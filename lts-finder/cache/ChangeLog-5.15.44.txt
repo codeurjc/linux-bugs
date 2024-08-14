@@ -1,0 +1,3873 @@
+commit 4e67be407725b1d8b829ed2075987037abec98ec
+Author: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+Date:   Mon May 30 09:29:18 2022 +0200
+
+    Linux 5.15.44
+    
+    Link: https://lore.kernel.org/r/20220527084850.364560116@linuxfoundation.org
+    Tested-by: Guenter Roeck <linux@roeck-us.net>
+    Tested-by: Bagas Sanjaya <bagasdotme@gmail.com>
+    Tested-by: Linux Kernel Functional Testing <lkft@linaro.org>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 50196b5d73dcff0f9d060cd9b170ee987f4c7585
+Author: Edward Matijevic <motolav@gmail.com>
+Date:   Fri May 20 23:45:15 2022 -0500
+
+    ALSA: ctxfi: Add SB046x PCI ID
+    
+    commit 1b073ebb174d0c7109b438e0a5eb4495137803ec upstream.
+    
+    Adds the PCI ID for X-Fi cards sold under the Platnum and XtremeMusic names
+    
+    Before: snd_ctxfi 0000:05:05.0: chip 20K1 model Unknown (1102:0021) is found
+    After: snd_ctxfi 0000:05:05.0: chip 20K1 model SB046x (1102:0021) is found
+    
+    [ This is only about defining the model name string, and the rest is
+      handled just like before, as a default unknown device.
+      Edward confirmed that the stuff has been working fine -- tiwai ]
+    
+    Signed-off-by: Edward Matijevic <motolav@gmail.com>
+    Cc: <stable@vger.kernel.org>
+    Link: https://lore.kernel.org/r/cae7d1a4-8bd9-7dfe-7427-db7e766f7272@gmail.com
+    Signed-off-by: Takashi Iwai <tiwai@suse.de>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit ea5b87349d5af47d67378e92a61c84865cb6b691
+Author: Jason A. Donenfeld <Jason@zx2c4.com>
+Date:   Sun May 22 22:25:41 2022 +0200
+
+    random: check for signals after page of pool writes
+    
+    commit 1ce6c8d68f8ac587f54d0a271ac594d3d51f3efb upstream.
+    
+    get_random_bytes_user() checks for signals after producing a PAGE_SIZE
+    worth of output, just like /dev/zero does. write_pool() is doing
+    basically the same work (actually, slightly more expensive), and so
+    should stop to check for signals in the same way. Let's also name it
+    write_pool_user() to match get_random_bytes_user(), so this won't be
+    misused in the future.
+    
+    Before this patch, massive writes to /dev/urandom would tie up the
+    process for an extremely long time and make it unterminatable. After, it
+    can be successfully interrupted. The following test program can be used
+    to see this works as intended:
+    
+      #include <unistd.h>
+      #include <fcntl.h>
+      #include <signal.h>
+      #include <stdio.h>
+    
+      static unsigned char x[~0U];
+    
+      static void handle(int) { }
+    
+      int main(int argc, char *argv[])
+      {
+        pid_t pid = getpid(), child;
+        int fd;
+        signal(SIGUSR1, handle);
+        if (!(child = fork())) {
+          for (;;)
+            kill(pid, SIGUSR1);
+        }
+        fd = open("/dev/urandom", O_WRONLY);
+        pause();
+        printf("interrupted after writing %zd bytes\n", write(fd, x, sizeof(x)));
+        close(fd);
+        kill(child, SIGTERM);
+        return 0;
+      }
+    
+    Result before: "interrupted after writing 2147479552 bytes"
+    Result after: "interrupted after writing 4096 bytes"
+    
+    Cc: Dominik Brodowski <linux@dominikbrodowski.net>
+    Signed-off-by: Jason A. Donenfeld <Jason@zx2c4.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 3e167570a951e4f390667a8c3e4e2ecc0f3ef35c
+Author: Jens Axboe <axboe@kernel.dk>
+Date:   Thu May 19 17:31:37 2022 -0600
+
+    random: wire up fops->splice_{read,write}_iter()
+    
+    commit 79025e727a846be6fd215ae9cdb654368ac3f9a6 upstream.
+    
+    Now that random/urandom is using {read,write}_iter, we can wire it up to
+    using the generic splice handlers.
+    
+    Fixes: 36e2c7421f02 ("fs: don't allow splice read/write without explicit ops")
+    Signed-off-by: Jens Axboe <axboe@kernel.dk>
+    [Jason: added the splice_write path. Note that sendfile() and such still
+     does not work for read, though it does for write, because of a file
+     type restriction in splice_direct_to_actor(), which I'll address
+     separately.]
+    Cc: Al Viro <viro@zeniv.linux.org.uk>
+    Signed-off-by: Jason A. Donenfeld <Jason@zx2c4.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 0789c69644c8fb3eb4427e6fd8efea183623b673
+Author: Jens Axboe <axboe@kernel.dk>
+Date:   Thu May 19 17:43:15 2022 -0600
+
+    random: convert to using fops->write_iter()
+    
+    commit 22b0a222af4df8ee9bb8e07013ab44da9511b047 upstream.
+    
+    Now that the read side has been converted to fix a regression with
+    splice, convert the write side as well to have some symmetry in the
+    interface used (and help deprecate ->write()).
+    
+    Signed-off-by: Jens Axboe <axboe@kernel.dk>
+    [Jason: cleaned up random_ioctl a bit, require full writes in
+     RNDADDENTROPY since it's crediting entropy, simplify control flow of
+     write_pool(), and incorporate suggestions from Al.]
+    Cc: Al Viro <viro@zeniv.linux.org.uk>
+    Signed-off-by: Jason A. Donenfeld <Jason@zx2c4.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 7f8cea12a49425fe166fcd70fcbaa837803ab43d
+Author: Jens Axboe <axboe@kernel.dk>
+Date:   Thu May 19 17:31:36 2022 -0600
+
+    random: convert to using fops->read_iter()
+    
+    commit 1b388e7765f2eaa137cf5d92b47ef5925ad83ced upstream.
+    
+    This is a pre-requisite to wiring up splice() again for the random
+    and urandom drivers. It also allows us to remove the INT_MAX check in
+    getrandom(), because import_single_range() applies capping internally.
+    
+    Signed-off-by: Jens Axboe <axboe@kernel.dk>
+    [Jason: rewrote get_random_bytes_user() to simplify and also incorporate
+     additional suggestions from Al.]
+    Cc: Al Viro <viro@zeniv.linux.org.uk>
+    Signed-off-by: Jason A. Donenfeld <Jason@zx2c4.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 6244da28c6b3f7b413e32197acf5bd06dbe2ecb5
+Author: Jason A. Donenfeld <Jason@zx2c4.com>
+Date:   Sun May 15 00:22:05 2022 +0200
+
+    random: unify batched entropy implementations
+    
+    commit 3092adcef3ffd2ef59634998297ca8358461ebce upstream.
+    
+    There are currently two separate batched entropy implementations, for
+    u32 and u64, with nearly identical code, with the goal of avoiding
+    unaligned memory accesses and letting the buffers be used more
+    efficiently. Having to maintain these two functions independently is a
+    bit of a hassle though, considering that they always need to be kept in
+    sync.
+    
+    This commit factors them out into a type-generic macro, so that the
+    expansion produces the same code as before, such that diffing the
+    assembly shows no differences. This will also make it easier in the
+    future to add u16 and u8 batches.
+    
+    This was initially tested using an always_inline function and letting
+    gcc constant fold the type size in, but the code gen was less efficient,
+    and in general it was more verbose and harder to follow. So this patch
+    goes with the boring macro solution, similar to what's already done for
+    the _wait functions in random.h.
+    
+    Cc: Dominik Brodowski <linux@dominikbrodowski.net>
+    Signed-off-by: Jason A. Donenfeld <Jason@zx2c4.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 64cb7f01ddd289fefbd2a8051c288aaf5d50a9c7
+Author: Jason A. Donenfeld <Jason@zx2c4.com>
+Date:   Sat May 14 13:59:30 2022 +0200
+
+    random: move randomize_page() into mm where it belongs
+    
+    commit 5ad7dd882e45d7fe432c32e896e2aaa0b21746ea upstream.
+    
+    randomize_page is an mm function. It is documented like one. It contains
+    the history of one. It has the naming convention of one. It looks
+    just like another very similar function in mm, randomize_stack_top().
+    And it has always been maintained and updated by mm people. There is no
+    need for it to be in random.c. In the "which shape does not look like
+    the other ones" test, pointing to randomize_page() is correct.
+    
+    So move randomize_page() into mm/util.c, right next to the similar
+    randomize_stack_top() function.
+    
+    This commit contains no actual code changes.
+    
+    Cc: Andrew Morton <akpm@linux-foundation.org>
+    Signed-off-by: Jason A. Donenfeld <Jason@zx2c4.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 55a368c3e850ec370025158be63806a31b189a08
+Author: Jason A. Donenfeld <Jason@zx2c4.com>
+Date:   Fri May 13 16:17:12 2022 +0200
+
+    random: move initialization functions out of hot pages
+    
+    commit 560181c27b582557d633ecb608110075433383af upstream.
+    
+    Much of random.c is devoted to initializing the rng and accounting for
+    when a sufficient amount of entropy has been added. In a perfect world,
+    this would all happen during init, and so we could mark these functions
+    as __init. But in reality, this isn't the case: sometimes the rng only
+    finishes initializing some seconds after system init is finished.
+    
+    For this reason, at the moment, a whole host of functions that are only
+    used relatively close to system init and then never again are intermixed
+    with functions that are used in hot code all the time. This creates more
+    cache misses than necessary.
+    
+    In order to pack the hot code closer together, this commit moves the
+    initialization functions that can't be marked as __init into
+    .text.unlikely by way of the __cold attribute.
+    
+    Of particular note is moving credit_init_bits() into a macro wrapper
+    that inlines the crng_ready() static branch check. This avoids a
+    function call to a nop+ret, and most notably prevents extra entropy
+    arithmetic from being computed in mix_interrupt_randomness().
+    
+    Reviewed-by: Dominik Brodowski <linux@dominikbrodowski.net>
+    Signed-off-by: Jason A. Donenfeld <Jason@zx2c4.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 542a60612d2ab0146eec2ed5a0e971ccf7ae658b
+Author: Jason A. Donenfeld <Jason@zx2c4.com>
+Date:   Fri May 13 13:18:46 2022 +0200
+
+    random: make consistent use of buf and len
+    
+    commit a19402634c435a4eae226df53c141cdbb9922e7b upstream.
+    
+    The current code was a mix of "nbytes", "count", "size", "buffer", "in",
+    and so forth. Instead, let's clean this up by naming input parameters
+    "buf" (or "ubuf") and "len", so that you always understand that you're
+    reading this variety of function argument.
+    
+    Signed-off-by: Jason A. Donenfeld <Jason@zx2c4.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 29ed26a33436bb4bbfff5189a4cf3e34863d77dd
+Author: Jason A. Donenfeld <Jason@zx2c4.com>
+Date:   Fri May 13 12:32:23 2022 +0200
+
+    random: use proper return types on get_random_{int,long}_wait()
+    
+    commit 7c3a8a1db5e03d02cc0abb3357a84b8b326dfac3 upstream.
+    
+    Before these were returning signed values, but the API is intended to be
+    used with unsigned values.
+    
+    Signed-off-by: Jason A. Donenfeld <Jason@zx2c4.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 55729575eaa990f5881891b5a2b9c0fec0ec24ea
+Author: Jason A. Donenfeld <Jason@zx2c4.com>
+Date:   Fri May 13 12:29:38 2022 +0200
+
+    random: remove extern from functions in header
+    
+    commit 7782cfeca7d420e8bb707613d4cfb0f7ff29bb3a upstream.
+    
+    Accoriding to the kernel style guide, having `extern` on functions in
+    headers is old school and deprecated, and doesn't add anything. So remove
+    them from random.h, and tidy up the file a little bit too.
+    
+    Signed-off-by: Jason A. Donenfeld <Jason@zx2c4.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit c6ae9d65bcdbb078f1c0befdcdd1d53805e44fe6
+Author: Jason A. Donenfeld <Jason@zx2c4.com>
+Date:   Tue May 3 15:30:45 2022 +0200
+
+    random: use static branch for crng_ready()
+    
+    commit f5bda35fba615ace70a656d4700423fa6c9bebee upstream.
+    
+    Since crng_ready() is only false briefly during initialization and then
+    forever after becomes true, we don't need to evaluate it after, making
+    it a prime candidate for a static branch.
+    
+    One complication, however, is that it changes state in a particular call
+    to credit_init_bits(), which might be made from atomic context, which
+    means we must kick off a workqueue to change the static key. Further
+    complicating things, credit_init_bits() may be called sufficiently early
+    on in system initialization such that system_wq is NULL.
+    
+    Fortunately, there exists the nice function execute_in_process_context(),
+    which will immediately execute the function if !in_interrupt(), and
+    otherwise defer it to a workqueue. During early init, before workqueues
+    are available, in_interrupt() is always false, because interrupts
+    haven't even been enabled yet, which means the function in that case
+    executes immediately. Later on, after workqueues are available,
+    in_interrupt() might be true, but in that case, the work is queued in
+    system_wq and all goes well.
+    
+    Cc: Theodore Ts'o <tytso@mit.edu>
+    Cc: Sultan Alsawaf <sultan@kerneltoast.com>
+    Reviewed-by: Dominik Brodowski <linux@dominikbrodowski.net>
+    Signed-off-by: Jason A. Donenfeld <Jason@zx2c4.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 4e5e6754a4b6b7c6af8b2c87ed62ec0c5a5eb313
+Author: Jason A. Donenfeld <Jason@zx2c4.com>
+Date:   Thu May 12 15:32:26 2022 +0200
+
+    random: credit architectural init the exact amount
+    
+    commit 12e45a2a6308105469968951e6d563e8f4fea187 upstream.
+    
+    RDRAND and RDSEED can fail sometimes, which is fine. We currently
+    initialize the RNG with 512 bits of RDRAND/RDSEED. We only need 256 bits
+    of those to succeed in order to initialize the RNG. Instead of the
+    current "all or nothing" approach, actually credit these contributions
+    the amount that is actually contributed.
+    
+    Reviewed-by: Dominik Brodowski <linux@dominikbrodowski.net>
+    Signed-off-by: Jason A. Donenfeld <Jason@zx2c4.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 11cce5040c29485f0891e4c2278c5a9d3e65a80e
+Author: Jason A. Donenfeld <Jason@zx2c4.com>
+Date:   Thu May 5 02:20:22 2022 +0200
+
+    random: handle latent entropy and command line from random_init()
+    
+    commit 2f14062bb14b0fcfcc21e6dc7d5b5c0d25966164 upstream.
+    
+    Currently, start_kernel() adds latent entropy and the command line to
+    the entropy bool *after* the RNG has been initialized, deferring when
+    it's actually used by things like stack canaries until the next time
+    the pool is seeded. This surely is not intended.
+    
+    Rather than splitting up which entropy gets added where and when between
+    start_kernel() and random_init(), just do everything in random_init(),
+    which should eliminate these kinds of bugs in the future.
+    
+    While we're at it, rename the awkwardly titled "rand_initialize()" to
+    the more standard "random_init()" nomenclature.
+    
+    Reviewed-by: Dominik Brodowski <linux@dominikbrodowski.net>
+    Signed-off-by: Jason A. Donenfeld <Jason@zx2c4.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit ac0172992c9427b84d17d9f89dbbeb38e4005eaa
+Author: Jason A. Donenfeld <Jason@zx2c4.com>
+Date:   Tue May 10 15:20:42 2022 +0200
+
+    random: use proper jiffies comparison macro
+    
+    commit 8a5b8a4a4ceb353b4dd5bafd09e2b15751bcdb51 upstream.
+    
+    This expands to exactly the same code that it replaces, but makes things
+    consistent by using the same macro for jiffy comparisons throughout.
+    
+    Signed-off-by: Jason A. Donenfeld <Jason@zx2c4.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 8df752b82ec59b7d23c3d56b0d9bf0fdd140ce80
+Author: Jason A. Donenfeld <Jason@zx2c4.com>
+Date:   Mon May 9 16:13:18 2022 +0200
+
+    random: remove ratelimiting for in-kernel unseeded randomness
+    
+    commit cc1e127bfa95b5fb2f9307e7168bf8b2b45b4c5e upstream.
+    
+    The CONFIG_WARN_ALL_UNSEEDED_RANDOM debug option controls whether the
+    kernel warns about all unseeded randomness or just the first instance.
+    There's some complicated rate limiting and comparison to the previous
+    caller, such that even with CONFIG_WARN_ALL_UNSEEDED_RANDOM enabled,
+    developers still don't see all the messages or even an accurate count of
+    how many were missed. This is the result of basically parallel
+    mechanisms aimed at accomplishing more or less the same thing, added at
+    different points in random.c history, which sort of compete with the
+    first-instance-only limiting we have now.
+    
+    It turns out, however, that nobody cares about the first unseeded
+    randomness instance of in-kernel users. The same first user has been
+    there for ages now, and nobody is doing anything about it. It isn't even
+    clear that anybody _can_ do anything about it. Most places that can do
+    something about it have switched over to using get_random_bytes_wait()
+    or wait_for_random_bytes(), which is the right thing to do, but there is
+    still much code that needs randomness sometimes during init, and as a
+    geeneral rule, if you're not using one of the _wait functions or the
+    readiness notifier callback, you're bound to be doing it wrong just
+    based on that fact alone.
+    
+    So warning about this same first user that can't easily change is simply
+    not an effective mechanism for anything at all. Users can't do anything
+    about it, as the Kconfig text points out -- the problem isn't in
+    userspace code -- and kernel developers don't or more often can't react
+    to it.
+    
+    Instead, show the warning for all instances when CONFIG_WARN_ALL_UNSEEDED_RANDOM
+    is set, so that developers can debug things need be, or if it isn't set,
+    don't show a warning at all.
+    
+    At the same time, CONFIG_WARN_ALL_UNSEEDED_RANDOM now implies setting
+    random.ratelimit_disable=1 on by default, since if you care about one
+    you probably care about the other too. And we can clean up usage around
+    the related urandom_warning ratelimiter as well (whose behavior isn't
+    changing), so that it properly counts missed messages after the 10
+    message threshold is reached.
+    
+    Cc: Theodore Ts'o <tytso@mit.edu>
+    Cc: Dominik Brodowski <linux@dominikbrodowski.net>
+    Signed-off-by: Jason A. Donenfeld <Jason@zx2c4.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 272b79432f66de60efc9735b85cd922ce2824923
+Author: Jason A. Donenfeld <Jason@zx2c4.com>
+Date:   Mon May 9 13:53:24 2022 +0200
+
+    random: move initialization out of reseeding hot path
+    
+    commit 68c9c8b192c6dae9be6278e98ee44029d5da2d31 upstream.
+    
+    Initialization happens once -- by way of credit_init_bits() -- and then
+    it never happens again. Therefore, it doesn't need to be in
+    crng_reseed(), which is a hot path that is called multiple times. It
+    also doesn't make sense to have there, as initialization activity is
+    better associated with initialization routines.
+    
+    After the prior commit, crng_reseed() now won't be called by multiple
+    concurrent callers, which means that we can safely move the
+    "finialize_init" logic into crng_init_bits() unconditionally.
+    
+    Reviewed-by: Dominik Brodowski <linux@dominikbrodowski.net>
+    Signed-off-by: Jason A. Donenfeld <Jason@zx2c4.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit c4e600154ac07d7b65c73611b4e408bb449f1b44
+Author: Jason A. Donenfeld <Jason@zx2c4.com>
+Date:   Mon May 9 13:40:55 2022 +0200
+
+    random: avoid initializing twice in credit race
+    
+    commit fed7ef061686cc813b1f3d8d0edc6c35b4d3537b upstream.
+    
+    Since all changes of crng_init now go through credit_init_bits(), we can
+    fix a long standing race in which two concurrent callers of
+    credit_init_bits() have the new bit count >= some threshold, but are
+    doing so with crng_init as a lower threshold, checked outside of a lock,
+    resulting in crng_reseed() or similar being called twice.
+    
+    In order to fix this, we can use the original cmpxchg value of the bit
+    count, and only change crng_init when the bit count transitions from
+    below a threshold to meeting the threshold.
+    
+    Reviewed-by: Dominik Brodowski <linux@dominikbrodowski.net>
+    Signed-off-by: Jason A. Donenfeld <Jason@zx2c4.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 23a1b984f4b878faa1be22f5fcbb974f3ddd4018
+Author: Jason A. Donenfeld <Jason@zx2c4.com>
+Date:   Sun May 8 13:20:30 2022 +0200
+
+    random: use symbolic constants for crng_init states
+    
+    commit e3d2c5e79a999aa4e7d6f0127e16d3da5a4ff70d upstream.
+    
+    crng_init represents a state machine, with three states, and various
+    rules for transitions. For the longest time, we've been managing these
+    with "0", "1", and "2", and expecting people to figure it out. To make
+    the code more obvious, replace these with proper enum values
+    representing the transition, and then redocument what each of these
+    states mean.
+    
+    Reviewed-by: Dominik Brodowski <linux@dominikbrodowski.net>
+    Cc: Joe Perches <joe@perches.com>
+    Signed-off-by: Jason A. Donenfeld <Jason@zx2c4.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit f4cb809a90df1daeaab4e65ae2064918575b4e6d
+Author: Jason A. Donenfeld <Jason@zx2c4.com>
+Date:   Sat May 7 14:03:46 2022 +0200
+
+    siphash: use one source of truth for siphash permutations
+    
+    commit e73aaae2fa9024832e1f42e30c787c7baf61d014 upstream.
+    
+    The SipHash family of permutations is currently used in three places:
+    
+    - siphash.c itself, used in the ordinary way it was intended.
+    - random32.c, in a construction from an anonymous contributor.
+    - random.c, as part of its fast_mix function.
+    
+    Each one of these places reinvents the wheel with the same C code, same
+    rotation constants, and same symmetry-breaking constants.
+    
+    This commit tidies things up a bit by placing macros for the
+    permutations and constants into siphash.h, where each of the three .c
+    users can access them. It also leaves a note dissuading more users of
+    them from emerging.
+    
+    Signed-off-by: Jason A. Donenfeld <Jason@zx2c4.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 82caef84092e5d065932be53d6b341f22f68c649
+Author: Jason A. Donenfeld <Jason@zx2c4.com>
+Date:   Fri May 6 23:19:43 2022 +0200
+
+    random: help compiler out with fast_mix() by using simpler arguments
+    
+    commit 791332b3cbb080510954a4c152ce02af8832eac9 upstream.
+    
+    Now that fast_mix() has more than one caller, gcc no longer inlines it.
+    That's fine. But it also doesn't handle the compound literal argument we
+    pass it very efficiently, nor does it handle the loop as well as it
+    could. So just expand the code to spell out this function so that it
+    generates the same code as it did before. Performance-wise, this now
+    behaves as it did before the last commit. The difference in actual code
+    size on x86 is 45 bytes, which is less than a cache line.
+    
+    Signed-off-by: Jason A. Donenfeld <Jason@zx2c4.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 4649394c4749d0318bc47ad59ee7cb4b3b2fdac2
+Author: Jason A. Donenfeld <Jason@zx2c4.com>
+Date:   Fri May 6 18:30:51 2022 +0200
+
+    random: do not use input pool from hard IRQs
+    
+    commit e3e33fc2ea7fcefd0d761db9d6219f83b4248f5c upstream.
+    
+    Years ago, a separate fast pool was added for interrupts, so that the
+    cost associated with taking the input pool spinlocks and mixing into it
+    would be avoided in places where latency is critical. However, one
+    oversight was that add_input_randomness() and add_disk_randomness()
+    still sometimes are called directly from the interrupt handler, rather
+    than being deferred to a thread. This means that some unlucky interrupts
+    will be caught doing a blake2s_compress() call and potentially spinning
+    on input_pool.lock, which can also be taken by unprivileged users by
+    writing into /dev/urandom.
+    
+    In order to fix this, add_timer_randomness() now checks whether it is
+    being called from a hard IRQ and if so, just mixes into the per-cpu IRQ
+    fast pool using fast_mix(), which is much faster and can be done
+    lock-free. A nice consequence of this, as well, is that it means hard
+    IRQ context FPU support is likely no longer useful.
+    
+    The entropy estimation algorithm used by add_timer_randomness() is also
+    somewhat different than the one used for add_interrupt_randomness(). The
+    former looks at deltas of deltas of deltas, while the latter just waits
+    for 64 interrupts for one bit or for one second since the last bit. In
+    order to bridge these, and since add_interrupt_randomness() runs after
+    an add_timer_randomness() that's called from hard IRQ, we add to the
+    fast pool credit the related amount, and then subtract one to account
+    for add_interrupt_randomness()'s contribution.
+    
+    A downside of this, however, is that the num argument is potentially
+    attacker controlled, which puts a bit more pressure on the fast_mix()
+    sponge to do more than it's really intended to do. As a mitigating
+    factor, the first 96 bits of input aren't attacker controlled (a cycle
+    counter followed by zeros), which means it's essentially two rounds of
+    siphash rather than one, which is somewhat better. It's also not that
+    much different from add_interrupt_randomness()'s use of the irq stack
+    instruction pointer register.
+    
+    Cc: Thomas Gleixner <tglx@linutronix.de>
+    Cc: Filipe Manana <fdmanana@suse.com>
+    Cc: Peter Zijlstra <peterz@infradead.org>
+    Cc: Borislav Petkov <bp@alien8.de>
+    Cc: Theodore Ts'o <tytso@mit.edu>
+    Signed-off-by: Jason A. Donenfeld <Jason@zx2c4.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit df4e319ea60f7586bd17fa2c325c9fa07d1b3459
+Author: Jason A. Donenfeld <Jason@zx2c4.com>
+Date:   Fri May 6 18:27:38 2022 +0200
+
+    random: order timer entropy functions below interrupt functions
+    
+    commit a4b5c26b79ffdfcfb816c198f2fc2b1e7b5b580f upstream.
+    
+    There are no code changes here; this is just a reordering of functions,
+    so that in subsequent commits, the timer entropy functions can call into
+    the interrupt ones.
+    
+    Signed-off-by: Jason A. Donenfeld <Jason@zx2c4.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit baf06217704b2597c1a492aa4fc8bd680b2df169
+Author: Jason A. Donenfeld <Jason@zx2c4.com>
+Date:   Sat Apr 30 22:03:29 2022 +0200
+
+    random: do not pretend to handle premature next security model
+    
+    commit e85c0fc1d94c52483a603651748d4c76d6aa1c6b upstream.
+    
+    Per the thread linked below, "premature next" is not considered to be a
+    realistic threat model, and leads to more serious security problems.
+    
+    "Premature next" is the scenario in which:
+    
+    - Attacker compromises the current state of a fully initialized RNG via
+      some kind of infoleak.
+    - New bits of entropy are added directly to the key used to generate the
+      /dev/urandom stream, without any buffering or pooling.
+    - Attacker then, somehow having read access to /dev/urandom, samples RNG
+      output and brute forces the individual new bits that were added.
+    - Result: the RNG never "recovers" from the initial compromise, a
+      so-called violation of what academics term "post-compromise security".
+    
+    The usual solutions to this involve some form of delaying when entropy
+    gets mixed into the crng. With Fortuna, this involves multiple input
+    buckets. With what the Linux RNG was trying to do prior, this involves
+    entropy estimation.
+    
+    However, by delaying when entropy gets mixed in, it also means that RNG
+    compromises are extremely dangerous during the window of time before
+    the RNG has gathered enough entropy, during which time nonces may become
+    predictable (or repeated), ephemeral keys may not be secret, and so
+    forth. Moreover, it's unclear how realistic "premature next" is from an
+    attack perspective, if these attacks even make sense in practice.
+    
+    Put together -- and discussed in more detail in the thread below --
+    these constitute grounds for just doing away with the current code that
+    pretends to handle premature next. I say "pretends" because it wasn't
+    doing an especially great job at it either; should we change our mind
+    about this direction, we would probably implement Fortuna to "fix" the
+    "problem", in which case, removing the pretend solution still makes
+    sense.
+    
+    This also reduces the crng reseed period from 5 minutes down to 1
+    minute. The rationale from the thread might lead us toward reducing that
+    even further in the future (or even eliminating it), but that remains a
+    topic of a future commit.
+    
+    At a high level, this patch changes semantics from:
+    
+        Before: Seed for the first time after 256 "bits" of estimated
+        entropy have been accumulated since the system booted. Thereafter,
+        reseed once every five minutes, but only if 256 new "bits" have been
+        accumulated since the last reseeding.
+    
+        After: Seed for the first time after 256 "bits" of estimated entropy
+        have been accumulated since the system booted. Thereafter, reseed
+        once every minute.
+    
+    Most of this patch is renaming and removing: POOL_MIN_BITS becomes
+    POOL_INIT_BITS, credit_entropy_bits() becomes credit_init_bits(),
+    crng_reseed() loses its "force" parameter since it's now always true,
+    the drain_entropy() function no longer has any use so it's removed,
+    entropy estimation is skipped if we've already init'd, the various
+    notifiers for "low on entropy" are now only active prior to init, and
+    finally, some documentation comments are cleaned up here and there.
+    
+    Link: https://lore.kernel.org/lkml/YmlMGx6+uigkGiZ0@zx2c4.com/
+    Cc: Theodore Ts'o <tytso@mit.edu>
+    Cc: Nadia Heninger <nadiah@cs.ucsd.edu>
+    Cc: Tom Ristenpart <ristenpart@cornell.edu>
+    Reviewed-by: Eric Biggers <ebiggers@google.com>
+    Signed-off-by: Jason A. Donenfeld <Jason@zx2c4.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 0d24003b5fde78913a957e6db6a98df280e57c4c
+Author: Jason A. Donenfeld <Jason@zx2c4.com>
+Date:   Sat Apr 30 15:08:20 2022 +0200
+
+    random: use first 128 bits of input as fast init
+    
+    commit 5c3b747ef54fa2a7318776777f6044540d99f721 upstream.
+    
+    Before, the first 64 bytes of input, regardless of how entropic it was,
+    would be used to mutate the crng base key directly, and none of those
+    bytes would be credited as having entropy. Then 256 bits of credited
+    input would be accumulated, and only then would the rng transition from
+    the earlier "fast init" phase into being actually initialized.
+    
+    The thinking was that by mixing and matching fast init and real init, an
+    attacker who compromised the fast init state, considered easy to do
+    given how little entropy might be in those first 64 bytes, would then be
+    able to bruteforce bits from the actual initialization. By keeping these
+    separate, bruteforcing became impossible.
+    
+    However, by not crediting potentially creditable bits from those first 64
+    bytes of input, we delay initialization, and actually make the problem
+    worse, because it means the user is drawing worse random numbers for a
+    longer period of time.
+    
+    Instead, we can take the first 128 bits as fast init, and allow them to
+    be credited, and then hold off on the next 128 bits until they've
+    accumulated. This is still a wide enough margin to prevent bruteforcing
+    the rng state, while still initializing much faster.
+    
+    Then, rather than trying to piecemeal inject into the base crng key at
+    various points, instead just extract from the pool when we need it, for
+    the crng_init==0 phase. Performance may even be better for the various
+    inputs here, since there are likely more calls to mix_pool_bytes() then
+    there are to get_random_bytes() during this phase of system execution.
+    
+    Since the preinit injection code is gone, bootloader randomness can then
+    do something significantly more straight forward, removing the weird
+    system_wq hack in hwgenerator randomness.
+    
+    Cc: Theodore Ts'o <tytso@mit.edu>
+    Cc: Dominik Brodowski <linux@dominikbrodowski.net>
+    Signed-off-by: Jason A. Donenfeld <Jason@zx2c4.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 0d79a47b4ae06bc4994b9f0d96a41cf48f6d765d
+Author: Jason A. Donenfeld <Jason@zx2c4.com>
+Date:   Tue May 3 14:14:32 2022 +0200
+
+    random: do not use batches when !crng_ready()
+    
+    commit cbe89e5a375a51bbb952929b93fa973416fea74e upstream.
+    
+    It's too hard to keep the batches synchronized, and pointless anyway,
+    since in !crng_ready(), we're updating the base_crng key really often,
+    where batching only hurts. So instead, if the crng isn't ready, just
+    call into get_random_bytes(). At this stage nothing is performance
+    critical anyhow.
+    
+    Cc: Theodore Ts'o <tytso@mit.edu>
+    Reviewed-by: Dominik Brodowski <linux@dominikbrodowski.net>
+    Signed-off-by: Jason A. Donenfeld <Jason@zx2c4.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 1ab530cf40dcd83233724faaa0bd88c6ab3ca2a5
+Author: Jason A. Donenfeld <Jason@zx2c4.com>
+Date:   Tue Apr 12 19:59:57 2022 +0200
+
+    random: insist on random_get_entropy() existing in order to simplify
+    
+    commit 4b758eda851eb9336ca86a0041a4d3da55f66511 upstream.
+    
+    All platforms are now guaranteed to provide some value for
+    random_get_entropy(). In case some bug leads to this not being so, we
+    print a warning, because that indicates that something is really very
+    wrong (and likely other things are impacted too). This should never be
+    hit, but it's a good and cheap way of finding out if something ever is
+    problematic.
+    
+    Since we now have viable fallback code for random_get_entropy() on all
+    platforms, which is, in the worst case, not worse than jiffies, we can
+    count on getting the best possible value out of it. That means there's
+    no longer a use for using jiffies as entropy input. It also means we no
+    longer have a reason for doing the round-robin register flow in the IRQ
+    handler, which was always of fairly dubious value.
+    
+    Instead we can greatly simplify the IRQ handler inputs and also unify
+    the construction between 64-bits and 32-bits. We now collect the cycle
+    counter and the return address, since those are the two things that
+    matter. Because the return address and the irq number are likely
+    related, to the extent we mix in the irq number, we can just xor it into
+    the top unchanging bytes of the return address, rather than the bottom
+    changing bytes of the cycle counter as before. Then, we can do a fixed 2
+    rounds of SipHash/HSipHash. Finally, we use the same construction of
+    hashing only half of the [H]SipHash state on 32-bit and 64-bit. We're
+    not actually discarding any entropy, since that entropy is carried
+    through until the next time. And more importantly, it lets us do the
+    same sponge-like construction everywhere.
+    
+    Cc: Theodore Ts'o <tytso@mit.edu>
+    Signed-off-by: Jason A. Donenfeld <Jason@zx2c4.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit e6bd242523e8c8edb3feee020c78c6252c6b80e3
+Author: Jason A. Donenfeld <Jason@zx2c4.com>
+Date:   Fri Apr 8 18:03:13 2022 +0200
+
+    xtensa: use fallback for random_get_entropy() instead of zero
+    
+    commit e10e2f58030c5c211d49042a8c2a1b93d40b2ffb upstream.
+    
+    In the event that random_get_entropy() can't access a cycle counter or
+    similar, falling back to returning 0 is really not the best we can do.
+    Instead, at least calling random_get_entropy_fallback() would be
+    preferable, because that always needs to return _something_, even
+    falling back to jiffies eventually. It's not as though
+    random_get_entropy_fallback() is super high precision or guaranteed to
+    be entropic, but basically anything that's not zero all the time is
+    better than returning zero all the time.
+    
+    This is accomplished by just including the asm-generic code like on
+    other architectures, which means we can get rid of the empty stub
+    function here.
+    
+    Cc: Thomas Gleixner <tglx@linutronix.de>
+    Cc: Arnd Bergmann <arnd@arndb.de>
+    Acked-by: Max Filippov <jcmvbkbc@gmail.com>
+    Signed-off-by: Jason A. Donenfeld <Jason@zx2c4.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit b4582cb351677beab2a1be02f496b1120a8ed30c
+Author: Jason A. Donenfeld <Jason@zx2c4.com>
+Date:   Fri Apr 8 18:03:13 2022 +0200
+
+    sparc: use fallback for random_get_entropy() instead of zero
+    
+    commit ac9756c79797bb98972736b13cfb239fd2cffb79 upstream.
+    
+    In the event that random_get_entropy() can't access a cycle counter or
+    similar, falling back to returning 0 is really not the best we can do.
+    Instead, at least calling random_get_entropy_fallback() would be
+    preferable, because that always needs to return _something_, even
+    falling back to jiffies eventually. It's not as though
+    random_get_entropy_fallback() is super high precision or guaranteed to
+    be entropic, but basically anything that's not zero all the time is
+    better than returning zero all the time.
+    
+    This is accomplished by just including the asm-generic code like on
+    other architectures, which means we can get rid of the empty stub
+    function here.
+    
+    Cc: Thomas Gleixner <tglx@linutronix.de>
+    Cc: Arnd Bergmann <arnd@arndb.de>
+    Cc: David S. Miller <davem@davemloft.net>
+    Signed-off-by: Jason A. Donenfeld <Jason@zx2c4.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit d876dca6edf385e22bd347c22e5d9cbb88ba4225
+Author: Jason A. Donenfeld <Jason@zx2c4.com>
+Date:   Fri Apr 8 18:03:13 2022 +0200
+
+    um: use fallback for random_get_entropy() instead of zero
+    
+    commit 9f13fb0cd11ed2327abff69f6501a2c124c88b5a upstream.
+    
+    In the event that random_get_entropy() can't access a cycle counter or
+    similar, falling back to returning 0 is really not the best we can do.
+    Instead, at least calling random_get_entropy_fallback() would be
+    preferable, because that always needs to return _something_, even
+    falling back to jiffies eventually. It's not as though
+    random_get_entropy_fallback() is super high precision or guaranteed to
+    be entropic, but basically anything that's not zero all the time is
+    better than returning zero all the time.
+    
+    This is accomplished by just including the asm-generic code like on
+    other architectures, which means we can get rid of the empty stub
+    function here.
+    
+    Cc: Thomas Gleixner <tglx@linutronix.de>
+    Cc: Arnd Bergmann <arnd@arndb.de>
+    Cc: Richard Weinberger <richard@nod.at>
+    Cc: Anton Ivanov <anton.ivanov@cambridgegreys.com>
+    Acked-by: Johannes Berg <johannes@sipsolutions.net>
+    Signed-off-by: Jason A. Donenfeld <Jason@zx2c4.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit e017497815f3e676421a2afb0abe4ae03dbaad2a
+Author: Jason A. Donenfeld <Jason@zx2c4.com>
+Date:   Fri Apr 8 18:03:13 2022 +0200
+
+    x86/tsc: Use fallback for random_get_entropy() instead of zero
+    
+    commit 3bd4abc07a267e6a8b33d7f8717136e18f921c53 upstream.
+    
+    In the event that random_get_entropy() can't access a cycle counter or
+    similar, falling back to returning 0 is suboptimal. Instead, fallback
+    to calling random_get_entropy_fallback(), which isn't extremely high
+    precision or guaranteed to be entropic, but is certainly better than
+    returning zero all the time.
+    
+    If CONFIG_X86_TSC=n, then it's possible for the kernel to run on systems
+    without RDTSC, such as 486 and certain 586, so the fallback code is only
+    required for that case.
+    
+    As well, fix up both the new function and the get_cycles() function from
+    which it was derived to use cpu_feature_enabled() rather than
+    boot_cpu_has(), and use !IS_ENABLED() instead of #ifndef.
+    
+    Signed-off-by: Jason A. Donenfeld <Jason@zx2c4.com>
+    Reviewed-by: Thomas Gleixner <tglx@linutronix.de>
+    Cc: Thomas Gleixner <tglx@linutronix.de>
+    Cc: Arnd Bergmann <arnd@arndb.de>
+    Cc: Borislav Petkov <bp@alien8.de>
+    Cc: x86@kernel.org
+    Signed-off-by: Jason A. Donenfeld <Jason@zx2c4.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 38fbfa404da6118f9a86b7f3681eab09cfbfcb35
+Author: Jason A. Donenfeld <Jason@zx2c4.com>
+Date:   Fri Apr 8 18:03:13 2022 +0200
+
+    nios2: use fallback for random_get_entropy() instead of zero
+    
+    commit c04e72700f2293013dab40208e809369378f224c upstream.
+    
+    In the event that random_get_entropy() can't access a cycle counter or
+    similar, falling back to returning 0 is really not the best we can do.
+    Instead, at least calling random_get_entropy_fallback() would be
+    preferable, because that always needs to return _something_, even
+    falling back to jiffies eventually. It's not as though
+    random_get_entropy_fallback() is super high precision or guaranteed to
+    be entropic, but basically anything that's not zero all the time is
+    better than returning zero all the time.
+    
+    Cc: Thomas Gleixner <tglx@linutronix.de>
+    Cc: Arnd Bergmann <arnd@arndb.de>
+    Acked-by: Dinh Nguyen <dinguyen@kernel.org>
+    Signed-off-by: Jason A. Donenfeld <Jason@zx2c4.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 197d25e068c02230e68c8a043a3909bd4c04fc16
+Author: Jason A. Donenfeld <Jason@zx2c4.com>
+Date:   Fri Apr 8 18:03:13 2022 +0200
+
+    arm: use fallback for random_get_entropy() instead of zero
+    
+    commit ff8a8f59c99f6a7c656387addc4d9f2247d75077 upstream.
+    
+    In the event that random_get_entropy() can't access a cycle counter or
+    similar, falling back to returning 0 is really not the best we can do.
+    Instead, at least calling random_get_entropy_fallback() would be
+    preferable, because that always needs to return _something_, even
+    falling back to jiffies eventually. It's not as though
+    random_get_entropy_fallback() is super high precision or guaranteed to
+    be entropic, but basically anything that's not zero all the time is
+    better than returning zero all the time.
+    
+    Cc: Thomas Gleixner <tglx@linutronix.de>
+    Cc: Arnd Bergmann <arnd@arndb.de>
+    Reviewed-by: Russell King (Oracle) <rmk+kernel@armlinux.org.uk>
+    Signed-off-by: Jason A. Donenfeld <Jason@zx2c4.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 9e6db825e87a41622c3103609fb02faa7aa27a9d
+Author: Jason A. Donenfeld <Jason@zx2c4.com>
+Date:   Fri Apr 8 18:03:13 2022 +0200
+
+    mips: use fallback for random_get_entropy() instead of just c0 random
+    
+    commit 1c99c6a7c3c599a68321b01b9ec243215ede5a68 upstream.
+    
+    For situations in which we don't have a c0 counter register available,
+    we've been falling back to reading the c0 "random" register, which is
+    usually bounded by the amount of TLB entries and changes every other
+    cycle or so. This means it wraps extremely often. We can do better by
+    combining this fast-changing counter with a potentially slower-changing
+    counter from random_get_entropy_fallback() in the more significant bits.
+    This commit combines the two, taking into account that the changing bits
+    are in a different bit position depending on the CPU model. In addition,
+    we previously were falling back to 0 for ancient CPUs that Linux does
+    not support anyway; remove that dead path entirely.
+    
+    Cc: Thomas Gleixner <tglx@linutronix.de>
+    Cc: Arnd Bergmann <arnd@arndb.de>
+    Tested-by: Maciej W. Rozycki <macro@orcam.me.uk>
+    Acked-by: Thomas Bogendoerfer <tsbogend@alpha.franken.de>
+    Signed-off-by: Jason A. Donenfeld <Jason@zx2c4.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 2ab416043a94087a8bc28ce748db0d7bce850b43
+Author: Jason A. Donenfeld <Jason@zx2c4.com>
+Date:   Fri Apr 8 18:03:13 2022 +0200
+
+    riscv: use fallback for random_get_entropy() instead of zero
+    
+    commit 6d01238623faa9425f820353d2066baf6c9dc872 upstream.
+    
+    In the event that random_get_entropy() can't access a cycle counter or
+    similar, falling back to returning 0 is really not the best we can do.
+    Instead, at least calling random_get_entropy_fallback() would be
+    preferable, because that always needs to return _something_, even
+    falling back to jiffies eventually. It's not as though
+    random_get_entropy_fallback() is super high precision or guaranteed to
+    be entropic, but basically anything that's not zero all the time is
+    better than returning zero all the time.
+    
+    Cc: Thomas Gleixner <tglx@linutronix.de>
+    Cc: Arnd Bergmann <arnd@arndb.de>
+    Cc: Paul Walmsley <paul.walmsley@sifive.com>
+    Acked-by: Palmer Dabbelt <palmer@rivosinc.com>
+    Reviewed-by: Palmer Dabbelt <palmer@rivosinc.com>
+    Signed-off-by: Jason A. Donenfeld <Jason@zx2c4.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit a1428cd7e194740fdd11048b5ba6ab66f31fe7e1
+Author: Jason A. Donenfeld <Jason@zx2c4.com>
+Date:   Fri Apr 8 18:03:13 2022 +0200
+
+    m68k: use fallback for random_get_entropy() instead of zero
+    
+    commit 0f392c95391f2d708b12971a07edaa7973f9eece upstream.
+    
+    In the event that random_get_entropy() can't access a cycle counter or
+    similar, falling back to returning 0 is really not the best we can do.
+    Instead, at least calling random_get_entropy_fallback() would be
+    preferable, because that always needs to return _something_, even
+    falling back to jiffies eventually. It's not as though
+    random_get_entropy_fallback() is super high precision or guaranteed to
+    be entropic, but basically anything that's not zero all the time is
+    better than returning zero all the time.
+    
+    Cc: Thomas Gleixner <tglx@linutronix.de>
+    Cc: Arnd Bergmann <arnd@arndb.de>
+    Acked-by: Geert Uytterhoeven <geert@linux-m68k.org>
+    Signed-off-by: Jason A. Donenfeld <Jason@zx2c4.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 82f182812f1772ee0d56e82f03f5c252b2bd2140
+Author: Jason A. Donenfeld <Jason@zx2c4.com>
+Date:   Sun Apr 10 16:49:50 2022 +0200
+
+    timekeeping: Add raw clock fallback for random_get_entropy()
+    
+    commit 1366992e16bddd5e2d9a561687f367f9f802e2e4 upstream.
+    
+    The addition of random_get_entropy_fallback() provides access to
+    whichever time source has the highest frequency, which is useful for
+    gathering entropy on platforms without available cycle counters. It's
+    not necessarily as good as being able to quickly access a cycle counter
+    that the CPU has, but it's still something, even when it falls back to
+    being jiffies-based.
+    
+    In the event that a given arch does not define get_cycles(), falling
+    back to the get_cycles() default implementation that returns 0 is really
+    not the best we can do. Instead, at least calling
+    random_get_entropy_fallback() would be preferable, because that always
+    needs to return _something_, even falling back to jiffies eventually.
+    It's not as though random_get_entropy_fallback() is super high precision
+    or guaranteed to be entropic, but basically anything that's not zero all
+    the time is better than returning zero all the time.
+    
+    Finally, since random_get_entropy_fallback() is used during extremely
+    early boot when randomizing freelists in mm_init(), it can be called
+    before timekeeping has been initialized. In that case there really is
+    nothing we can do; jiffies hasn't even started ticking yet. So just give
+    up and return 0.
+    
+    Suggested-by: Thomas Gleixner <tglx@linutronix.de>
+    Signed-off-by: Jason A. Donenfeld <Jason@zx2c4.com>
+    Reviewed-by: Thomas Gleixner <tglx@linutronix.de>
+    Cc: Arnd Bergmann <arnd@arndb.de>
+    Cc: Theodore Ts'o <tytso@mit.edu>
+    Signed-off-by: Jason A. Donenfeld <Jason@zx2c4.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit bc94ccb2904eb2a0b8c86599790dbfebd34987b7
+Author: Jason A. Donenfeld <Jason@zx2c4.com>
+Date:   Sat Apr 23 21:11:41 2022 +0200
+
+    powerpc: define get_cycles macro for arch-override
+    
+    commit 408835832158df0357e18e96da7f2d1ed6b80e7f upstream.
+    
+    PowerPC defines a get_cycles() function, but it does not do the usual
+    `#define get_cycles get_cycles` dance, making it impossible for generic
+    code to see if an arch-specific function was defined. While the
+    get_cycles() ifdef is not currently used, the following timekeeping
+    patch in this series will depend on the macro existing (or not existing)
+    when defining random_get_entropy().
+    
+    Cc: Thomas Gleixner <tglx@linutronix.de>
+    Cc: Arnd Bergmann <arnd@arndb.de>
+    Cc: Benjamin Herrenschmidt <benh@ozlabs.org>
+    Cc: Paul Mackerras <paulus@samba.org>
+    Acked-by: Michael Ellerman <mpe@ellerman.id.au>
+    Signed-off-by: Jason A. Donenfeld <Jason@zx2c4.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 8ca78fbdeba0160131a4699747fd32f4f480299b
+Author: Jason A. Donenfeld <Jason@zx2c4.com>
+Date:   Sat Apr 23 21:11:41 2022 +0200
+
+    alpha: define get_cycles macro for arch-override
+    
+    commit 1097710bc9660e1e588cf2186a35db3d95c4d258 upstream.
+    
+    Alpha defines a get_cycles() function, but it does not do the usual
+    `#define get_cycles get_cycles` dance, making it impossible for generic
+    code to see if an arch-specific function was defined. While the
+    get_cycles() ifdef is not currently used, the following timekeeping
+    patch in this series will depend on the macro existing (or not existing)
+    when defining random_get_entropy().
+    
+    Cc: Thomas Gleixner <tglx@linutronix.de>
+    Cc: Arnd Bergmann <arnd@arndb.de>
+    Cc: Richard Henderson <rth@twiddle.net>
+    Cc: Ivan Kokshaysky <ink@jurassic.park.msu.ru>
+    Acked-by: Matt Turner <mattst88@gmail.com>
+    Signed-off-by: Jason A. Donenfeld <Jason@zx2c4.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 9bf990cff673ca0747a01ceab0095a71af8033f6
+Author: Jason A. Donenfeld <Jason@zx2c4.com>
+Date:   Sat Apr 23 21:11:41 2022 +0200
+
+    parisc: define get_cycles macro for arch-override
+    
+    commit 8865bbe6ba1120e67f72201b7003a16202cd42be upstream.
+    
+    PA-RISC defines a get_cycles() function, but it does not do the usual
+    `#define get_cycles get_cycles` dance, making it impossible for generic
+    code to see if an arch-specific function was defined. While the
+    get_cycles() ifdef is not currently used, the following timekeeping
+    patch in this series will depend on the macro existing (or not existing)
+    when defining random_get_entropy().
+    
+    Cc: Thomas Gleixner <tglx@linutronix.de>
+    Cc: Arnd Bergmann <arnd@arndb.de>
+    Acked-by: Helge Deller <deller@gmx.de>
+    Signed-off-by: Jason A. Donenfeld <Jason@zx2c4.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit e05efd31b9db39ccd9c489c0f93df7a8e8cb48a8
+Author: Jason A. Donenfeld <Jason@zx2c4.com>
+Date:   Sat Apr 23 21:11:41 2022 +0200
+
+    s390: define get_cycles macro for arch-override
+    
+    commit 2e3df523256cb9836de8441e9c791a796759bb3c upstream.
+    
+    S390x defines a get_cycles() function, but it does not do the usual
+    `#define get_cycles get_cycles` dance, making it impossible for generic
+    code to see if an arch-specific function was defined. While the
+    get_cycles() ifdef is not currently used, the following timekeeping
+    patch in this series will depend on the macro existing (or not existing)
+    when defining random_get_entropy().
+    
+    Cc: Thomas Gleixner <tglx@linutronix.de>
+    Cc: Arnd Bergmann <arnd@arndb.de>
+    Cc: Vasily Gorbik <gor@linux.ibm.com>
+    Cc: Alexander Gordeev <agordeev@linux.ibm.com>
+    Cc: Christian Borntraeger <borntraeger@linux.ibm.com>
+    Cc: Sven Schnelle <svens@linux.ibm.com>
+    Acked-by: Heiko Carstens <hca@linux.ibm.com>
+    Signed-off-by: Jason A. Donenfeld <Jason@zx2c4.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 9f174326e35ceb355e6ac8dcb750797e9daf61f1
+Author: Jason A. Donenfeld <Jason@zx2c4.com>
+Date:   Sat Apr 23 21:11:41 2022 +0200
+
+    ia64: define get_cycles macro for arch-override
+    
+    commit 57c0900b91d8891ab43f0e6b464d059fda51d102 upstream.
+    
+    Itanium defines a get_cycles() function, but it does not do the usual
+    `#define get_cycles get_cycles` dance, making it impossible for generic
+    code to see if an arch-specific function was defined. While the
+    get_cycles() ifdef is not currently used, the following timekeeping
+    patch in this series will depend on the macro existing (or not existing)
+    when defining random_get_entropy().
+    
+    Cc: Thomas Gleixner <tglx@linutronix.de>
+    Cc: Arnd Bergmann <arnd@arndb.de>
+    Signed-off-by: Jason A. Donenfeld <Jason@zx2c4.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 807ed9c29586e6b958e102c4cee793d6e282620e
+Author: Jason A. Donenfeld <Jason@zx2c4.com>
+Date:   Thu May 5 02:20:22 2022 +0200
+
+    init: call time_init() before rand_initialize()
+    
+    commit fe222a6ca2d53c38433cba5d3be62a39099e708e upstream.
+    
+    Currently time_init() is called after rand_initialize(), but
+    rand_initialize() makes use of the timer on various platforms, and
+    sometimes this timer needs to be initialized by time_init() first. In
+    order for random_get_entropy() to not return zero during early boot when
+    it's potentially used as an entropy source, reverse the order of these
+    two calls. The block doing random initialization was right before
+    time_init() before, so changing the order shouldn't have any complicated
+    effects.
+    
+    Cc: Andrew Morton <akpm@linux-foundation.org>
+    Reviewed-by: Stafford Horne <shorne@gmail.com>
+    Signed-off-by: Jason A. Donenfeld <Jason@zx2c4.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 2814a9e632db40f6591b12f1e8b6b610ee1bd854
+Author: Jason A. Donenfeld <Jason@zx2c4.com>
+Date:   Tue May 3 21:43:58 2022 +0200
+
+    random: fix sysctl documentation nits
+    
+    commit 069c4ea6871c18bd368f27756e0f91ffb524a788 upstream.
+    
+    A semicolon was missing, and the almost-alphabetical-but-not ordering
+    was confusing, so regroup these by category instead.
+    
+    Signed-off-by: Jason A. Donenfeld <Jason@zx2c4.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 4179671f496bdc26d2c85ffb3cca16f297f6d852
+Author: Jason A. Donenfeld <Jason@zx2c4.com>
+Date:   Mon Apr 18 20:57:31 2022 +0200
+
+    random: document crng_fast_key_erasure() destination possibility
+    
+    commit 8717627d6ac53251ee012c3c7aca392f29f38a42 upstream.
+    
+    This reverts 35a33ff3807d ("random: use memmove instead of memcpy for
+    remaining 32 bytes"), which was made on a totally bogus basis. The thing
+    it was worried about overlapping came from the stack, not from one of
+    its arguments, as Eric pointed out.
+    
+    But the fact that this confusion even happened draws attention to the
+    fact that it's a bit non-obvious that the random_data parameter can
+    alias chacha_state, and in fact should do so when the caller can't rely
+    on the stack being cleared in a timely manner. So this commit documents
+    that.
+    
+    Reported-by: Eric Biggers <ebiggers@kernel.org>
+    Reviewed-by: Eric Biggers <ebiggers@google.com>
+    Signed-off-by: Jason A. Donenfeld <Jason@zx2c4.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 8b373c113a4caccfb99579f16d2faa63b251737b
+Author: Jason A. Donenfeld <Jason@zx2c4.com>
+Date:   Fri Apr 8 18:14:57 2022 +0200
+
+    random: make random_get_entropy() return an unsigned long
+    
+    commit b0c3e796f24b588b862b61ce235d3c9417dc8983 upstream.
+    
+    Some implementations were returning type `unsigned long`, while others
+    that fell back to get_cycles() were implicitly returning a `cycles_t` or
+    an untyped constant int literal. That makes for weird and confusing
+    code, and basically all code in the kernel already handled it like it
+    was an `unsigned long`. I recently tried to handle it as the largest
+    type it could be, a `cycles_t`, but doing so doesn't really help with
+    much.
+    
+    Instead let's just make random_get_entropy() return an unsigned long all
+    the time. This also matches the commonly used `arch_get_random_long()`
+    function, so now RDRAND and RDTSC return the same sized integer, which
+    means one can fallback to the other more gracefully.
+    
+    Cc: Dominik Brodowski <linux@dominikbrodowski.net>
+    Cc: Theodore Ts'o <tytso@mit.edu>
+    Acked-by: Thomas Gleixner <tglx@linutronix.de>
+    Signed-off-by: Jason A. Donenfeld <Jason@zx2c4.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit b8078810e44d487937c814f2d864690cce69da9a
+Author: Jason A. Donenfeld <Jason@zx2c4.com>
+Date:   Thu Apr 7 21:23:08 2022 +0200
+
+    random: allow partial reads if later user copies fail
+    
+    commit 5209aed5137880fa229746cb521f715e55596460 upstream.
+    
+    Rather than failing entirely if a copy_to_user() fails at some point,
+    instead we should return a partial read for the amount that succeeded
+    prior, unless none succeeded at all, in which case we return -EFAULT as
+    before.
+    
+    This makes it consistent with other reader interfaces. For example, the
+    following snippet for /dev/zero outputs "4" followed by "1":
+    
+      int fd;
+      void *x = mmap(NULL, 4096, PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE, -1, 0);
+      assert(x != MAP_FAILED);
+      fd = open("/dev/zero", O_RDONLY);
+      assert(fd >= 0);
+      printf("%zd\n", read(fd, x, 4));
+      printf("%zd\n", read(fd, x + 4095, 4));
+      close(fd);
+    
+    This brings that same standard behavior to the various RNG reader
+    interfaces.
+    
+    While we're at it, we can streamline the loop logic a little bit.
+    
+    Suggested-by: Linus Torvalds <torvalds@linux-foundation.org>
+    Cc: Jann Horn <jannh@google.com>
+    Signed-off-by: Jason A. Donenfeld <Jason@zx2c4.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit ccaaff57ed50301189cb0910d48f3a112abba804
+Author: Jason A. Donenfeld <Jason@zx2c4.com>
+Date:   Wed Apr 6 02:36:16 2022 +0200
+
+    random: check for signals every PAGE_SIZE chunk of /dev/[u]random
+    
+    commit e3c1c4fd9e6d14059ed93ebfe15e1c57793b1a05 upstream.
+    
+    In 1448769c9cdb ("random: check for signal_pending() outside of
+    need_resched() check"), Jann pointed out that we previously were only
+    checking the TIF_NOTIFY_SIGNAL and TIF_SIGPENDING flags if the process
+    had TIF_NEED_RESCHED set, which meant in practice, super long reads to
+    /dev/[u]random would delay signal handling by a long time. I tried this
+    using the below program, and indeed I wasn't able to interrupt a
+    /dev/urandom read until after several megabytes had been read. The bug
+    he fixed has always been there, and so code that reads from /dev/urandom
+    without checking the return value of read() has mostly worked for a long
+    time, for most sizes, not just for <= 256.
+    
+    Maybe it makes sense to keep that code working. The reason it was so
+    small prior, ignoring the fact that it didn't work anyway, was likely
+    because /dev/random used to block, and that could happen for pretty
+    large lengths of time while entropy was gathered. But now, it's just a
+    chacha20 call, which is extremely fast and is just operating on pure
+    data, without having to wait for some external event. In that sense,
+    /dev/[u]random is a lot more like /dev/zero.
+    
+    Taking a page out of /dev/zero's read_zero() function, it always returns
+    at least one chunk, and then checks for signals after each chunk. Chunk
+    sizes there are of length PAGE_SIZE. Let's just copy the same thing for
+    /dev/[u]random, and check for signals and cond_resched() for every
+    PAGE_SIZE amount of data. This makes the behavior more consistent with
+    expectations, and should mitigate the impact of Jann's fix for the
+    age-old signal check bug.
+    
+    ---- test program ----
+    
+      #include <unistd.h>
+      #include <signal.h>
+      #include <stdio.h>
+      #include <sys/random.h>
+    
+      static unsigned char x[~0U];
+    
+      static void handle(int) { }
+    
+      int main(int argc, char *argv[])
+      {
+        pid_t pid = getpid(), child;
+        signal(SIGUSR1, handle);
+        if (!(child = fork())) {
+          for (;;)
+            kill(pid, SIGUSR1);
+        }
+        pause();
+        printf("interrupted after reading %zd bytes\n", getrandom(x, sizeof(x), 0));
+        kill(child, SIGTERM);
+        return 0;
+      }
+    
+    Cc: Jann Horn <jannh@google.com>
+    Cc: Theodore Ts'o <tytso@mit.edu>
+    Signed-off-by: Jason A. Donenfeld <Jason@zx2c4.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 02c2e2ca36101ab650f9444ab9e7fe5b8b00bbf3
+Author: Jann Horn <jannh@google.com>
+Date:   Tue Apr 5 18:39:31 2022 +0200
+
+    random: check for signal_pending() outside of need_resched() check
+    
+    commit 1448769c9cdb69ad65287f4f7ab58bc5f2f5d7ba upstream.
+    
+    signal_pending() checks TIF_NOTIFY_SIGNAL and TIF_SIGPENDING, which
+    signal that the task should bail out of the syscall when possible. This
+    is a separate concept from need_resched(), which checks
+    TIF_NEED_RESCHED, signaling that the task should preempt.
+    
+    In particular, with the current code, the signal_pending() bailout
+    probably won't work reliably.
+    
+    Change this to look like other functions that read lots of data, such as
+    read_zero().
+    
+    Fixes: 1da177e4c3f4 ("Linux-2.6.12-rc2")
+    Signed-off-by: Jann Horn <jannh@google.com>
+    Signed-off-by: Jason A. Donenfeld <Jason@zx2c4.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit e7e196e1ae2603a2c5f1894f1868a7a5b5a2c5e0
+Author: Jason A. Donenfeld <Jason@zx2c4.com>
+Date:   Tue Apr 5 16:40:51 2022 +0200
+
+    random: do not allow user to keep crng key around on stack
+    
+    commit aba120cc101788544aa3e2c30c8da88513892350 upstream.
+    
+    The fast key erasure RNG design relies on the key that's used to be used
+    and then discarded. We do this, making judicious use of
+    memzero_explicit().  However, reads to /dev/urandom and calls to
+    getrandom() involve a copy_to_user(), and userspace can use FUSE or
+    userfaultfd, or make a massive call, dynamically remap memory addresses
+    as it goes, and set the process priority to idle, in order to keep a
+    kernel stack alive indefinitely. By probing
+    /proc/sys/kernel/random/entropy_avail to learn when the crng key is
+    refreshed, a malicious userspace could mount this attack every 5 minutes
+    thereafter, breaking the crng's forward secrecy.
+    
+    In order to fix this, we just overwrite the stack's key with the first
+    32 bytes of the "free" fast key erasure output. If we're returning <= 32
+    bytes to the user, then we can still return those bytes directly, so
+    that short reads don't become slower. And for long reads, the difference
+    is hopefully lost in the amortization, so it doesn't change much, with
+    that amortization helping variously for medium reads.
+    
+    We don't need to do this for get_random_bytes() and the various
+    kernel-space callers, and later, if we ever switch to always batching,
+    this won't be necessary either, so there's no need to change the API of
+    these functions.
+    
+    Cc: Theodore Ts'o <tytso@mit.edu>
+    Reviewed-by: Jann Horn <jannh@google.com>
+    Fixes: c92e040d575a ("random: add backtracking protection to the CRNG")
+    Fixes: 186873c549df ("random: use simpler fast key erasure flow on per-cpu keys")
+    Signed-off-by: Jason A. Donenfeld <Jason@zx2c4.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit be7561767ce84ceb1a902b190e1715b3f4719932
+Author: Jan Varho <jan.varho@gmail.com>
+Date:   Mon Apr 4 19:42:30 2022 +0300
+
+    random: do not split fast init input in add_hwgenerator_randomness()
+    
+    commit 527a9867af29ff89f278d037db704e0ed50fb666 upstream.
+    
+    add_hwgenerator_randomness() tries to only use the required amount of input
+    for fast init, but credits all the entropy, rather than a fraction of
+    it. Since it's hard to determine how much entropy is left over out of a
+    non-unformly random sample, either give it all to fast init or credit
+    it, but don't attempt to do both. In the process, we can clean up the
+    injection code to no longer need to return a value.
+    
+    Signed-off-by: Jan Varho <jan.varho@gmail.com>
+    [Jason: expanded commit message]
+    Fixes: 73c7733f122e ("random: do not throw away excess input to crng_fast_load")
+    Cc: stable@vger.kernel.org # 5.17+, requires af704c856e88
+    Signed-off-by: Jason A. Donenfeld <Jason@zx2c4.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 636b057e2a1a7b64333c5f5ce95401a096e59823
+Author: Jason A. Donenfeld <Jason@zx2c4.com>
+Date:   Thu Mar 31 11:01:01 2022 -0400
+
+    random: mix build-time latent entropy into pool at init
+    
+    commit 1754abb3e7583c570666fa1e1ee5b317e88c89a0 upstream.
+    
+    Prior, the "input_pool_data" array needed no real initialization, and so
+    it was easy to mark it with __latent_entropy to populate it during
+    compile-time. In switching to using a hash function, this required us to
+    specifically initialize it to some specific state, which means we
+    dropped the __latent_entropy attribute. An unfortunate side effect was
+    this meant the pool was no longer seeded using compile-time random data.
+    In order to bring this back, we declare an array in rand_initialize()
+    with __latent_entropy and call mix_pool_bytes() on that at init, which
+    accomplishes the same thing as before. We make this __initconst, so that
+    it doesn't take up space at runtime after init.
+    
+    Fixes: 6e8ec2552c7d ("random: use computational hash for entropy extraction")
+    Reviewed-by: Dominik Brodowski <linux@dominikbrodowski.net>
+    Reviewed-by: Theodore Ts'o <tytso@mit.edu>
+    Signed-off-by: Jason A. Donenfeld <Jason@zx2c4.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 3967a200367c933bc52b7d32681025f843e77642
+Author: Jason A. Donenfeld <Jason@zx2c4.com>
+Date:   Tue Mar 22 22:21:52 2022 -0600
+
+    random: re-add removed comment about get_random_{u32,u64} reseeding
+    
+    commit dd7aa36e535797926d8eb311da7151919130139d upstream.
+    
+    The comment about get_random_{u32,u64}() not invoking reseeding got
+    added in an unrelated commit, that then was recently reverted by
+    0313bc278dac ("Revert "random: block in /dev/urandom""). So this adds
+    that little comment snippet back, and improves the wording a bit too.
+    
+    Reviewed-by: Dominik Brodowski <linux@dominikbrodowski.net>
+    Signed-off-by: Jason A. Donenfeld <Jason@zx2c4.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 25727cbbe9b462ca2ccb9a9de9e122e32328ab8e
+Author: Jason A. Donenfeld <Jason@zx2c4.com>
+Date:   Tue Mar 22 21:43:12 2022 -0600
+
+    random: treat bootloader trust toggle the same way as cpu trust toggle
+    
+    commit d97c68d178fbf8aaaf21b69b446f2dfb13909316 upstream.
+    
+    If CONFIG_RANDOM_TRUST_CPU is set, the RNG initializes using RDRAND.
+    But, the user can disable (or enable) this behavior by setting
+    `random.trust_cpu=0/1` on the kernel command line. This allows system
+    builders to do reasonable things while avoiding howls from tinfoil
+    hatters. (Or vice versa.)
+    
+    CONFIG_RANDOM_TRUST_BOOTLOADER is basically the same thing, but regards
+    the seed passed via EFI or device tree, which might come from RDRAND or
+    a TPM or somewhere else. In order to allow distros to more easily enable
+    this while avoiding those same howls (or vice versa), this commit adds
+    the corresponding `random.trust_bootloader=0/1` toggle.
+    
+    Cc: Theodore Ts'o <tytso@mit.edu>
+    Cc: Graham Christensen <graham@grahamc.com>
+    Reviewed-by: Ard Biesheuvel <ardb@kernel.org>
+    Reviewed-by: Dominik Brodowski <linux@dominikbrodowski.net>
+    Link: https://github.com/NixOS/nixpkgs/pull/165355
+    Signed-off-by: Jason A. Donenfeld <Jason@zx2c4.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit a704248b4590ce5738360935ea688e7369c4ed6f
+Author: Jason A. Donenfeld <Jason@zx2c4.com>
+Date:   Mon Mar 21 18:48:05 2022 -0600
+
+    random: skip fast_init if hwrng provides large chunk of entropy
+    
+    commit af704c856e888fb044b058d731d61b46eeec499d upstream.
+    
+    At boot time, EFI calls add_bootloader_randomness(), which in turn calls
+    add_hwgenerator_randomness(). Currently add_hwgenerator_randomness()
+    feeds the first 64 bytes of randomness to the "fast init"
+    non-crypto-grade phase. But if add_hwgenerator_randomness() gets called
+    with more than POOL_MIN_BITS of entropy, there's no point in passing it
+    off to the "fast init" stage, since that's enough entropy to bootstrap
+    the real RNG. The "fast init" stage is just there to provide _something_
+    in the case where we don't have enough entropy to properly bootstrap the
+    RNG. But if we do have enough entropy to bootstrap the RNG, the current
+    logic doesn't serve a purpose. So, in the case where we're passed
+    greater than or equal to POOL_MIN_BITS of entropy, this commit makes us
+    skip the "fast init" phase.
+    
+    Cc: Dominik Brodowski <linux@dominikbrodowski.net>
+    Signed-off-by: Jason A. Donenfeld <Jason@zx2c4.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 3689ac035180926ee70ceede0133d24af4605fa9
+Author: Jason A. Donenfeld <Jason@zx2c4.com>
+Date:   Tue Mar 8 10:12:16 2022 -0700
+
+    random: check for signal and try earlier when generating entropy
+    
+    commit 3e504d2026eb6c8762cd6040ae57db166516824a upstream.
+    
+    Rather than waiting a full second in an interruptable waiter before
+    trying to generate entropy, try to generate entropy first and wait
+    second. While waiting one second might give an extra second for getting
+    entropy from elsewhere, we're already pretty late in the init process
+    here, and whatever else is generating entropy will still continue to
+    contribute. This has implications on signal handling: we call
+    try_to_generate_entropy() from wait_for_random_bytes(), and
+    wait_for_random_bytes() always uses wait_event_interruptible_timeout()
+    when waiting, since it's called by userspace code in restartable
+    contexts, where signals can pend. Since try_to_generate_entropy() now
+    runs first, if a signal is pending, it's necessary for
+    try_to_generate_entropy() to check for signals, since it won't hit the
+    wait until after try_to_generate_entropy() has returned. And even before
+    this change, when entering a busy loop in try_to_generate_entropy(), we
+    should have been checking to see if any signals are pending, so that a
+    process doesn't get stuck in that loop longer than expected.
+    
+    Cc: Theodore Ts'o <tytso@mit.edu>
+    Reviewed-by: Dominik Brodowski <linux@dominikbrodowski.net>
+    Signed-off-by: Jason A. Donenfeld <Jason@zx2c4.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 94c8249efa7651cd9fb3e4581c0c8091cd964455
+Author: Jason A. Donenfeld <Jason@zx2c4.com>
+Date:   Tue Mar 8 23:32:34 2022 -0700
+
+    random: reseed more often immediately after booting
+    
+    commit 7a7ff644aeaf071d433caffb3b8ea57354b55bd3 upstream.
+    
+    In order to chip away at the "premature first" problem, we augment our
+    existing entropy accounting with more frequent reseedings at boot.
+    
+    The idea is that at boot, we're getting entropy from various places, and
+    we're not very sure which of early boot entropy is good and which isn't.
+    Even when we're crediting the entropy, we're still not totally certain
+    that it's any good. Since boot is the one time (aside from a compromise)
+    that we have zero entropy, it's important that we shepherd entropy into
+    the crng fairly often.
+    
+    At the same time, we don't want a "premature next" problem, whereby an
+    attacker can brute force individual bits of added entropy. In lieu of
+    going full-on Fortuna (for now), we can pick a simpler strategy of just
+    reseeding more often during the first 5 minutes after boot. This is
+    still bounded by the 256-bit entropy credit requirement, so we'll skip a
+    reseeding if we haven't reached that, but in case entropy /is/ coming
+    in, this ensures that it makes its way into the crng rather rapidly
+    during these early stages.
+    
+    Ordinarily we reseed if the previous reseeding is 300 seconds old. This
+    commit changes things so that for the first 600 seconds of boot time, we
+    reseed if the previous reseeding is uptime / 2 seconds old. That means
+    that we'll reseed at the very least double the uptime of the previous
+    reseeding.
+    
+    Cc: Theodore Ts'o <tytso@mit.edu>
+    Reviewed-by: Eric Biggers <ebiggers@google.com>
+    Signed-off-by: Jason A. Donenfeld <Jason@zx2c4.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 99290c6898b22e57ccfb53a34f93abf61b9dad26
+Author: Jason A. Donenfeld <Jason@zx2c4.com>
+Date:   Tue Mar 8 11:20:17 2022 -0700
+
+    random: make consistent usage of crng_ready()
+    
+    commit a96cfe2d427064325ecbf56df8816c6b871ec285 upstream.
+    
+    Rather than sometimes checking `crng_init < 2`, we should always use the
+    crng_ready() macro, so that should we change anything later, it's
+    consistent. Additionally, that macro already has a likely() around it,
+    which means we don't need to open code our own likely() and unlikely()
+    annotations.
+    
+    Cc: Theodore Ts'o <tytso@mit.edu>
+    Reviewed-by: Dominik Brodowski <linux@dominikbrodowski.net>
+    Signed-off-by: Jason A. Donenfeld <Jason@zx2c4.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 0c66c876393b06597843900310423a298fb2e03c
+Author: Jason A. Donenfeld <Jason@zx2c4.com>
+Date:   Fri Feb 11 14:58:44 2022 +0100
+
+    random: use SipHash as interrupt entropy accumulator
+    
+    commit f5eab0e2db4f881fb2b62b3fdad5b9be673dd7ae upstream.
+    
+    The current fast_mix() function is a piece of classic mailing list
+    crypto, where it just sort of sprung up by an anonymous author without a
+    lot of real analysis of what precisely it was accomplishing. As an ARX
+    permutation alone, there are some easily searchable differential trails
+    in it, and as a means of preventing malicious interrupts, it completely
+    fails, since it xors new data into the entire state every time. It can't
+    really be analyzed as a random permutation, because it clearly isn't,
+    and it can't be analyzed as an interesting linear algebraic structure
+    either, because it's also not that. There really is very little one can
+    say about it in terms of entropy accumulation. It might diffuse bits,
+    some of the time, maybe, we hope, I guess. But for the most part, it
+    fails to accomplish anything concrete.
+    
+    As a reminder, the simple goal of add_interrupt_randomness() is to
+    simply accumulate entropy until ~64 interrupts have elapsed, and then
+    dump it into the main input pool, which uses a cryptographic hash.
+    
+    It would be nice to have something cryptographically strong in the
+    interrupt handler itself, in case a malicious interrupt compromises a
+    per-cpu fast pool within the 64 interrupts / 1 second window, and then
+    inside of that same window somehow can control its return address and
+    cycle counter, even if that's a bit far fetched. However, with a very
+    CPU-limited budget, actually doing that remains an active research
+    project (and perhaps there'll be something useful for Linux to come out
+    of it). And while the abundance of caution would be nice, this isn't
+    *currently* the security model, and we don't yet have a fast enough
+    solution to make it our security model. Plus there's not exactly a
+    pressing need to do that. (And for the avoidance of doubt, the actual
+    cluster of 64 accumulated interrupts still gets dumped into our
+    cryptographically secure input pool.)
+    
+    So, for now we are going to stick with the existing interrupt security
+    model, which assumes that each cluster of 64 interrupt data samples is
+    mostly non-malicious and not colluding with an infoleaker. With this as
+    our goal, we have a few more choices, simply aiming to accumulate
+    entropy, while discarding the least amount of it.
+    
+    We know from <https://eprint.iacr.org/2019/198> that random oracles,
+    instantiated as computational hash functions, make good entropy
+    accumulators and extractors, which is the justification for using
+    BLAKE2s in the main input pool. As mentioned, we don't have that luxury
+    here, but we also don't have the same security model requirements,
+    because we're assuming that there aren't malicious inputs. A
+    pseudorandom function instance can approximately behave like a random
+    oracle, provided that the key is uniformly random. But since we're not
+    concerned with malicious inputs, we can pick a fixed key, which is not
+    secret, knowing that "nature" won't interact with a sufficiently chosen
+    fixed key by accident. So we pick a PRF with a fixed initial key, and
+    accumulate into it continuously, dumping the result every 64 interrupts
+    into our cryptographically secure input pool.
+    
+    For this, we make use of SipHash-1-x on 64-bit and HalfSipHash-1-x on
+    32-bit, which are already in use in the kernel's hsiphash family of
+    functions and achieve the same performance as the function they replace.
+    It would be nice to do two rounds, but we don't exactly have the CPU
+    budget handy for that, and one round alone is already sufficient.
+    
+    As mentioned, we start with a fixed initial key (zeros is fine), and
+    allow SipHash's symmetry breaking constants to turn that into a useful
+    starting point. Also, since we're dumping the result (or half of it on
+    64-bit so as to tax our hash function the same amount on all platforms)
+    into the cryptographically secure input pool, there's no point in
+    finalizing SipHash's output, since it'll wind up being finalized by
+    something much stronger. This means that all we need to do is use the
+    ordinary round function word-by-word, as normal SipHash does.
+    Simplified, the flow is as follows:
+    
+    Initialize:
+    
+        siphash_state_t state;
+        siphash_init(&state, key={0, 0, 0, 0});
+    
+    Update (accumulate) on interrupt:
+    
+        siphash_update(&state, interrupt_data_and_timing);
+    
+    Dump into input pool after 64 interrupts:
+    
+        blake2s_update(&input_pool, &state, sizeof(state) / 2);
+    
+    The result of all of this is that the security model is unchanged from
+    before -- we assume non-malicious inputs -- yet we now implement that
+    model with a stronger argument. I would like to emphasize, again, that
+    the purpose of this commit is to improve the existing design, by making
+    it analyzable, without changing any fundamental assumptions. There may
+    well be value down the road in changing up the existing design, using
+    something cryptographically strong, or simply using a ring buffer of
+    samples rather than having a fast_mix() at all, or changing which and
+    how much data we collect each interrupt so that we can use something
+    linear, or a variety of other ideas. This commit does not invalidate the
+    potential for those in the future.
+    
+    For example, in the future, if we're able to characterize the data we're
+    collecting on each interrupt, we may be able to inch toward information
+    theoretic accumulators. <https://eprint.iacr.org/2021/523> shows that `s
+    = ror32(s, 7) ^ x` and `s = ror64(s, 19) ^ x` make very good
+    accumulators for 2-monotone distributions, which would apply to
+    timestamp counters, like random_get_entropy() or jiffies, but would not
+    apply to our current combination of the two values, or to the various
+    function addresses and register values we mix in. Alternatively,
+    <https://eprint.iacr.org/2021/1002> shows that max-period linear
+    functions with no non-trivial invariant subspace make good extractors,
+    used in the form `s = f(s) ^ x`. However, this only works if the input
+    data is both identical and independent, and obviously a collection of
+    address values and counters fails; so it goes with theoretical papers.
+    Future directions here may involve trying to characterize more precisely
+    what we actually need to collect in the interrupt handler, and building
+    something specific around that.
+    
+    However, as mentioned, the morass of data we're gathering at the
+    interrupt handler presently defies characterization, and so we use
+    SipHash for now, which works well and performs well.
+    
+    Cc: Theodore Ts'o <tytso@mit.edu>
+    Cc: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+    Reviewed-by: Jean-Philippe Aumasson <jeanphilippe.aumasson@gmail.com>
+    Signed-off-by: Jason A. Donenfeld <Jason@zx2c4.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 6da877d2d46ba59a65352061cafbdac790cb8d68
+Author: Jason A. Donenfeld <Jason@zx2c4.com>
+Date:   Tue Mar 1 20:03:49 2022 +0100
+
+    random: replace custom notifier chain with standard one
+    
+    commit 5acd35487dc911541672b3ffc322851769c32a56 upstream.
+    
+    We previously rolled our own randomness readiness notifier, which only
+    has two users in the whole kernel. Replace this with a more standard
+    atomic notifier block that serves the same purpose with less code. Also
+    unexport the symbols, because no modules use it, only unconditional
+    builtins. The only drawback is that it's possible for a notification
+    handler returning the "stop" code to prevent further processing, but
+    given that there are only two users, and that we're unexporting this
+    anyway, that doesn't seem like a significant drawback for the
+    simplification we receive here.
+    
+    Cc: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+    Cc: Theodore Ts'o <tytso@mit.edu>
+    Reviewed-by: Dominik Brodowski <linux@dominikbrodowski.net>
+    [Jason: for stable, also backported to crypto/drbg.c, not unexporting.]
+    Signed-off-by: Jason A. Donenfeld <Jason@zx2c4.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 39c9e5566ac590ad2c9e488baaf6058c251b8fb5
+Author: Jason A. Donenfeld <Jason@zx2c4.com>
+Date:   Mon Feb 28 14:00:52 2022 +0100
+
+    random: don't let 644 read-only sysctls be written to
+    
+    commit 77553cf8f44863b31da242cf24671d76ddb61597 upstream.
+    
+    We leave around these old sysctls for compatibility, and we keep them
+    "writable" for compatibility, but even after writing, we should keep
+    reporting the same value. This is consistent with how userspaces tend to
+    use sysctl_random_write_wakeup_bits, writing to it, and then later
+    reading from it and using the value.
+    
+    Cc: Theodore Ts'o <tytso@mit.edu>
+    Reviewed-by: Dominik Brodowski <linux@dominikbrodowski.net>
+    Signed-off-by: Jason A. Donenfeld <Jason@zx2c4.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit e4e1600a674fc5b4fabaa578d8854db96fcc28dd
+Author: Jason A. Donenfeld <Jason@zx2c4.com>
+Date:   Mon Feb 28 13:57:57 2022 +0100
+
+    random: give sysctl_random_min_urandom_seed a more sensible value
+    
+    commit d0efdf35a6a71d307a250199af6fce122a7c7e11 upstream.
+    
+    This isn't used by anything or anywhere, but we can't delete it due to
+    compatibility. So at least give it the correct value of what it's
+    supposed to be instead of a garbage one.
+    
+    Cc: Theodore Ts'o <tytso@mit.edu>
+    Reviewed-by: Dominik Brodowski <linux@dominikbrodowski.net>
+    Signed-off-by: Jason A. Donenfeld <Jason@zx2c4.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 2c60d7f38d640e5d01553218eaf4163a1089e6e2
+Author: Jason A. Donenfeld <Jason@zx2c4.com>
+Date:   Sun Feb 13 18:25:07 2022 +0100
+
+    random: do crng pre-init loading in worker rather than irq
+    
+    commit c2a7de4feb6e09f23af7accc0f882a8fa92e7ae5 upstream.
+    
+    Taking spinlocks from IRQ context is generally problematic for
+    PREEMPT_RT. That is, in part, why we take trylocks instead. However, a
+    spin_try_lock() is also problematic since another spin_lock() invocation
+    can potentially PI-boost the wrong task, as the spin_try_lock() is
+    invoked from an IRQ-context, so the task on CPU (random task or idle) is
+    not the actual owner.
+    
+    Additionally, by deferring the crng pre-init loading to the worker, we
+    can use the cryptographic hash function rather than xor, which is
+    perhaps a meaningful difference when considering this data has only been
+    through the relatively weak fast_mix() function.
+    
+    The biggest downside of this approach is that the pre-init loading is
+    now deferred until later, which means things that need random numbers
+    after interrupts are enabled, but before workqueues are running -- or
+    before this particular worker manages to run -- are going to get into
+    trouble. Hopefully in the real world, this window is rather small,
+    especially since this code won't run until 64 interrupts had occurred.
+    
+    Cc: Sultan Alsawaf <sultan@kerneltoast.com>
+    Cc: Thomas Gleixner <tglx@linutronix.de>
+    Cc: Peter Zijlstra <peterz@infradead.org>
+    Cc: Eric Biggers <ebiggers@kernel.org>
+    Cc: Theodore Ts'o <tytso@mit.edu>
+    Acked-by: Sebastian Andrzej Siewior <bigeasy@linutronix.de>
+    Reviewed-by: Dominik Brodowski <linux@dominikbrodowski.net>
+    Signed-off-by: Jason A. Donenfeld <Jason@zx2c4.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 1523ec5324e9fef549615b008c2a4a3e7c1d0711
+Author: Jason A. Donenfeld <Jason@zx2c4.com>
+Date:   Thu Feb 24 18:30:58 2022 +0100
+
+    random: unify cycles_t and jiffies usage and types
+    
+    commit abded93ec1e9692920fe309f07f40bd1035f2940 upstream.
+    
+    random_get_entropy() returns a cycles_t, not an unsigned long, which is
+    sometimes 64 bits on various 32-bit platforms, including x86.
+    Conversely, jiffies is always unsigned long. This commit fixes things to
+    use cycles_t for fields that use random_get_entropy(), named "cycles",
+    and unsigned long for fields that use jiffies, named "now". It's also
+    good to mix in a cycles_t and a jiffies in the same way for both
+    add_device_randomness and add_timer_randomness, rather than using xor in
+    one case. Finally, we unify the order of these volatile reads, always
+    reading the more precise cycles counter, and then jiffies, so that the
+    cycle counter is as close to the event as possible.
+    
+    Cc: Theodore Ts'o <tytso@mit.edu>
+    Reviewed-by: Dominik Brodowski <linux@dominikbrodowski.net>
+    Signed-off-by: Jason A. Donenfeld <Jason@zx2c4.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit fdb1e54472c3ead0d82a33bda78f3376736db5f1
+Author: Jason A. Donenfeld <Jason@zx2c4.com>
+Date:   Thu Feb 24 23:04:56 2022 +0100
+
+    random: cleanup UUID handling
+    
+    commit 64276a9939ff414f2f0db38036cf4e1a0a703394 upstream.
+    
+    Rather than hard coding various lengths, we can use the right constants.
+    Strings should be `char *` while buffers should be `u8 *`. Rather than
+    have a nonsensical and unused maxlength, just remove it. Finally, use
+    snprintf instead of sprintf, just out of good hygiene.
+    
+    As well, remove the old comment about returning a binary UUID via the
+    binary sysctl syscall. That syscall was removed from the kernel in 5.5,
+    and actually, the "uuid_strategy" function and related infrastructure
+    for even serving it via the binary sysctl syscall was removed with
+    894d2491153a ("sysctl drivers: Remove dead binary sysctl support") back
+    in 2.6.33.
+    
+    Reviewed-by: Dominik Brodowski <linux@dominikbrodowski.net>
+    Signed-off-by: Jason A. Donenfeld <Jason@zx2c4.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit c169e7a09cd48a3f2ae2978e6713fd72f09f284c
+Author: Jason A. Donenfeld <Jason@zx2c4.com>
+Date:   Tue Feb 22 14:01:57 2022 +0100
+
+    random: only wake up writers after zap if threshold was passed
+    
+    commit a3f9e8910e1584d7725ef7d5ac870920d42d0bb4 upstream.
+    
+    The only time that we need to wake up /dev/random writers on
+    RNDCLEARPOOL/RNDZAPPOOL is when we're changing from a value that is
+    greater than or equal to POOL_MIN_BITS to zero, because if we're
+    changing from below POOL_MIN_BITS to zero, the writers are already
+    unblocked.
+    
+    Cc: Theodore Ts'o <tytso@mit.edu>
+    Reviewed-by: Dominik Brodowski <linux@dominikbrodowski.net>
+    Signed-off-by: Jason A. Donenfeld <Jason@zx2c4.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit e400ba11a241386dc27e57c35c00f61dce92e2f4
+Author: Jason A. Donenfeld <Jason@zx2c4.com>
+Date:   Tue Feb 22 13:46:10 2022 +0100
+
+    random: round-robin registers as ulong, not u32
+    
+    commit da3951ebdcd1cb1d5c750e08cd05aee7b0c04d9a upstream.
+    
+    When the interrupt handler does not have a valid cycle counter, it calls
+    get_reg() to read a register from the irq stack, in round-robin.
+    Currently it does this assuming that registers are 32-bit. This is
+    _probably_ the case, and probably all platforms without cycle counters
+    are in fact 32-bit platforms. But maybe not, and either way, it's not
+    quite correct. This commit fixes that to deal with `unsigned long`
+    rather than `u32`.
+    
+    Cc: Theodore Ts'o <tytso@mit.edu>
+    Reviewed-by: Dominik Brodowski <linux@dominikbrodowski.net>
+    Signed-off-by: Jason A. Donenfeld <Jason@zx2c4.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 144c1e7ecf00688ae8c7f9a8483820527505a9d7
+Author: Jason A. Donenfeld <Jason@zx2c4.com>
+Date:   Sun Feb 13 22:48:04 2022 +0100
+
+    random: clear fast pool, crng, and batches in cpuhp bring up
+    
+    commit 3191dd5a1179ef0fad5a050a1702ae98b6251e8f upstream.
+    
+    For the irq randomness fast pool, rather than having to use expensive
+    atomics, which were visibly the most expensive thing in the entire irq
+    handler, simply take care of the extreme edge case of resetting count to
+    zero in the cpuhp online handler, just after workqueues have been
+    reenabled. This simplifies the code a bit and lets us use vanilla
+    variables rather than atomics, and performance should be improved.
+    
+    As well, very early on when the CPU comes up, while interrupts are still
+    disabled, we clear out the per-cpu crng and its batches, so that it
+    always starts with fresh randomness.
+    
+    Cc: Thomas Gleixner <tglx@linutronix.de>
+    Cc: Peter Zijlstra <peterz@infradead.org>
+    Cc: Theodore Ts'o <tytso@mit.edu>
+    Cc: Sultan Alsawaf <sultan@kerneltoast.com>
+    Cc: Dominik Brodowski <linux@dominikbrodowski.net>
+    Acked-by: Sebastian Andrzej Siewior <bigeasy@linutronix.de>
+    Signed-off-by: Jason A. Donenfeld <Jason@zx2c4.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 80c1f7f8f3cd58114fedb190f744f485e54541c9
+Author: Jason A. Donenfeld <Jason@zx2c4.com>
+Date:   Sun Feb 13 16:17:01 2022 +0100
+
+    random: pull add_hwgenerator_randomness() declaration into random.h
+    
+    commit b777c38239fec5a528e59f55b379e31b1a187524 upstream.
+    
+    add_hwgenerator_randomness() is a function implemented and documented
+    inside of random.c. It is the way that hardware RNGs push data into it.
+    Therefore, it should be declared in random.h. Otherwise sparse complains
+    with:
+    
+    random.c:1137:6: warning: symbol 'add_hwgenerator_randomness' was not declared. Should it be static?
+    
+    The alternative would be to include hw_random.h into random.c, but that
+    wouldn't really be good for anything except slowing down compile time.
+    
+    Cc: Matt Mackall <mpm@selenic.com>
+    Cc: Theodore Ts'o <tytso@mit.edu>
+    Acked-by: Herbert Xu <herbert@gondor.apana.org.au>
+    Reviewed-by: Eric Biggers <ebiggers@google.com>
+    Reviewed-by: Dominik Brodowski <linux@dominikbrodowski.net>
+    Signed-off-by: Jason A. Donenfeld <Jason@zx2c4.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 98d6def672fd10d546129cb07dc7268c5f634079
+Author: Jason A. Donenfeld <Jason@zx2c4.com>
+Date:   Sat Feb 12 23:57:38 2022 +0100
+
+    random: check for crng_init == 0 in add_device_randomness()
+    
+    commit 1daf2f387652bf3a7044aea042f5023b3f6b189b upstream.
+    
+    This has no real functional change, as crng_pre_init_inject() (and
+    before that, crng_slow_init()) always checks for == 0, not >= 2. So
+    correct the outer unlocked change to reflect that. Before this used
+    crng_ready(), which was not correct.
+    
+    Cc: Theodore Ts'o <tytso@mit.edu>
+    Reviewed-by: Dominik Brodowski <linux@dominikbrodowski.net>
+    Reviewed-by: Eric Biggers <ebiggers@google.com>
+    Signed-off-by: Jason A. Donenfeld <Jason@zx2c4.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 9df4a56fad32c31049bebc9800b4ea50e1288093
+Author: Jason A. Donenfeld <Jason@zx2c4.com>
+Date:   Sat Feb 12 23:54:09 2022 +0100
+
+    random: unify early init crng load accounting
+    
+    commit da792c6d5f59a76c10a310c5d4c93428fd18f996 upstream.
+    
+    crng_fast_load() and crng_slow_load() have different semantics:
+    
+    - crng_fast_load() xors and accounts with crng_init_cnt.
+    - crng_slow_load() hashes and doesn't account.
+    
+    However add_hwgenerator_randomness() can afford to hash (it's called
+    from a kthread), and it should account. Additionally, ones that can
+    afford to hash don't need to take a trylock but can take a normal lock.
+    So, we combine these into one function, crng_pre_init_inject(), which
+    allows us to control these in a uniform way. This will make it simpler
+    later to simplify this all down when the time comes for that.
+    
+    Cc: Theodore Ts'o <tytso@mit.edu>
+    Reviewed-by: Dominik Brodowski <linux@dominikbrodowski.net>
+    Reviewed-by: Eric Biggers <ebiggers@google.com>
+    Signed-off-by: Jason A. Donenfeld <Jason@zx2c4.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit d386b087056a354a3cd59e40e70e06e621d8a58e
+Author: Jason A. Donenfeld <Jason@zx2c4.com>
+Date:   Sat Feb 12 01:26:17 2022 +0100
+
+    random: do not take pool spinlock at boot
+    
+    commit afba0b80b977b2a8f16234f2acd982f82710ba33 upstream.
+    
+    Since rand_initialize() is run while interrupts are still off and
+    nothing else is running, we don't need to repeatedly take and release
+    the pool spinlock, especially in the RDSEED loop.
+    
+    Reviewed-by: Eric Biggers <ebiggers@google.com>
+    Reviewed-by: Dominik Brodowski <linux@dominikbrodowski.net>
+    Signed-off-by: Jason A. Donenfeld <Jason@zx2c4.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 3c48a2da32ef8ebfa8b71233b790f45d48704b2a
+Author: Jason A. Donenfeld <Jason@zx2c4.com>
+Date:   Fri Feb 4 16:15:46 2022 +0100
+
+    random: defer fast pool mixing to worker
+    
+    commit 58340f8e952b613e0ead0bed58b97b05bf4743c5 upstream.
+    
+    On PREEMPT_RT, it's problematic to take spinlocks from hard irq
+    handlers. We can fix this by deferring to a workqueue the dumping of
+    the fast pool into the input pool.
+    
+    We accomplish this with some careful rules on fast_pool->count:
+    
+      - When it's incremented to >= 64, we schedule the work.
+      - If the top bit is set, we never schedule the work, even if >= 64.
+      - The worker is responsible for setting it back to 0 when it's done.
+    
+    There are two small issues around using workqueues for this purpose that
+    we work around.
+    
+    The first issue is that mix_interrupt_randomness() might be migrated to
+    another CPU during CPU hotplug. This issue is rectified by checking that
+    it hasn't been migrated (after disabling irqs). If it has been migrated,
+    then we set the count to zero, so that when the CPU comes online again,
+    it can requeue the work. As part of this, we switch to using an
+    atomic_t, so that the increment in the irq handler doesn't wipe out the
+    zeroing if the CPU comes back online while this worker is running.
+    
+    The second issue is that, though relatively minor in effect, we probably
+    want to make sure we get a consistent view of the pool onto the stack,
+    in case it's interrupted by an irq while reading. To do this, we don't
+    reenable irqs until after the copy. There are only 18 instructions
+    between the cli and sti, so this is a pretty tiny window.
+    
+    Cc: Thomas Gleixner <tglx@linutronix.de>
+    Cc: Peter Zijlstra <peterz@infradead.org>
+    Cc: Theodore Ts'o <tytso@mit.edu>
+    Cc: Jonathan Neuschäfer <j.neuschaefer@gmx.net>
+    Acked-by: Sebastian Andrzej Siewior <bigeasy@linutronix.de>
+    Reviewed-by: Sultan Alsawaf <sultan@kerneltoast.com>
+    Reviewed-by: Dominik Brodowski <linux@dominikbrodowski.net>
+    Signed-off-by: Jason A. Donenfeld <Jason@zx2c4.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 9489e36e215049048d09f22fe29a0fda3db5163a
+Author: Jason A. Donenfeld <Jason@zx2c4.com>
+Date:   Fri Feb 11 12:29:33 2022 +0100
+
+    random: rewrite header introductory comment
+    
+    commit 5f75d9f3babea8ae0a2d06724656874f41d317f5 upstream.
+    
+    Now that we've re-documented the various sections, we can remove the
+    outdated text here and replace it with a high-level overview.
+    
+    Cc: Theodore Ts'o <tytso@mit.edu>
+    Reviewed-by: Eric Biggers <ebiggers@google.com>
+    Reviewed-by: Dominik Brodowski <linux@dominikbrodowski.net>
+    Signed-off-by: Jason A. Donenfeld <Jason@zx2c4.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 9385681af846fc7b64078b5ff378f9c68492e23b
+Author: Jason A. Donenfeld <Jason@zx2c4.com>
+Date:   Fri Feb 11 12:53:34 2022 +0100
+
+    random: group sysctl functions
+    
+    commit 0deff3c43206c24e746b1410f11125707ad3040e upstream.
+    
+    This pulls all of the sysctl-focused functions into the sixth labeled
+    section.
+    
+    No functional changes.
+    
+    Cc: Theodore Ts'o <tytso@mit.edu>
+    Reviewed-by: Dominik Brodowski <linux@dominikbrodowski.net>
+    Signed-off-by: Jason A. Donenfeld <Jason@zx2c4.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 96340f035df66b0795edba0d027a98e2dd1b0353
+Author: Jason A. Donenfeld <Jason@zx2c4.com>
+Date:   Fri Feb 11 12:53:34 2022 +0100
+
+    random: group userspace read/write functions
+    
+    commit a6adf8e7a605250b911e94793fd077933709ff9e upstream.
+    
+    This pulls all of the userspace read/write-focused functions into the
+    fifth labeled section.
+    
+    No functional changes.
+    
+    Cc: Theodore Ts'o <tytso@mit.edu>
+    Reviewed-by: Eric Biggers <ebiggers@google.com>
+    Reviewed-by: Dominik Brodowski <linux@dominikbrodowski.net>
+    Signed-off-by: Jason A. Donenfeld <Jason@zx2c4.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 74b704245f3122e64543fae6b015b82d01e206a4
+Author: Jason A. Donenfeld <Jason@zx2c4.com>
+Date:   Fri Feb 11 12:53:34 2022 +0100
+
+    random: group entropy collection functions
+    
+    commit 92c653cf14400946f376a29b828d6af7e01f38dd upstream.
+    
+    This pulls all of the entropy collection-focused functions into the
+    fourth labeled section.
+    
+    No functional changes.
+    
+    Cc: Theodore Ts'o <tytso@mit.edu>
+    Reviewed-by: Dominik Brodowski <linux@dominikbrodowski.net>
+    Reviewed-by: Eric Biggers <ebiggers@google.com>
+    Signed-off-by: Jason A. Donenfeld <Jason@zx2c4.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 43e87e6f3317ec9e0f4886a2dd4cb442d5a1c1d7
+Author: Jason A. Donenfeld <Jason@zx2c4.com>
+Date:   Fri Feb 11 12:53:34 2022 +0100
+
+    random: group entropy extraction functions
+    
+    commit a5ed7cb1a7732ef11959332d507889fbc39ebbb4 upstream.
+    
+    This pulls all of the entropy extraction-focused functions into the
+    third labeled section.
+    
+    No functional changes.
+    
+    Cc: Theodore Ts'o <tytso@mit.edu>
+    Reviewed-by: Eric Biggers <ebiggers@google.com>
+    Reviewed-by: Dominik Brodowski <linux@dominikbrodowski.net>
+    Signed-off-by: Jason A. Donenfeld <Jason@zx2c4.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 019e057db9b1505cf7112129d657635bfe22f188
+Author: Jason A. Donenfeld <Jason@zx2c4.com>
+Date:   Fri Feb 11 12:53:34 2022 +0100
+
+    random: group crng functions
+    
+    commit 3655adc7089da4f8ca74cec8fcef73ea5101430e upstream.
+    
+    This pulls all of the crng-focused functions into the second labeled
+    section.
+    
+    No functional changes.
+    
+    Cc: Theodore Ts'o <tytso@mit.edu>
+    Reviewed-by: Dominik Brodowski <linux@dominikbrodowski.net>
+    Reviewed-by: Eric Biggers <ebiggers@google.com>
+    Signed-off-by: Jason A. Donenfeld <Jason@zx2c4.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 81e62ff1f6503d99bf283c6421cf4395c69dc684
+Author: Jason A. Donenfeld <Jason@zx2c4.com>
+Date:   Fri Feb 11 12:53:34 2022 +0100
+
+    random: group initialization wait functions
+    
+    commit 5f1bb112006b104b3e2a1e1b39bbb9b2617581e6 upstream.
+    
+    This pulls all of the readiness waiting-focused functions into the first
+    labeled section.
+    
+    No functional changes.
+    
+    Cc: Theodore Ts'o <tytso@mit.edu>
+    Reviewed-by: Dominik Brodowski <linux@dominikbrodowski.net>
+    Reviewed-by: Eric Biggers <ebiggers@google.com>
+    Signed-off-by: Jason A. Donenfeld <Jason@zx2c4.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit d3a2510216b40ba004907e8a51dd29a81657744f
+Author: Jason A. Donenfeld <Jason@zx2c4.com>
+Date:   Fri Feb 11 13:41:41 2022 +0100
+
+    random: remove whitespace and reorder includes
+    
+    commit 87e7d5abad0cbc9312dea7f889a57d294c1a5fcc upstream.
+    
+    This is purely cosmetic. Future work involves figuring out which of
+    these headers we need and which we don't.
+    
+    Reviewed-by: Dominik Brodowski <linux@dominikbrodowski.net>
+    Reviewed-by: Eric Biggers <ebiggers@google.com>
+    Signed-off-by: Jason A. Donenfeld <Jason@zx2c4.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 30c52e99db0d87ffe7e64b367d38446ecde0e3f6
+Author: Jason A. Donenfeld <Jason@zx2c4.com>
+Date:   Fri Feb 11 12:28:33 2022 +0100
+
+    random: remove useless header comment
+    
+    commit 6071a6c0fba2d747742cadcbb3ba26ed756ed73b upstream.
+    
+    This really adds nothing at all useful.
+    
+    Cc: Theodore Ts'o <tytso@mit.edu>
+    Reviewed-by: Dominik Brodowski <linux@dominikbrodowski.net>
+    Reviewed-by: Eric Biggers <ebiggers@google.com>
+    Signed-off-by: Jason A. Donenfeld <Jason@zx2c4.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 95f85a01584e454b540332c860d23ffd622d1b4c
+Author: Jason A. Donenfeld <Jason@zx2c4.com>
+Date:   Fri Feb 11 12:19:49 2022 +0100
+
+    random: introduce drain_entropy() helper to declutter crng_reseed()
+    
+    commit 246c03dd899164d0186b6d685d6387f228c28d93 upstream.
+    
+    In preparation for separating responsibilities, break out the entropy
+    count management part of crng_reseed() into its own function.
+    
+    No functional changes.
+    
+    Cc: Theodore Ts'o <tytso@mit.edu>
+    Reviewed-by: Dominik Brodowski <linux@dominikbrodowski.net>
+    Reviewed-by: Eric Biggers <ebiggers@google.com>
+    Signed-off-by: Jason A. Donenfeld <Jason@zx2c4.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit c807eca035c3f8bd550172ee55238856adc40296
+Author: Jason A. Donenfeld <Jason@zx2c4.com>
+Date:   Thu Feb 10 17:01:27 2022 +0100
+
+    random: deobfuscate irq u32/u64 contributions
+    
+    commit b2f408fe403800c91a49f6589d95b6759ce1b30b upstream.
+    
+    In the irq handler, we fill out 16 bytes differently on 32-bit and
+    64-bit platforms, and for 32-bit vs 64-bit cycle counters, which doesn't
+    always correspond with the bitness of the platform. Whether or not you
+    like this strangeness, it is a matter of fact.  But it might not be a
+    fact you well realized until now, because the code that loaded the irq
+    info into 4 32-bit words was quite confusing.  Instead, this commit
+    makes everything explicit by having separate (compile-time) branches for
+    32-bit and 64-bit types.
+    
+    Cc: Theodore Ts'o <tytso@mit.edu>
+    Reviewed-by: Dominik Brodowski <linux@dominikbrodowski.net>
+    Signed-off-by: Jason A. Donenfeld <Jason@zx2c4.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit f641f9495d6fdf55a7da565a76130896f492e61a
+Author: Jason A. Donenfeld <Jason@zx2c4.com>
+Date:   Thu Feb 10 16:43:57 2022 +0100
+
+    random: add proper SPDX header
+    
+    commit a07fdae346c35c6ba286af1c88e0effcfa330bf9 upstream.
+    
+    Convert the current license into the SPDX notation of "(GPL-2.0 OR
+    BSD-3-Clause)". This infers GPL-2.0 from the text "ALTERNATIVELY, this
+    product may be distributed under the terms of the GNU General Public
+    License, in which case the provisions of the GPL are required INSTEAD OF
+    the above restrictions" and it infers BSD-3-Clause from the verbatim
+    BSD 3 clause license in the file.
+    
+    Cc: Thomas Gleixner <tglx@linutronix.de>
+    Cc: Theodore Ts'o <tytso@mit.edu>
+    Cc: Dominik Brodowski <linux@dominikbrodowski.net>
+    Reviewed-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+    Signed-off-by: Jason A. Donenfeld <Jason@zx2c4.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit ce951e9672df144b15540de6cf81d4b1f2ce7d39
+Author: Jason A. Donenfeld <Jason@zx2c4.com>
+Date:   Thu Feb 10 16:40:44 2022 +0100
+
+    random: remove unused tracepoints
+    
+    commit 14c174633f349cb41ea90c2c0aaddac157012f74 upstream.
+    
+    These explicit tracepoints aren't really used and show sign of aging.
+    It's work to keep these up to date, and before I attempted to keep them
+    up to date, they weren't up to date, which indicates that they're not
+    really used. These days there are better ways of introspecting anyway.
+    
+    Cc: Theodore Ts'o <tytso@mit.edu>
+    Reviewed-by: Dominik Brodowski <linux@dominikbrodowski.net>
+    Reviewed-by: Eric Biggers <ebiggers@google.com>
+    Signed-off-by: Jason A. Donenfeld <Jason@zx2c4.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 4509941f75ac8d4fc4a798d03ade86d15eb10caf
+Author: Jason A. Donenfeld <Jason@zx2c4.com>
+Date:   Thu Feb 10 16:35:24 2022 +0100
+
+    random: remove ifdef'd out interrupt bench
+    
+    commit 95e6060c20a7f5db60163274c5222a725ac118f9 upstream.
+    
+    With tools like kbench9000 giving more finegrained responses, and this
+    basically never having been used ever since it was initially added,
+    let's just get rid of this. There *is* still work to be done on the
+    interrupt handler, but this really isn't the way it's being developed.
+    
+    Cc: Theodore Ts'o <tytso@mit.edu>
+    Reviewed-by: Eric Biggers <ebiggers@google.com>
+    Reviewed-by: Dominik Brodowski <linux@dominikbrodowski.net>
+    Signed-off-by: Jason A. Donenfeld <Jason@zx2c4.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit ad5d17d0faf93cde620af933045c267339c578c1
+Author: Jason A. Donenfeld <Jason@zx2c4.com>
+Date:   Wed Feb 9 22:46:48 2022 +0100
+
+    random: tie batched entropy generation to base_crng generation
+    
+    commit 0791e8b655cc373718f0f58800fdc625a3447ac5 upstream.
+    
+    Now that we have an explicit base_crng generation counter, we don't need
+    a separate one for batched entropy. Rather, we can just move the
+    generation forward every time we change crng_init state or update the
+    base_crng key.
+    
+    Cc: Theodore Ts'o <tytso@mit.edu>
+    Reviewed-by: Eric Biggers <ebiggers@google.com>
+    Reviewed-by: Dominik Brodowski <linux@dominikbrodowski.net>
+    Signed-off-by: Jason A. Donenfeld <Jason@zx2c4.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 86ab60616ec6827b98b0f2c6ee96fcca77c018e2
+Author: Dominik Brodowski <linux@dominikbrodowski.net>
+Date:   Wed Feb 9 19:57:06 2022 +0100
+
+    random: fix locking for crng_init in crng_reseed()
+    
+    commit 7191c628fe07b70d3f37de736d173d1b115396ed upstream.
+    
+    crng_init is protected by primary_crng->lock. Therefore, we need
+    to hold this lock when increasing crng_init to 2. As we shouldn't
+    hold this lock for too long, only hold it for those parts which
+    require protection.
+    
+    Signed-off-by: Dominik Brodowski <linux@dominikbrodowski.net>
+    Reviewed-by: Eric Biggers <ebiggers@google.com>
+    Signed-off-by: Jason A. Donenfeld <Jason@zx2c4.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit d2d1ad9430b1e23aa2f82bca561e85868c519383
+Author: Jason A. Donenfeld <Jason@zx2c4.com>
+Date:   Wed Feb 9 18:42:13 2022 +0100
+
+    random: zero buffer after reading entropy from userspace
+    
+    commit 7b5164fb1279bf0251371848e40bae646b59b3a8 upstream.
+    
+    This buffer may contain entropic data that shouldn't stick around longer
+    than needed, so zero out the temporary buffer at the end of write_pool().
+    
+    Reviewed-by: Dominik Brodowski <linux@dominikbrodowski.net>
+    Reviewed-by: Jann Horn <jannh@google.com>
+    Reviewed-by: Eric Biggers <ebiggers@google.com>
+    Signed-off-by: Jason A. Donenfeld <Jason@zx2c4.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit eda555356b39cab00e9c15aa3258786c568cfb3a
+Author: Jason A. Donenfeld <Jason@zx2c4.com>
+Date:   Mon Feb 7 23:37:13 2022 +0100
+
+    random: remove outdated INT_MAX >> 6 check in urandom_read()
+    
+    commit 434537ae54ad37e93555de21b6ac8133d6d773a9 upstream.
+    
+    In 79a8468747c5 ("random: check for increase of entropy_count because of
+    signed conversion"), a number of checks were added around what values
+    were passed to account(), because account() was doing fancy fixed point
+    fractional arithmetic, and a user had some ability to pass large values
+    directly into it. One of things in that commit was limiting those values
+    to INT_MAX >> 6. The first >> 3 was for bytes to bits, and the next >> 3
+    was for bits to 1/8 fractional bits.
+    
+    However, for several years now, urandom reads no longer touch entropy
+    accounting, and so this check serves no purpose. The current flow is:
+    
+    urandom_read_nowarn()-->get_random_bytes_user()-->chacha20_block()
+    
+    Of course, we don't want that size_t to be truncated when adding it into
+    the ssize_t. But we arrive at urandom_read_nowarn() in the first place
+    either via ordinary fops, which limits reads to MAX_RW_COUNT, or via
+    getrandom() which limits reads to INT_MAX.
+    
+    Cc: Theodore Ts'o <tytso@mit.edu>
+    Reviewed-by: Dominik Brodowski <linux@dominikbrodowski.net>
+    Reviewed-by: Jann Horn <jannh@google.com>
+    Reviewed-by: Eric Biggers <ebiggers@google.com>
+    Signed-off-by: Jason A. Donenfeld <Jason@zx2c4.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 5dd066ade8207a484b12b81c5315f90ae3785b9c
+Author: Jason A. Donenfeld <Jason@zx2c4.com>
+Date:   Wed Feb 9 14:43:25 2022 +0100
+
+    random: make more consistent use of integer types
+    
+    commit 04ec96b768c9dd43946b047c3da60dcc66431370 upstream.
+    
+    We've been using a flurry of int, unsigned int, size_t, and ssize_t.
+    Let's unify all of this into size_t where it makes sense, as it does in
+    most places, and leave ssize_t for return values with possible errors.
+    
+    In addition, keeping with the convention of other functions in this
+    file, functions that are dealing with raw bytes now take void *
+    consistently instead of a mix of that and u8 *, because much of the time
+    we're actually passing some other structure that is then interpreted as
+    bytes by the function.
+    
+    We also take the opportunity to fix the outdated and incorrect comment
+    in get_random_bytes_arch().
+    
+    Cc: Theodore Ts'o <tytso@mit.edu>
+    Reviewed-by: Dominik Brodowski <linux@dominikbrodowski.net>
+    Reviewed-by: Jann Horn <jannh@google.com>
+    Reviewed-by: Eric Biggers <ebiggers@google.com>
+    Signed-off-by: Jason A. Donenfeld <Jason@zx2c4.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit ba789caa17a051425e311592344d9b7841790c2d
+Author: Jason A. Donenfeld <Jason@zx2c4.com>
+Date:   Tue Feb 8 19:23:17 2022 +0100
+
+    random: use hash function for crng_slow_load()
+    
+    commit 66e4c2b9541503d721e936cc3898c9f25f4591ff upstream.
+    
+    Since we have a hash function that's really fast, and the goal of
+    crng_slow_load() is reportedly to "touch all of the crng's state", we
+    can just hash the old state together with the new state and call it a
+    day. This way we dont need to reason about another LFSR or worry about
+    various attacks there. This code is only ever used at early boot and
+    then never again.
+    
+    Cc: Theodore Ts'o <tytso@mit.edu>
+    Reviewed-by: Dominik Brodowski <linux@dominikbrodowski.net>
+    Reviewed-by: Eric Biggers <ebiggers@google.com>
+    Signed-off-by: Jason A. Donenfeld <Jason@zx2c4.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit b27bd09d05444a0a9e00de62fca7ff8a7b497c88
+Author: Jason A. Donenfeld <Jason@zx2c4.com>
+Date:   Mon Feb 7 15:08:49 2022 +0100
+
+    random: use simpler fast key erasure flow on per-cpu keys
+    
+    commit 186873c549df11b63e17062f863654e1501e1524 upstream.
+    
+    Rather than the clunky NUMA full ChaCha state system we had prior, this
+    commit is closer to the original "fast key erasure RNG" proposal from
+    <https://blog.cr.yp.to/20170723-random.html>, by simply treating ChaCha
+    keys on a per-cpu basis.
+    
+    All entropy is extracted to a base crng key of 32 bytes. This base crng
+    has a birthdate and a generation counter. When we go to take bytes from
+    the crng, we first check if the birthdate is too old; if it is, we
+    reseed per usual. Then we start working on a per-cpu crng.
+    
+    This per-cpu crng makes sure that it has the same generation counter as
+    the base crng. If it doesn't, it does fast key erasure with the base
+    crng key and uses the output as its new per-cpu key, and then updates
+    its local generation counter. Then, using this per-cpu state, we do
+    ordinary fast key erasure. Half of this first block is used to overwrite
+    the per-cpu crng key for the next call -- this is the fast key erasure
+    RNG idea -- and the other half, along with the ChaCha state, is returned
+    to the caller. If the caller desires more than this remaining half, it
+    can generate more ChaCha blocks, unlocked, using the now detached ChaCha
+    state that was just returned. Crypto-wise, this is more or less what we
+    were doing before, but this simply makes it more explicit and ensures
+    that we always have backtrack protection by not playing games with a
+    shared block counter.
+    
+    The flow looks like this:
+    
+    ──extract()──► base_crng.key ◄──memcpy()───┐
+                       │                       │
+                       └──chacha()──────┬─► new_base_key
+                                        └─► crngs[n].key ◄──memcpy()───┐
+                                                  │                    │
+                                                  └──chacha()───┬─► new_key
+                                                                └─► random_bytes
+                                                                          │
+                                                                          └────►
+    
+    There are a few hairy details around early init. Just as was done
+    before, prior to having gathered enough entropy, crng_fast_load() and
+    crng_slow_load() dump bytes directly into the base crng, and when we go
+    to take bytes from the crng, in that case, we're doing fast key erasure
+    with the base crng rather than the fast unlocked per-cpu crngs. This is
+    fine as that's only the state of affairs during very early boot; once
+    the crng initializes we never use these paths again.
+    
+    In the process of all this, the APIs into the crng become a bit simpler:
+    we have get_random_bytes(buf, len) and get_random_bytes_user(buf, len),
+    which both do what you'd expect. All of the details of fast key erasure
+    and per-cpu selection happen only in a very short critical section of
+    crng_make_state(), which selects the right per-cpu key, does the fast
+    key erasure, and returns a local state to the caller's stack. So, we no
+    longer have a need for a separate backtrack function, as this happens
+    all at once here. The API then allows us to extend backtrack protection
+    to batched entropy without really having to do much at all.
+    
+    The result is a bit simpler than before and has fewer foot guns. The
+    init time state machine also gets a lot simpler as we don't need to wait
+    for workqueues to come online and do deferred work. And the multi-core
+    performance should be increased significantly, by virtue of having hardly
+    any locking on the fast path.
+    
+    Cc: Theodore Ts'o <tytso@mit.edu>
+    Cc: Dominik Brodowski <linux@dominikbrodowski.net>
+    Cc: Sebastian Andrzej Siewior <bigeasy@linutronix.de>
+    Reviewed-by: Jann Horn <jannh@google.com>
+    Reviewed-by: Eric Biggers <ebiggers@google.com>
+    Signed-off-by: Jason A. Donenfeld <Jason@zx2c4.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 1aab83f9666398b7831293d7c3db8f568b21ba08
+Author: Jason A. Donenfeld <Jason@zx2c4.com>
+Date:   Wed Feb 9 01:56:35 2022 +0100
+
+    random: absorb fast pool into input pool after fast load
+    
+    commit c30c575db4858f0bbe5e315ff2e529c782f33a1f upstream.
+    
+    During crng_init == 0, we never credit entropy in add_interrupt_
+    randomness(), but instead dump it directly into the primary_crng. That's
+    fine, except for the fact that we then wind up throwing away that
+    entropy later when we switch to extracting from the input pool and
+    xoring into (and later in this series overwriting) the primary_crng key.
+    The two other early init sites -- add_hwgenerator_randomness()'s use
+    crng_fast_load() and add_device_ randomness()'s use of crng_slow_load()
+    -- always additionally give their inputs to the input pool. But not
+    add_interrupt_randomness().
+    
+    This commit fixes that shortcoming by calling mix_pool_bytes() after
+    crng_fast_load() in add_interrupt_randomness(). That's partially
+    verboten on PREEMPT_RT, where it implies taking spinlock_t from an IRQ
+    handler. But this also only happens during early boot and then never
+    again after that. Plus it's a trylock so it has the same considerations
+    as calling crng_fast_load(), which we're already using.
+    
+    Cc: Theodore Ts'o <tytso@mit.edu>
+    Reviewed-by: Dominik Brodowski <linux@dominikbrodowski.net>
+    Reviewed-by: Eric Biggers <ebiggers@google.com>
+    Suggested-by: Eric Biggers <ebiggers@google.com>
+    Signed-off-by: Jason A. Donenfeld <Jason@zx2c4.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 4a18db164cbbca1798720eff3ef29b8b46148314
+Author: Jason A. Donenfeld <Jason@zx2c4.com>
+Date:   Tue Feb 8 13:00:11 2022 +0100
+
+    random: do not xor RDRAND when writing into /dev/random
+    
+    commit 91c2afca290ed3034841c8c8532e69ed9e16cf34 upstream.
+    
+    Continuing the reasoning of "random: ensure early RDSEED goes through
+    mixer on init", we don't want RDRAND interacting with anything without
+    going through the mixer function, as a backdoored CPU could presumably
+    cancel out data during an xor, which it'd have a harder time doing when
+    being forced through a cryptographic hash function. There's actually no
+    need at all to be calling RDRAND in write_pool(), because before we
+    extract from the pool, we always do so with 32 bytes of RDSEED hashed in
+    at that stage. Xoring at this stage is needless and introduces a minor
+    liability.
+    
+    Cc: Theodore Ts'o <tytso@mit.edu>
+    Reviewed-by: Dominik Brodowski <linux@dominikbrodowski.net>
+    Reviewed-by: Eric Biggers <ebiggers@google.com>
+    Signed-off-by: Jason A. Donenfeld <Jason@zx2c4.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit b51caadb18a7b42ad7517a290fa876e130a0d10f
+Author: Jason A. Donenfeld <Jason@zx2c4.com>
+Date:   Tue Feb 8 12:44:28 2022 +0100
+
+    random: ensure early RDSEED goes through mixer on init
+    
+    commit a02cf3d0dd77244fd5333ac48d78871de459ae6d upstream.
+    
+    Continuing the reasoning of "random: use RDSEED instead of RDRAND in
+    entropy extraction" from this series, at init time we also don't want to
+    be xoring RDSEED directly into the crng. Instead it's safer to put it
+    into our entropy collector and then re-extract it, so that it goes
+    through a hash function with preimage resistance. As a matter of hygiene,
+    we also order these now so that the RDSEED byte are hashed in first,
+    followed by the bytes that are likely more predictable (e.g. utsname()).
+    
+    Cc: Theodore Ts'o <tytso@mit.edu>
+    Reviewed-by: Dominik Brodowski <linux@dominikbrodowski.net>
+    Reviewed-by: Eric Biggers <ebiggers@google.com>
+    Signed-off-by: Jason A. Donenfeld <Jason@zx2c4.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit fd6eb28005898786f99be2b54c4861991fa14f48
+Author: Jason A. Donenfeld <Jason@zx2c4.com>
+Date:   Tue Feb 8 12:40:14 2022 +0100
+
+    random: inline leaves of rand_initialize()
+    
+    commit 8566417221fcec51346ec164e920dacb979c6b5f upstream.
+    
+    This is a preparatory commit for the following one. We simply inline the
+    various functions that rand_initialize() calls that have no other
+    callers. The compiler was doing this anyway before. Doing this will
+    allow us to reorganize this after. We can then move the trust_cpu and
+    parse_trust_cpu definitions a bit closer to where they're actually used,
+    which makes the code easier to read.
+    
+    Cc: Theodore Ts'o <tytso@mit.edu>
+    Reviewed-by: Dominik Brodowski <linux@dominikbrodowski.net>
+    Reviewed-by: Eric Biggers <ebiggers@google.com>
+    Signed-off-by: Jason A. Donenfeld <Jason@zx2c4.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 5e4fab6fefb11feb1b18e60500634ecc46f398f3
+Author: Jason A. Donenfeld <Jason@zx2c4.com>
+Date:   Sun Feb 6 23:51:41 2022 +0100
+
+    random: get rid of secondary crngs
+    
+    commit a9412d510ab9a9ba411fea612903631d2e1f1601 upstream.
+    
+    As the comment said, this is indeed a "hack". Since it was introduced,
+    it's been a constant state machine nightmare, with lots of subtle early
+    boot issues and a wildly complex set of machinery to keep everything in
+    sync. Rather than continuing to play whack-a-mole with this approach,
+    this commit simply removes it entirely. This commit is preparation for
+    "random: use simpler fast key erasure flow on per-cpu keys" in this
+    series, which introduces a simpler (and faster) mechanism to accomplish
+    the same thing.
+    
+    Cc: Theodore Ts'o <tytso@mit.edu>
+    Reviewed-by: Eric Biggers <ebiggers@google.com>
+    Reviewed-by: Dominik Brodowski <linux@dominikbrodowski.net>
+    Signed-off-by: Jason A. Donenfeld <Jason@zx2c4.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit ded4cc806d0d9b4a552e8d8fb398155e6e66d9c0
+Author: Jason A. Donenfeld <Jason@zx2c4.com>
+Date:   Tue Feb 8 12:18:33 2022 +0100
+
+    random: use RDSEED instead of RDRAND in entropy extraction
+    
+    commit 28f425e573e906a4c15f8392cc2b1561ef448595 upstream.
+    
+    When /dev/random was directly connected with entropy extraction, without
+    any expansion stage, extract_buf() was called for every 10 bytes of data
+    read from /dev/random. For that reason, RDRAND was used rather than
+    RDSEED. At the same time, crng_reseed() was still only called every 5
+    minutes, so there RDSEED made sense.
+    
+    Those olden days were also a time when the entropy collector did not use
+    a cryptographic hash function, which meant most bets were off in terms
+    of real preimage resistance. For that reason too it didn't matter
+    _that_ much whether RDSEED was mixed in before or after entropy
+    extraction; both choices were sort of bad.
+    
+    But now we have a cryptographic hash function at work, and with that we
+    get real preimage resistance. We also now only call extract_entropy()
+    every 5 minutes, rather than every 10 bytes. This allows us to do two
+    important things.
+    
+    First, we can switch to using RDSEED in extract_entropy(), as Dominik
+    suggested. Second, we can ensure that RDSEED input always goes into the
+    cryptographic hash function with other things before being used
+    directly. This eliminates a category of attacks in which the CPU knows
+    the current state of the crng and knows that we're going to xor RDSEED
+    into it, and so it computes a malicious RDSEED. By going through our
+    hash function, it would require the CPU to compute a preimage on the
+    fly, which isn't going to happen.
+    
+    Cc: Theodore Ts'o <tytso@mit.edu>
+    Reviewed-by: Eric Biggers <ebiggers@google.com>
+    Reviewed-by: Dominik Brodowski <linux@dominikbrodowski.net>
+    Suggested-by: Dominik Brodowski <linux@dominikbrodowski.net>
+    Signed-off-by: Jason A. Donenfeld <Jason@zx2c4.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 704c76e08804c496fca35d627215ad1011a20aa8
+Author: Dominik Brodowski <linux@dominikbrodowski.net>
+Date:   Sat Feb 5 11:34:57 2022 +0100
+
+    random: fix locking in crng_fast_load()
+    
+    commit 7c2fe2b32bf76441ff5b7a425b384e5f75aa530a upstream.
+    
+    crng_init is protected by primary_crng->lock, so keep holding that lock
+    when incrementing crng_init from 0 to 1 in crng_fast_load(). The call to
+    pr_notice() can wait until the lock is released; this code path cannot
+    be reached twice, as crng_fast_load() aborts early if crng_init > 0.
+    
+    Signed-off-by: Dominik Brodowski <linux@dominikbrodowski.net>
+    Reviewed-by: Eric Biggers <ebiggers@google.com>
+    Signed-off-by: Jason A. Donenfeld <Jason@zx2c4.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 67fdda9af773b124de1609d946da4a84507898dc
+Author: Jason A. Donenfeld <Jason@zx2c4.com>
+Date:   Fri Jan 28 23:29:45 2022 +0100
+
+    random: remove batched entropy locking
+    
+    commit 77760fd7f7ae3dfd03668204e708d1568d75447d upstream.
+    
+    Rather than use spinlocks to protect batched entropy, we can instead
+    disable interrupts locally, since we're dealing with per-cpu data, and
+    manage resets with a basic generation counter. At the same time, we
+    can't quite do this on PREEMPT_RT, where we still want spinlocks-as-
+    mutexes semantics. So we use a local_lock_t, which provides the right
+    behavior for each. Because this is a per-cpu lock, that generation
+    counter is still doing the necessary CPU-to-CPU communication.
+    
+    This should improve performance a bit. It will also fix the linked splat
+    that Jonathan received with a PROVE_RAW_LOCK_NESTING=y.
+    
+    Reviewed-by: Sebastian Andrzej Siewior <bigeasy@linutronix.de>
+    Reviewed-by: Dominik Brodowski <linux@dominikbrodowski.net>
+    Reviewed-by: Eric Biggers <ebiggers@google.com>
+    Suggested-by: Andy Lutomirski <luto@kernel.org>
+    Reported-by: Jonathan Neuschäfer <j.neuschaefer@gmx.net>
+    Tested-by: Jonathan Neuschäfer <j.neuschaefer@gmx.net>
+    Link: https://lore.kernel.org/lkml/YfMa0QgsjCVdRAvJ@latitude/
+    Signed-off-by: Jason A. Donenfeld <Jason@zx2c4.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit ad86aa8ec90fcc4ce0c2bfdb629b7d2fa3d611a9
+Author: Eric Biggers <ebiggers@google.com>
+Date:   Fri Feb 4 14:17:33 2022 -0800
+
+    random: remove use_input_pool parameter from crng_reseed()
+    
+    commit 5d58ea3a31cc98b9fa563f6921d3d043bf0103d1 upstream.
+    
+    The primary_crng is always reseeded from the input_pool, while the NUMA
+    crngs are always reseeded from the primary_crng.  Remove the redundant
+    'use_input_pool' parameter from crng_reseed() and just directly check
+    whether the crng is the primary_crng.
+    
+    Signed-off-by: Eric Biggers <ebiggers@google.com>
+    Signed-off-by: Jason A. Donenfeld <Jason@zx2c4.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 1bc9db59b24c14fc73d1a1d8288064edd5e0ac10
+Author: Jason A. Donenfeld <Jason@zx2c4.com>
+Date:   Fri Feb 4 01:45:53 2022 +0100
+
+    random: make credit_entropy_bits() always safe
+    
+    commit a49c010e61e1938be851f5e49ac219d49b704103 upstream.
+    
+    This is called from various hwgenerator drivers, so rather than having
+    one "safe" version for userspace and one "unsafe" version for the
+    kernel, just make everything safe; the checks are cheap and sensible to
+    have anyway.
+    
+    Reported-by: Sultan Alsawaf <sultan@kerneltoast.com>
+    Reviewed-by: Eric Biggers <ebiggers@google.com>
+    Reviewed-by: Dominik Brodowski <linux@dominikbrodowski.net>
+    Signed-off-by: Jason A. Donenfeld <Jason@zx2c4.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 3730490111ca0867658bc6b7393882b30daadda6
+Author: Jason A. Donenfeld <Jason@zx2c4.com>
+Date:   Sat Feb 5 14:00:58 2022 +0100
+
+    random: always wake up entropy writers after extraction
+    
+    commit 489c7fc44b5740d377e8cfdbf0851036e493af00 upstream.
+    
+    Now that POOL_BITS == POOL_MIN_BITS, we must unconditionally wake up
+    entropy writers after every extraction. Therefore there's no point of
+    write_wakeup_threshold, so we can move it to the dustbin of unused
+    compatibility sysctls. While we're at it, we can fix a small comparison
+    where we were waking up after <= min rather than < min.
+    
+    Cc: Theodore Ts'o <tytso@mit.edu>
+    Suggested-by: Eric Biggers <ebiggers@kernel.org>
+    Reviewed-by: Eric Biggers <ebiggers@google.com>
+    Reviewed-by: Dominik Brodowski <linux@dominikbrodowski.net>
+    Signed-off-by: Jason A. Donenfeld <Jason@zx2c4.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit cb65ac3008163fb4a3dd8a9d8342f03e43123b27
+Author: Jason A. Donenfeld <Jason@zx2c4.com>
+Date:   Thu Feb 3 13:28:06 2022 +0100
+
+    random: use linear min-entropy accumulation crediting
+    
+    commit c570449094844527577c5c914140222cb1893e3f upstream.
+    
+    30e37ec516ae ("random: account for entropy loss due to overwrites")
+    assumed that adding new entropy to the LFSR pool probabilistically
+    cancelled out old entropy there, so entropy was credited asymptotically,
+    approximating Shannon entropy of independent sources (rather than a
+    stronger min-entropy notion) using 1/8th fractional bits and replacing
+    a constant 2-2/√𝑒 term (~0.786938) with 3/4 (0.75) to slightly
+    underestimate it. This wasn't superb, but it was perhaps better than
+    nothing, so that's what was done. Which entropy specifically was being
+    cancelled out and how much precisely each time is hard to tell, though
+    as I showed with the attack code in my previous commit, a motivated
+    adversary with sufficient information can actually cancel out
+    everything.
+    
+    Since we're no longer using an LFSR for entropy accumulation, this
+    probabilistic cancellation is no longer relevant. Rather, we're now
+    using a computational hash function as the accumulator and we've
+    switched to working in the random oracle model, from which we can now
+    revisit the question of min-entropy accumulation, which is done in
+    detail in <https://eprint.iacr.org/2019/198>.
+    
+    Consider a long input bit string that is built by concatenating various
+    smaller independent input bit strings. Each one of these inputs has a
+    designated min-entropy, which is what we're passing to
+    credit_entropy_bits(h). When we pass the concatenation of these to a
+    random oracle, it means that an adversary trying to receive back the
+    same reply as us would need to become certain about each part of the
+    concatenated bit string we passed in, which means becoming certain about
+    all of those h values. That means we can estimate the accumulation by
+    simply adding up the h values in calls to credit_entropy_bits(h);
+    there's no probabilistic cancellation at play like there was said to be
+    for the LFSR. Incidentally, this is also what other entropy accumulators
+    based on computational hash functions do as well.
+    
+    So this commit replaces credit_entropy_bits(h) with essentially `total =
+    min(POOL_BITS, total + h)`, done with a cmpxchg loop as before.
+    
+    What if we're wrong and the above is nonsense? It's not, but let's
+    assume we don't want the actual _behavior_ of the code to change much.
+    Currently that behavior is not extracting from the input pool until it
+    has 128 bits of entropy in it. With the old algorithm, we'd hit that
+    magic 128 number after roughly 256 calls to credit_entropy_bits(1). So,
+    we can retain more or less the old behavior by waiting to extract from
+    the input pool until it hits 256 bits of entropy using the new code. For
+    people concerned about this change, it means that there's not that much
+    practical behavioral change. And for folks actually trying to model
+    the behavior rigorously, it means that we have an even higher margin
+    against attacks.
+    
+    Cc: Theodore Ts'o <tytso@mit.edu>
+    Cc: Dominik Brodowski <linux@dominikbrodowski.net>
+    Cc: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+    Reviewed-by: Eric Biggers <ebiggers@google.com>
+    Reviewed-by: Jean-Philippe Aumasson <jeanphilippe.aumasson@gmail.com>
+    Signed-off-by: Jason A. Donenfeld <Jason@zx2c4.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit a6beb8155b9c28e79cc3af8b1cc3944b62616fd9
+Author: Jason A. Donenfeld <Jason@zx2c4.com>
+Date:   Wed Feb 2 13:30:03 2022 +0100
+
+    random: simplify entropy debiting
+    
+    commit 9c07f57869e90140080cfc282cc628d123e27704 upstream.
+    
+    Our pool is 256 bits, and we only ever use all of it or don't use it at
+    all, which is decided by whether or not it has at least 128 bits in it.
+    So we can drastically simplify the accounting and cmpxchg loop to do
+    exactly this.  While we're at it, we move the minimum bit size into a
+    constant so it can be shared between the two places where it matters.
+    
+    The reason we want any of this is for the case in which an attacker has
+    compromised the current state, and then bruteforces small amounts of
+    entropy added to it. By demanding a particular minimum amount of entropy
+    be present before reseeding, we make that bruteforcing difficult.
+    
+    Note that this rationale no longer includes anything about /dev/random
+    blocking at the right moment, since /dev/random no longer blocks (except
+    for at ~boot), but rather uses the crng. In a former life, /dev/random
+    was different and therefore required a more nuanced account(), but this
+    is no longer.
+    
+    Behaviorally, nothing changes here. This is just a simplification of
+    the code.
+    
+    Cc: Theodore Ts'o <tytso@mit.edu>
+    Cc: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+    Reviewed-by: Eric Biggers <ebiggers@google.com>
+    Reviewed-by: Dominik Brodowski <linux@dominikbrodowski.net>
+    Signed-off-by: Jason A. Donenfeld <Jason@zx2c4.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit a5e2c8a4574abde1a6dd093e1a8863abe68b792d
+Author: Jason A. Donenfeld <Jason@zx2c4.com>
+Date:   Sun Jan 16 14:23:10 2022 +0100
+
+    random: use computational hash for entropy extraction
+    
+    commit 6e8ec2552c7d13991148e551e3325a624d73fac6 upstream.
+    
+    The current 4096-bit LFSR used for entropy collection had a few
+    desirable attributes for the context in which it was created. For
+    example, the state was huge, which meant that /dev/random would be able
+    to output quite a bit of accumulated entropy before blocking. It was
+    also, in its time, quite fast at accumulating entropy byte-by-byte,
+    which matters given the varying contexts in which mix_pool_bytes() is
+    called. And its diffusion was relatively high, which meant that changes
+    would ripple across several words of state rather quickly.
+    
+    However, it also suffers from a few security vulnerabilities. In
+    particular, inputs learned by an attacker can be undone, but moreover,
+    if the state of the pool leaks, its contents can be controlled and
+    entirely zeroed out. I've demonstrated this attack with this SMT2
+    script, <https://xn--4db.cc/5o9xO8pb>, which Boolector/CaDiCal solves in
+    a matter of seconds on a single core of my laptop, resulting in little
+    proof of concept C demonstrators such as <https://xn--4db.cc/jCkvvIaH/c>.
+    
+    For basically all recent formal models of RNGs, these attacks represent
+    a significant cryptographic flaw. But how does this manifest
+    practically? If an attacker has access to the system to such a degree
+    that he can learn the internal state of the RNG, arguably there are
+    other lower hanging vulnerabilities -- side-channel, infoleak, or
+    otherwise -- that might have higher priority. On the other hand, seed
+    files are frequently used on systems that have a hard time generating
+    much entropy on their own, and these seed files, being files, often leak
+    or are duplicated and distributed accidentally, or are even seeded over
+    the Internet intentionally, where their contents might be recorded or
+    tampered with. Seen this way, an otherwise quasi-implausible
+    vulnerability is a bit more practical than initially thought.
+    
+    Another aspect of the current mix_pool_bytes() function is that, while
+    its performance was arguably competitive for the time in which it was
+    created, it's no longer considered so. This patch improves performance
+    significantly: on a high-end CPU, an i7-11850H, it improves performance
+    of mix_pool_bytes() by 225%, and on a low-end CPU, a Cortex-A7, it
+    improves performance by 103%.
+    
+    This commit replaces the LFSR of mix_pool_bytes() with a straight-
+    forward cryptographic hash function, BLAKE2s, which is already in use
+    for pool extraction. Universal hashing with a secret seed was considered
+    too, something along the lines of <https://eprint.iacr.org/2013/338>,
+    but the requirement for a secret seed makes for a chicken & egg problem.
+    Instead we go with a formally proven scheme using a computational hash
+    function, described in sections 5.1, 6.4, and B.1.8 of
+    <https://eprint.iacr.org/2019/198>.
+    
+    BLAKE2s outputs 256 bits, which should give us an appropriate amount of
+    min-entropy accumulation, and a wide enough margin of collision
+    resistance against active attacks. mix_pool_bytes() becomes a simple
+    call to blake2s_update(), for accumulation, while the extraction step
+    becomes a blake2s_final() to generate a seed, with which we can then do
+    a HKDF-like or BLAKE2X-like expansion, the first part of which we fold
+    back as an init key for subsequent blake2s_update()s, and the rest we
+    produce to the caller. This then is provided to our CRNG like usual. In
+    that expansion step, we make opportunistic use of 32 bytes of RDRAND
+    output, just as before. We also always reseed the crng with 32 bytes,
+    unconditionally, or not at all, rather than sometimes with 16 as before,
+    as we don't win anything by limiting beyond the 16 byte threshold.
+    
+    Going for a hash function as an entropy collector is a conservative,
+    proven approach. The result of all this is a much simpler and much less
+    bespoke construction than what's there now, which not only plugs a
+    vulnerability but also improves performance considerably.
+    
+    Cc: Theodore Ts'o <tytso@mit.edu>
+    Cc: Dominik Brodowski <linux@dominikbrodowski.net>
+    Reviewed-by: Eric Biggers <ebiggers@google.com>
+    Reviewed-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+    Reviewed-by: Jean-Philippe Aumasson <jeanphilippe.aumasson@gmail.com>
+    Signed-off-by: Jason A. Donenfeld <Jason@zx2c4.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit add92df1cb37b5661b28fee5e0591895be5c317f
+Author: Dominik Brodowski <linux@dominikbrodowski.net>
+Date:   Sun Jan 30 22:03:20 2022 +0100
+
+    random: only call crng_finalize_init() for primary_crng
+    
+    commit 9d5505f1eebeca778074a0260ed077fd85f8792c upstream.
+    
+    crng_finalize_init() returns instantly if it is called for another pool
+    than primary_crng. The test whether crng_finalize_init() is still required
+    can be moved to the relevant caller in crng_reseed(), and
+    crng_need_final_init can be reset to false if crng_finalize_init() is
+    called with workqueues ready. Then, no previous callsite will call
+    crng_finalize_init() unless it is needed, and we can get rid of the
+    superfluous function parameter.
+    
+    Signed-off-by: Dominik Brodowski <linux@dominikbrodowski.net>
+    Signed-off-by: Jason A. Donenfeld <Jason@zx2c4.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 07e015230415863e1a10e0f8a8970700c7c62a84
+Author: Dominik Brodowski <linux@dominikbrodowski.net>
+Date:   Sun Jan 30 22:03:19 2022 +0100
+
+    random: access primary_pool directly rather than through pointer
+    
+    commit ebf7606388732ecf2821ca21087e9446cb4a5b57 upstream.
+    
+    Both crng_initialize_primary() and crng_init_try_arch_early() are
+    only called for the primary_pool. Accessing it directly instead of
+    through a function parameter simplifies the code.
+    
+    Signed-off-by: Dominik Brodowski <linux@dominikbrodowski.net>
+    Signed-off-by: Jason A. Donenfeld <Jason@zx2c4.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit b53c9666e7146fdd60b004f0e90d62c1821173a2
+Author: Dominik Brodowski <linux@dominikbrodowski.net>
+Date:   Tue Jan 25 21:14:57 2022 +0100
+
+    random: continually use hwgenerator randomness
+    
+    commit c321e907aa4803d562d6e70ebed9444ad082f953 upstream.
+    
+    The rngd kernel thread may sleep indefinitely if the entropy count is
+    kept above random_write_wakeup_bits by other entropy sources. To make
+    best use of multiple sources of randomness, mix entropy from hardware
+    RNGs into the pool at least once within CRNG_RESEED_INTERVAL.
+    
+    Cc: Herbert Xu <herbert@gondor.apana.org.au>
+    Cc: Jason A. Donenfeld <Jason@zx2c4.com>
+    Signed-off-by: Dominik Brodowski <linux@dominikbrodowski.net>
+    Signed-off-by: Jason A. Donenfeld <Jason@zx2c4.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit c1dc53d781fd3d5af0d75b053864fc54ef2ad664
+Author: Jason A. Donenfeld <Jason@zx2c4.com>
+Date:   Mon Jan 17 18:43:02 2022 +0100
+
+    random: simplify arithmetic function flow in account()
+    
+    commit a254a0e4093fce8c832414a83940736067eed515 upstream.
+    
+    Now that have_bytes is never modified, we can simplify this function.
+    First, we move the check for negative entropy_count to be first. That
+    ensures that subsequent reads of this will be non-negative. Then,
+    have_bytes and ibytes can be folded into their one use site in the
+    min_t() function.
+    
+    Suggested-by: Dominik Brodowski <linux@dominikbrodowski.net>
+    Reviewed-by: Dominik Brodowski <linux@dominikbrodowski.net>
+    Signed-off-by: Jason A. Donenfeld <Jason@zx2c4.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 2f0e83e8326becfa63ad4845d47c85cc0cbfd223
+Author: Jason A. Donenfeld <Jason@zx2c4.com>
+Date:   Sat Jan 15 14:57:22 2022 +0100
+
+    random: selectively clang-format where it makes sense
+    
+    commit 248045b8dea5a32ddc0aa44193d6bc70c4b9cd8e upstream.
+    
+    This is an old driver that has seen a lot of different eras of kernel
+    coding style. In an effort to make it easier to code for, unify the
+    coding style around the current norm, by accepting some of -- but
+    certainly not all of -- the suggestions from clang-format. This should
+    remove ambiguity in coding style, especially with regards to spacing,
+    when code is being changed or amended. Consequently it also makes code
+    review easier on the eyes, following one uniform style rather than
+    several.
+    
+    Reviewed-by: Dominik Brodowski <linux@dominikbrodowski.net>
+    Signed-off-by: Jason A. Donenfeld <Jason@zx2c4.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit db7a0a9171ed6213596448f88e31363e934b1f8c
+Author: Jason A. Donenfeld <Jason@zx2c4.com>
+Date:   Sat Jan 15 14:40:04 2022 +0100
+
+    random: access input_pool_data directly rather than through pointer
+    
+    commit 6c0eace6e1499712583b6ee62d95161e8b3449f5 upstream.
+    
+    This gets rid of another abstraction we no longer need. It would be nice
+    if we could instead make pool an array rather than a pointer, but the
+    latent entropy plugin won't be able to do its magic in that case. So
+    instead we put all accesses to the input pool's actual data through the
+    input_pool_data array directly.
+    
+    Reviewed-by: Dominik Brodowski <linux@dominikbrodowski.net>
+    Signed-off-by: Jason A. Donenfeld <Jason@zx2c4.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit c25c7e29be27d379a010dde9fed49755d4325df3
+Author: Jason A. Donenfeld <Jason@zx2c4.com>
+Date:   Thu Jan 13 18:18:48 2022 +0100
+
+    random: cleanup fractional entropy shift constants
+    
+    commit 18263c4e8e62f7329f38f5eadc568751242ca89c upstream.
+    
+    The entropy estimator is calculated in terms of 1/8 bits, which means
+    there are various constants where things are shifted by 3. Move these
+    into our pool info enum with the other relevant constants. While we're
+    at it, move an English assertion about sizes into a proper BUILD_BUG_ON
+    so that the compiler can ensure this invariant.
+    
+    Reviewed-by: Dominik Brodowski <linux@dominikbrodowski.net>
+    Signed-off-by: Jason A. Donenfeld <Jason@zx2c4.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 68512942c0d70d43ed6050f0a66bc1b027cbd0b4
+Author: Jason A. Donenfeld <Jason@zx2c4.com>
+Date:   Fri Jan 14 16:48:35 2022 +0100
+
+    random: prepend remaining pool constants with POOL_
+    
+    commit b3d51c1f542113342ddfbf6007e38a684b9dbec9 upstream.
+    
+    The other pool constants are prepended with POOL_, but not these last
+    ones. Rename them. This will then let us move them into the enum in the
+    following commit.
+    
+    Reviewed-by: Dominik Brodowski <linux@dominikbrodowski.net>
+    Signed-off-by: Jason A. Donenfeld <Jason@zx2c4.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 2772ba4d52235ae2b45140c7bbcfdda23c6a3879
+Author: Jason A. Donenfeld <Jason@zx2c4.com>
+Date:   Thu Jan 13 16:11:21 2022 +0100
+
+    random: de-duplicate INPUT_POOL constants
+    
+    commit 5b87adf30f1464477169a1d653e9baf8c012bbfe upstream.
+    
+    We already had the POOL_* constants, so deduplicate the older INPUT_POOL
+    ones. As well, fold EXTRACT_SIZE into the poolinfo enum, since it's
+    related.
+    
+    Reviewed-by: Dominik Brodowski <linux@dominikbrodowski.net>
+    Signed-off-by: Jason A. Donenfeld <Jason@zx2c4.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit da80b44cf9cfb131e54926d7bc6230446e9f9100
+Author: Jason A. Donenfeld <Jason@zx2c4.com>
+Date:   Thu Jan 13 15:51:06 2022 +0100
+
+    random: remove unused OUTPUT_POOL constants
+    
+    commit 0f63702718c91d89c922081ac1e6baeddc2d8b1a upstream.
+    
+    We no longer have an output pool. Rather, we have just a wakeup bits
+    threshold for /dev/random reads, presumably so that processes don't
+    hang. This value, random_write_wakeup_bits, is configurable anyway. So
+    all the no longer usefully named OUTPUT_POOL constants were doing was
+    setting a reasonable default for random_write_wakeup_bits. This commit
+    gets rid of the constants and just puts it all in the default value of
+    random_write_wakeup_bits.
+    
+    Reviewed-by: Dominik Brodowski <linux@dominikbrodowski.net>
+    Signed-off-by: Jason A. Donenfeld <Jason@zx2c4.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit f9efa1a988316514729a6446b825406bfcadb7d7
+Author: Jason A. Donenfeld <Jason@zx2c4.com>
+Date:   Wed Jan 12 17:18:08 2022 +0100
+
+    random: rather than entropy_store abstraction, use global
+    
+    commit 90ed1e67e896cc8040a523f8428fc02f9b164394 upstream.
+    
+    Originally, the RNG used several pools, so having things abstracted out
+    over a generic entropy_store object made sense. These days, there's only
+    one input pool, and then an uneven mix of usage via the abstraction and
+    usage via &input_pool. Rather than this uneasy mixture, just get rid of
+    the abstraction entirely and have things always use the global. This
+    simplifies the code and makes reading it a bit easier.
+    
+    Reviewed-by: Dominik Brodowski <linux@dominikbrodowski.net>
+    Signed-off-by: Jason A. Donenfeld <Jason@zx2c4.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit b6d849d0e2f893e58529f7d8c78680d4d1316c6a
+Author: Jason A. Donenfeld <Jason@zx2c4.com>
+Date:   Wed Jan 12 15:28:21 2022 +0100
+
+    random: remove unused extract_entropy() reserved argument
+    
+    commit 8b2d953b91e7f60200c24067ab17b77cc7bfd0d4 upstream.
+    
+    This argument is always set to zero, as a result of us not caring about
+    keeping a certain amount reserved in the pool these days. So just remove
+    it and cleanup the function signatures.
+    
+    Reviewed-by: Dominik Brodowski <linux@dominikbrodowski.net>
+    Signed-off-by: Jason A. Donenfeld <Jason@zx2c4.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 578fbb760064aa30fc4940a9f0a9eed96d6a36b7
+Author: Jason A. Donenfeld <Jason@zx2c4.com>
+Date:   Wed Jan 12 15:22:30 2022 +0100
+
+    random: remove incomplete last_data logic
+    
+    commit a4bfa9b31802c14ff5847123c12b98d5e36b3985 upstream.
+    
+    There were a few things added under the "if (fips_enabled)" banner,
+    which never really got completed, and the FIPS people anyway are
+    choosing a different direction. Rather than keep around this halfbaked
+    code, get rid of it so that we can focus on a single design of the RNG
+    rather than two designs.
+    
+    Reviewed-by: Dominik Brodowski <linux@dominikbrodowski.net>
+    Signed-off-by: Jason A. Donenfeld <Jason@zx2c4.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 8aa9ddc4db2947c50568cfd222bdf16b3a076f6d
+Author: Jason A. Donenfeld <Jason@zx2c4.com>
+Date:   Sun Jan 9 17:48:58 2022 +0100
+
+    random: cleanup integer types
+    
+    commit d38bb0853589c939573ea50e9cb64f733e0e273d upstream.
+    
+    Rather than using the userspace type, __uXX, switch to using uXX. And
+    rather than using variously chosen `char *` or `unsigned char *`, use
+    `u8 *` uniformly for things that aren't strings, in the case where we
+    are doing byte-by-byte traversal.
+    
+    Reviewed-by: Dominik Brodowski <linux@dominikbrodowski.net>
+    Signed-off-by: Jason A. Donenfeld <Jason@zx2c4.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 4330c485f92cde74756ce9b9a91ebb160385aa1e
+Author: Jason A. Donenfeld <Jason@zx2c4.com>
+Date:   Sun Jan 9 17:32:02 2022 +0100
+
+    random: cleanup poolinfo abstraction
+    
+    commit 91ec0fe138f107232cb36bc6112211db37cb5306 upstream.
+    
+    Now that we're only using one polynomial, we can cleanup its
+    representation into constants, instead of passing around pointers
+    dynamically to select different polynomials. This improves the codegen
+    and makes the code a bit more straightforward.
+    
+    Reviewed-by: Dominik Brodowski <linux@dominikbrodowski.net>
+    Signed-off-by: Jason A. Donenfeld <Jason@zx2c4.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 250bda5d0505927ca8648254752ee298cbaf9623
+Author: Schspa Shi <schspa@gmail.com>
+Date:   Fri Jan 14 16:12:16 2022 +0800
+
+    random: fix typo in comments
+    
+    commit c0a8a61e7abbf66729687ee63659ee25983fbb1e upstream.
+    
+    s/or/for
+    
+    Signed-off-by: Schspa Shi <schspa@gmail.com>
+    Signed-off-by: Jason A. Donenfeld <Jason@zx2c4.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 15a1a3baf14f13f3a436fb90c5f6e0766c7fd6c5
+Author: Jann Horn <jannh@google.com>
+Date:   Mon Jan 3 16:59:31 2022 +0100
+
+    random: don't reset crng_init_cnt on urandom_read()
+    
+    commit 6c8e11e08a5b74bb8a5cdd5cbc1e5143df0fba72 upstream.
+    
+    At the moment, urandom_read() (used for /dev/urandom) resets crng_init_cnt
+    to zero when it is called at crng_init<2. This is inconsistent: We do it
+    for /dev/urandom reads, but not for the equivalent
+    getrandom(GRND_INSECURE).
+    
+    (And worse, as Jason pointed out, we're only doing this as long as
+    maxwarn>0.)
+    
+    crng_init_cnt is only read in crng_fast_load(); it is relevant at
+    crng_init==0 for determining when to switch to crng_init==1 (and where in
+    the RNG state array to write).
+    
+    As far as I understand:
+    
+     - crng_init==0 means "we have nothing, we might just be returning the same
+       exact numbers on every boot on every machine, we don't even have
+       non-cryptographic randomness; we should shove every bit of entropy we
+       can get into the RNG immediately"
+     - crng_init==1 means "well we have something, it might not be
+       cryptographic, but at least we're not gonna return the same data every
+       time or whatever, it's probably good enough for TCP and ASLR and stuff;
+       we now have time to build up actual cryptographic entropy in the input
+       pool"
+     - crng_init==2 means "this is supposed to be cryptographically secure now,
+       but we'll keep adding more entropy just to be sure".
+    
+    The current code means that if someone is pulling data from /dev/urandom
+    fast enough at crng_init==0, we'll keep resetting crng_init_cnt, and we'll
+    never make forward progress to crng_init==1. It seems to be intended to
+    prevent an attacker from bruteforcing the contents of small individual RNG
+    inputs on the way from crng_init==0 to crng_init==1, but that's misguided;
+    crng_init==1 isn't supposed to provide proper cryptographic security
+    anyway, RNG users who care about getting secure RNG output have to wait
+    until crng_init==2.
+    
+    This code was inconsistent, and it probably made things worse - just get
+    rid of it.
+    
+    Signed-off-by: Jann Horn <jannh@google.com>
+    Signed-off-by: Jason A. Donenfeld <Jason@zx2c4.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit d47579fb283ada92ca83eea1ed22dda19883b483
+Author: Jason A. Donenfeld <Jason@zx2c4.com>
+Date:   Thu Dec 30 17:50:52 2021 +0100
+
+    random: avoid superfluous call to RDRAND in CRNG extraction
+    
+    commit 2ee25b6968b1b3c66ffa408de23d023c1bce81cf upstream.
+    
+    RDRAND is not fast. RDRAND is actually quite slow. We've known this for
+    a while, which is why functions like get_random_u{32,64} were converted
+    to use batching of our ChaCha-based CRNG instead.
+    
+    Yet CRNG extraction still includes a call to RDRAND, in the hot path of
+    every call to get_random_bytes(), /dev/urandom, and getrandom(2).
+    
+    This call to RDRAND here seems quite superfluous. CRNG is already
+    extracting things based on a 256-bit key, based on good entropy, which
+    is then reseeded periodically, updated, backtrack-mutated, and so
+    forth. The CRNG extraction construction is something that we're already
+    relying on to be secure and solid. If it's not, that's a serious
+    problem, and it's unlikely that mixing in a measly 32 bits from RDRAND
+    is going to alleviate things.
+    
+    And in the case where the CRNG doesn't have enough entropy yet, we're
+    already initializing the ChaCha key row with RDRAND in
+    crng_init_try_arch_early().
+    
+    Removing the call to RDRAND improves performance on an i7-11850H by
+    370%. In other words, the vast majority of the work done by
+    extract_crng() prior to this commit was devoted to fetching 32 bits of
+    RDRAND.
+    
+    Reviewed-by: Theodore Ts'o <tytso@mit.edu>
+    Acked-by: Ard Biesheuvel <ardb@kernel.org>
+    Signed-off-by: Jason A. Donenfeld <Jason@zx2c4.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 0c3910447110345a0ae27a6ea6685fdb0bc03028
+Author: Dominik Brodowski <linux@dominikbrodowski.net>
+Date:   Fri Dec 31 09:26:08 2021 +0100
+
+    random: early initialization of ChaCha constants
+    
+    commit 96562f286884e2db89c74215b199a1084b5fb7f7 upstream.
+    
+    Previously, the ChaCha constants for the primary pool were only
+    initialized in crng_initialize_primary(), called by rand_initialize().
+    However, some randomness is actually extracted from the primary pool
+    beforehand, e.g. by kmem_cache_create(). Therefore, statically
+    initialize the ChaCha constants for the primary pool.
+    
+    Cc: Herbert Xu <herbert@gondor.apana.org.au>
+    Cc: "David S. Miller" <davem@davemloft.net>
+    Cc: <linux-crypto@vger.kernel.org>
+    Signed-off-by: Dominik Brodowski <linux@dominikbrodowski.net>
+    Signed-off-by: Jason A. Donenfeld <Jason@zx2c4.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 5822fad8d3dc88fb8fc3774ae911afc962290882
+Author: Jason A. Donenfeld <Jason@zx2c4.com>
+Date:   Thu Dec 30 15:59:26 2021 +0100
+
+    random: use IS_ENABLED(CONFIG_NUMA) instead of ifdefs
+    
+    commit 7b87324112df2e1f9b395217361626362dcfb9fb upstream.
+    
+    Rather than an awkward combination of ifdefs and __maybe_unused, we can
+    ensure more source gets parsed, regardless of the configuration, by
+    using IS_ENABLED for the CONFIG_NUMA conditional code. This makes things
+    cleaner and easier to follow.
+    
+    I've confirmed that on !CONFIG_NUMA, we don't wind up with excess code
+    by accident; the generated object file is the same.
+    
+    Reviewed-by: Dominik Brodowski <linux@dominikbrodowski.net>
+    Signed-off-by: Jason A. Donenfeld <Jason@zx2c4.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 69bb5f0917f973dbaad21d02e4763530627c1dc2
+Author: Dominik Brodowski <linux@dominikbrodowski.net>
+Date:   Wed Dec 29 22:10:07 2021 +0100
+
+    random: harmonize "crng init done" messages
+    
+    commit 161212c7fd1d9069b232785c75492e50941e2ea8 upstream.
+    
+    We print out "crng init done" for !TRUST_CPU, so we should also print
+    out the same for TRUST_CPU.
+    
+    Signed-off-by: Dominik Brodowski <linux@dominikbrodowski.net>
+    Signed-off-by: Jason A. Donenfeld <Jason@zx2c4.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit c4c9081184e9afc59e0a31fb81fd027cbfde4163
+Author: Jason A. Donenfeld <Jason@zx2c4.com>
+Date:   Wed Dec 29 22:10:06 2021 +0100
+
+    random: mix bootloader randomness into pool
+    
+    commit 57826feeedb63b091f807ba8325d736775d39afd upstream.
+    
+    If we're trusting bootloader randomness, crng_fast_load() is called by
+    add_hwgenerator_randomness(), which sets us to crng_init==1. However,
+    usually it is only called once for an initial 64-byte push, so bootloader
+    entropy will not mix any bytes into the input pool. So it's conceivable
+    that crng_init==1 when crng_initialize_primary() is called later, but
+    then the input pool is empty. When that happens, the crng state key will
+    be overwritten with extracted output from the empty input pool. That's
+    bad.
+    
+    In contrast, if we're not trusting bootloader randomness, we call
+    crng_slow_load() *and* we call mix_pool_bytes(), so that later
+    crng_initialize_primary() isn't drawing on nothing.
+    
+    In order to prevent crng_initialize_primary() from extracting an empty
+    pool, have the trusted bootloader case mirror that of the untrusted
+    bootloader case, mixing the input into the pool.
+    
+    [linux@dominikbrodowski.net: rewrite commit message]
+    Signed-off-by: Dominik Brodowski <linux@dominikbrodowski.net>
+    Signed-off-by: Jason A. Donenfeld <Jason@zx2c4.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 1b1258b91757fa294f1f6a6e7302fe3b368e4221
+Author: Jason A. Donenfeld <Jason@zx2c4.com>
+Date:   Wed Dec 29 22:10:04 2021 +0100
+
+    random: do not re-init if crng_reseed completes before primary init
+    
+    commit 9c3ddde3f811aabbb83778a2a615bf141b4909ef upstream.
+    
+    If the bootloader supplies sufficient material and crng_reseed() is called
+    very early on, but not too early that wqs aren't available yet, then we
+    might transition to crng_init==2 before rand_initialize()'s call to
+    crng_initialize_primary() made. Then, when crng_initialize_primary() is
+    called, if we're trusting the CPU's RDRAND instructions, we'll
+    needlessly reinitialize the RNG and emit a message about it. This is
+    mostly harmless, as numa_crng_init() will allocate and then free what it
+    just allocated, and excessive calls to invalidate_batched_entropy()
+    aren't so harmful. But it is funky and the extra message is confusing,
+    so avoid the re-initialization all together by checking for crng_init <
+    2 in crng_initialize_primary(), just as we already do in crng_reseed().
+    
+    Reviewed-by: Dominik Brodowski <linux@dominikbrodowski.net>
+    Signed-off-by: Jason A. Donenfeld <Jason@zx2c4.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 08040365d0b7f69645d2f268ef8e428d3ab99187
+Author: Jason A. Donenfeld <Jason@zx2c4.com>
+Date:   Fri Dec 24 19:17:58 2021 +0100
+
+    random: do not sign extend bytes for rotation when mixing
+    
+    commit 0d9488ffbf2faddebc6bac055bfa6c93b94056a3 upstream.
+    
+    By using `char` instead of `unsigned char`, certain platforms will sign
+    extend the byte when `w = rol32(*bytes++, input_rotate)` is called,
+    meaning that bit 7 is overrepresented when mixing. This isn't a real
+    problem (unless the mixer itself is already broken) since it's still
+    invertible, but it's not quite correct either. Fix this by using an
+    explicit unsigned type.
+    
+    Signed-off-by: Jason A. Donenfeld <Jason@zx2c4.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 2e827d53343ad7e54c0f1371c9d9b8ce62b3ffd7
+Author: Jason A. Donenfeld <Jason@zx2c4.com>
+Date:   Tue Dec 21 16:31:27 2021 +0100
+
+    random: use BLAKE2s instead of SHA1 in extraction
+    
+    commit 9f9eff85a008b095eafc5f4ecbaf5aca689271c1 upstream.
+    
+    This commit addresses one of the lower hanging fruits of the RNG: its
+    usage of SHA1.
+    
+    BLAKE2s is generally faster, and certainly more secure, than SHA1, which
+    has [1] been [2] really [3] very [4] broken [5]. Additionally, the
+    current construction in the RNG doesn't use the full SHA1 function, as
+    specified, and allows overwriting the IV with RDRAND output in an
+    undocumented way, even in the case when RDRAND isn't set to "trusted",
+    which means potential malicious IV choices. And its short length means
+    that keeping only half of it secret when feeding back into the mixer
+    gives us only 2^80 bits of forward secrecy. In other words, not only is
+    the choice of hash function dated, but the use of it isn't really great
+    either.
+    
+    This commit aims to fix both of these issues while also keeping the
+    general structure and semantics as close to the original as possible.
+    Specifically:
+    
+       a) Rather than overwriting the hash IV with RDRAND, we put it into
+          BLAKE2's documented "salt" and "personal" fields, which were
+          specifically created for this type of usage.
+       b) Since this function feeds the full hash result back into the
+          entropy collector, we only return from it half the length of the
+          hash, just as it was done before. This increases the
+          construction's forward secrecy from 2^80 to a much more
+          comfortable 2^128.
+       c) Rather than using the raw "sha1_transform" function alone, we
+          instead use the full proper BLAKE2s function, with finalization.
+    
+    This also has the advantage of supplying 16 bytes at a time rather than
+    SHA1's 10 bytes, which, in addition to having a faster compression
+    function to begin with, means faster extraction in general. On an Intel
+    i7-11850H, this commit makes initial seeding around 131% faster.
+    
+    BLAKE2s itself has the nice property of internally being based on the
+    ChaCha permutation, which the RNG is already using for expansion, so
+    there shouldn't be any issue with newness, funkiness, or surprising CPU
+    behavior, since it's based on something already in use.
+    
+    [1] https://eprint.iacr.org/2005/010.pdf
+    [2] https://www.iacr.org/archive/crypto2005/36210017/36210017.pdf
+    [3] https://eprint.iacr.org/2015/967.pdf
+    [4] https://shattered.io/static/shattered.pdf
+    [5] https://www.usenix.org/system/files/sec20-leurent.pdf
+    
+    Reviewed-by: Theodore Ts'o <tytso@mit.edu>
+    Reviewed-by: Eric Biggers <ebiggers@google.com>
+    Reviewed-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+    Reviewed-by: Jean-Philippe Aumasson <jeanphilippe.aumasson@gmail.com>
+    Signed-off-by: Jason A. Donenfeld <Jason@zx2c4.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit c5a7694fa80269e02dfe215674616254077ff140
+Author: Sebastian Andrzej Siewior <bigeasy@linutronix.de>
+Date:   Tue Dec 7 13:17:33 2021 +0100
+
+    random: remove unused irq_flags argument from add_interrupt_randomness()
+    
+    commit 703f7066f40599c290babdb79dd61319264987e9 upstream.
+    
+    Since commit
+       ee3e00e9e7101 ("random: use registers from interrupted code for CPU's w/o a cycle counter")
+    
+    the irq_flags argument is no longer used.
+    
+    Remove unused irq_flags.
+    
+    Cc: Borislav Petkov <bp@alien8.de>
+    Cc: Dave Hansen <dave.hansen@linux.intel.com>
+    Cc: Dexuan Cui <decui@microsoft.com>
+    Cc: H. Peter Anvin <hpa@zytor.com>
+    Cc: Haiyang Zhang <haiyangz@microsoft.com>
+    Cc: Ingo Molnar <mingo@redhat.com>
+    Cc: K. Y. Srinivasan <kys@microsoft.com>
+    Cc: Stephen Hemminger <sthemmin@microsoft.com>
+    Cc: Thomas Gleixner <tglx@linutronix.de>
+    Cc: Wei Liu <wei.liu@kernel.org>
+    Cc: linux-hyperv@vger.kernel.org
+    Cc: x86@kernel.org
+    Signed-off-by: Sebastian Andrzej Siewior <bigeasy@linutronix.de>
+    Acked-by: Wei Liu <wei.liu@kernel.org>
+    Signed-off-by: Jason A. Donenfeld <Jason@zx2c4.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 40af1df8034acd89621dd017c086ff295597d778
+Author: Mark Brown <broonie@kernel.org>
+Date:   Wed Dec 1 17:44:49 2021 +0000
+
+    random: document add_hwgenerator_randomness() with other input functions
+    
+    commit 2b6c6e3d9ce3aa0e547ac25d60e06fe035cd9f79 upstream.
+    
+    The section at the top of random.c which documents the input functions
+    available does not document add_hwgenerator_randomness() which might lead
+    a reader to overlook it. Add a brief note about it.
+    
+    Signed-off-by: Mark Brown <broonie@kernel.org>
+    [Jason: reorganize position of function in doc comment and also document
+     add_bootloader_randomness() while we're at it.]
+    Signed-off-by: Jason A. Donenfeld <Jason@zx2c4.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 45626449eb251304b18d7722a48486c7957f3012
+Author: Jason A. Donenfeld <Jason@zx2c4.com>
+Date:   Wed Jan 19 14:35:06 2022 +0100
+
+    lib/crypto: blake2s: avoid indirect calls to compression function for Clang CFI
+    
+    commit d2a02e3c8bb6b347818518edff5a4b40ff52d6d8 upstream.
+    
+    blake2s_compress_generic is weakly aliased by blake2s_compress. The
+    current harness for function selection uses a function pointer, which is
+    ordinarily inlined and resolved at compile time. But when Clang's CFI is
+    enabled, CFI still triggers when making an indirect call via a weak
+    symbol. This seems like a bug in Clang's CFI, as though it's bucketing
+    weak symbols and strong symbols differently. It also only seems to
+    trigger when "full LTO" mode is used, rather than "thin LTO".
+    
+    [    0.000000][    T0] Kernel panic - not syncing: CFI failure (target: blake2s_compress_generic+0x0/0x1444)
+    [    0.000000][    T0] CPU: 0 PID: 0 Comm: swapper/0 Not tainted 5.16.0-mainline-06981-g076c855b846e #1
+    [    0.000000][    T0] Hardware name: MT6873 (DT)
+    [    0.000000][    T0] Call trace:
+    [    0.000000][    T0]  dump_backtrace+0xfc/0x1dc
+    [    0.000000][    T0]  dump_stack_lvl+0xa8/0x11c
+    [    0.000000][    T0]  panic+0x194/0x464
+    [    0.000000][    T0]  __cfi_check_fail+0x54/0x58
+    [    0.000000][    T0]  __cfi_slowpath_diag+0x354/0x4b0
+    [    0.000000][    T0]  blake2s_update+0x14c/0x178
+    [    0.000000][    T0]  _extract_entropy+0xf4/0x29c
+    [    0.000000][    T0]  crng_initialize_primary+0x24/0x94
+    [    0.000000][    T0]  rand_initialize+0x2c/0x6c
+    [    0.000000][    T0]  start_kernel+0x2f8/0x65c
+    [    0.000000][    T0]  __primary_switched+0xc4/0x7be4
+    [    0.000000][    T0] Rebooting in 5 seconds..
+    
+    Nonetheless, the function pointer method isn't so terrific anyway, so
+    this patch replaces it with a simple boolean, which also gets inlined
+    away. This successfully works around the Clang bug.
+    
+    In general, I'm not too keen on all of the indirection involved here; it
+    clearly does more harm than good. Hopefully the whole thing can get
+    cleaned up down the road when lib/crypto is overhauled more
+    comprehensively. But for now, we go with a simple bandaid.
+    
+    Fixes: 6048fdcc5f26 ("lib/crypto: blake2s: include as built-in")
+    Link: https://github.com/ClangBuiltLinux/linux/issues/1567
+    Reported-by: Miles Chen <miles.chen@mediatek.com>
+    Tested-by: Miles Chen <miles.chen@mediatek.com>
+    Tested-by: Nathan Chancellor <nathan@kernel.org>
+    Tested-by: John Stultz <john.stultz@linaro.org>
+    Acked-by: Nick Desaulniers <ndesaulniers@google.com>
+    Reviewed-by: Eric Biggers <ebiggers@google.com>
+    Signed-off-by: Jason A. Donenfeld <Jason@zx2c4.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit b0cdd9ec844515d65000f0fc133a4badf661c519
+Author: Jason A. Donenfeld <Jason@zx2c4.com>
+Date:   Tue Jan 11 18:58:43 2022 +0100
+
+    lib/crypto: sha1: re-roll loops to reduce code size
+    
+    commit 9a1536b093bb5bf60689021275fd24d513bb8db0 upstream.
+    
+    With SHA-1 no longer being used for anything performance oriented, and
+    also soon to be phased out entirely, we can make up for the space added
+    by unrolled BLAKE2s by simply re-rolling SHA-1. Since SHA-1 is so much
+    more complex, re-rolling it more or less takes care of the code size
+    added by BLAKE2s. And eventually, hopefully we'll see SHA-1 removed
+    entirely from most small kernel builds.
+    
+    Cc: Herbert Xu <herbert@gondor.apana.org.au>
+    Cc: Ard Biesheuvel <ardb@kernel.org>
+    Tested-by: Geert Uytterhoeven <geert@linux-m68k.org>
+    Signed-off-by: Jason A. Donenfeld <Jason@zx2c4.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit cba2195416d4c0719ba80fc2182ffa3cee71fb24
+Author: Jason A. Donenfeld <Jason@zx2c4.com>
+Date:   Tue Jan 11 14:37:41 2022 +0100
+
+    lib/crypto: blake2s: move hmac construction into wireguard
+    
+    commit d8d83d8ab0a453e17e68b3a3bed1f940c34b8646 upstream.
+    
+    Basically nobody should use blake2s in an HMAC construction; it already
+    has a keyed variant. But unfortunately for historical reasons, Noise,
+    used by WireGuard, uses HKDF quite strictly, which means we have to use
+    this. Because this really shouldn't be used by others, this commit moves
+    it into wireguard's noise.c locally, so that kernels that aren't using
+    WireGuard don't get this superfluous code baked in. On m68k systems,
+    this shaves off ~314 bytes.
+    
+    Cc: Herbert Xu <herbert@gondor.apana.org.au>
+    Tested-by: Geert Uytterhoeven <geert@linux-m68k.org>
+    Acked-by: Ard Biesheuvel <ardb@kernel.org>
+    Signed-off-by: Jason A. Donenfeld <Jason@zx2c4.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit caba66ec322e22a65c388ae81b23942c7f51f982
+Author: Jason A. Donenfeld <Jason@zx2c4.com>
+Date:   Wed Dec 22 14:56:58 2021 +0100
+
+    lib/crypto: blake2s: include as built-in
+    
+    commit 6048fdcc5f269c7f31d774c295ce59081b36e6f9 upstream.
+    
+    In preparation for using blake2s in the RNG, we change the way that it
+    is wired-in to the build system. Instead of using ifdefs to select the
+    right symbol, we use weak symbols. And because ARM doesn't need the
+    generic implementation, we make the generic one default only if an arch
+    library doesn't need it already, and then have arch libraries that do
+    need it opt-in. So that the arch libraries can remain tristate rather
+    than bool, we then split the shash part from the glue code.
+    
+    Acked-by: Herbert Xu <herbert@gondor.apana.org.au>
+    Acked-by: Ard Biesheuvel <ardb@kernel.org>
+    Acked-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+    Cc: Masahiro Yamada <masahiroy@kernel.org>
+    Cc: linux-kbuild@vger.kernel.org
+    Cc: linux-crypto@vger.kernel.org
+    Signed-off-by: Jason A. Donenfeld <Jason@zx2c4.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 830ecbae41a73ed5503c19c8d789f6bb758d843c
+Author: Jason A. Donenfeld <Jason@zx2c4.com>
+Date:   Sat Dec 25 01:50:07 2021 +0100
+
+    MAINTAINERS: add git tree for random.c
+    
+    commit 9bafaa9375cbf892033f188d8cb624ae328754b5 upstream.
+    
+    This is handy not just for humans, but also so that the 0-day bot can
+    automatically test posted mailing list patches against the right tree.
+    
+    Signed-off-by: Jason A. Donenfeld <Jason@zx2c4.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 12d7163380a242e719fa0601cc074a14716cc54d
+Author: Jason A. Donenfeld <Jason@zx2c4.com>
+Date:   Tue Nov 30 13:43:15 2021 -0500
+
+    MAINTAINERS: co-maintain random.c
+    
+    commit 58e1100fdc5990b0cc0d4beaf2562a92e621ac7d upstream.
+    
+    random.c is a bit understaffed, and folks want more prompt reviews. I've
+    got the crypto background and the interest to do these reviews, and have
+    authored parts of the file already.
+    
+    Cc: Theodore Ts'o <tytso@mit.edu>
+    Cc: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+    Signed-off-by: Jason A. Donenfeld <Jason@zx2c4.com>
+    Signed-off-by: Linus Torvalds <torvalds@linux-foundation.org>
+    Signed-off-by: Jason A. Donenfeld <Jason@zx2c4.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 0da5349e225490bfb7c1297301c8c0ad38f61504
+Author: Lorenzo Pieralisi <lorenzo.pieralisi@arm.com>
+Date:   Thu Apr 7 11:51:20 2022 +0100
+
+    ACPI: sysfs: Fix BERT error region memory mapping
+    
+    commit 1bbc21785b7336619fb6a67f1fff5afdaf229acc upstream.
+    
+    Currently the sysfs interface maps the BERT error region as "memory"
+    (through acpi_os_map_memory()) in order to copy the error records into
+    memory buffers through memory operations (eg memory_read_from_buffer()).
+    
+    The OS system cannot detect whether the BERT error region is part of
+    system RAM or it is "device memory" (eg BMC memory) and therefore it
+    cannot detect which memory attributes the bus to memory support (and
+    corresponding kernel mapping, unless firmware provides the required
+    information).
+    
+    The acpi_os_map_memory() arch backend implementation determines the
+    mapping attributes. On arm64, if the BERT error region is not present in
+    the EFI memory map, the error region is mapped as device-nGnRnE; this
+    triggers alignment faults since memcpy unaligned accesses are not
+    allowed in device-nGnRnE regions.
+    
+    The ACPI sysfs code cannot therefore map by default the BERT error
+    region with memory semantics but should use a safer default.
+    
+    Change the sysfs code to map the BERT error region as MMIO (through
+    acpi_os_map_iomem()) and use the memcpy_fromio() interface to read the
+    error region into the kernel buffer.
+    
+    Link: https://lore.kernel.org/linux-arm-kernel/31ffe8fc-f5ee-2858-26c5-0fd8bdd68702@arm.com
+    Link: https://lore.kernel.org/linux-acpi/CAJZ5v0g+OVbhuUUDrLUCfX_mVqY_e8ubgLTU98=jfjTeb4t+Pw@mail.gmail.com
+    Signed-off-by: Lorenzo Pieralisi <lorenzo.pieralisi@arm.com>
+    Tested-by: Veronika Kabatova <vkabatov@redhat.com>
+    Tested-by: Aristeu Rozanski <aris@redhat.com>
+    Acked-by: Ard Biesheuvel <ardb@kernel.org>
+    Signed-off-by: Rafael J. Wysocki <rafael.j.wysocki@intel.com>
+    Cc: dann frazier <dann.frazier@canonical.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit bf5a3c51e9f7af02f6e0fff01751b623c68f2263
+Author: Magnus Karlsson <magnus.karlsson@intel.com>
+Date:   Wed May 25 09:19:53 2022 +0200
+
+    ice: fix crash at allocation failure
+    
+    Fix a crash in the zero-copy driver that occurs when it fails to
+    allocate buffers from user-space. This crash can easily be triggered
+    by a malicious program that does not provide any buffers in the fill
+    ring for the kernel to use.
+    
+    Note that this bug does not exist in upstream since the batched buffer
+    allocation interface got introduced in 5.16 and replaced this code.
+    
+    Reported-by: Jeff Shaw <jeffrey.b.shaw@intel.com>
+    Tested-by: Jeff Shaw <jeffrey.b.shaw@intel.com>
+    Signed-off-by: Magnus Karlsson <magnus.karlsson@intel.com>
+    Acked-by: Maciej Fijalkowski <maciej.fijalkowski@intel.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit acd12d16528152b32fa09be2c5ef95047f69af05
+Author: Paolo Bonzini <pbonzini@redhat.com>
+Date:   Fri May 20 13:48:11 2022 -0400
+
+    KVM: x86/mmu: fix NULL pointer dereference on guest INVPCID
+    
+    commit 9f46c187e2e680ecd9de7983e4d081c3391acc76 upstream.
+    
+    With shadow paging enabled, the INVPCID instruction results in a call
+    to kvm_mmu_invpcid_gva.  If INVPCID is executed with CR0.PG=0, the
+    invlpg callback is not set and the result is a NULL pointer dereference.
+    Fix it trivially by checking for mmu->invlpg before every call.
+    
+    There are other possibilities:
+    
+    - check for CR0.PG, because KVM (like all Intel processors after P5)
+      flushes guest TLB on CR0.PG changes so that INVPCID/INVLPG are a
+      nop with paging disabled
+    
+    - check for EFER.LMA, because KVM syncs and flushes when switching
+      MMU contexts outside of 64-bit mode
+    
+    All of these are tricky, go for the simple solution.  This is CVE-2022-1789.
+    
+    Reported-by: Yongkang Jia <kangel@zju.edu.cn>
+    Cc: stable@vger.kernel.org
+    Signed-off-by: Paolo Bonzini <pbonzini@redhat.com>
+    [fix conflict due to missing b9e5603c2a3accbadfec570ac501a54431a6bdba]
+    Signed-off-by: Vegard Nossum <vegard.nossum@oracle.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit f82ccfa4835b84e6e74c68e825d8b2f32fe249b8
+Author: Basavaraj Natikar <Basavaraj.Natikar@amd.com>
+Date:   Mon May 9 18:50:20 2022 +0530
+
+    HID: amd_sfh: Add support for sensor discovery
+    
+    commit b5d7f43e97dabfa04a4be5ff027ce7da119332be upstream.
+    
+    Sensor discovery status fails in case of broken sensors or
+    platform not supported. Hence disable driver on failure
+    of sensor discovery.
+    
+    Signed-off-by: Mario Limonciello <mario.limonciello@amd.com>
+    Signed-off-by: Basavaraj Natikar <Basavaraj.Natikar@amd.com>
+    Signed-off-by: Jiri Kosina <jkosina@suse.cz>
+    Cc: Mario Limonciello <Mario.Limonciello@amd.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>

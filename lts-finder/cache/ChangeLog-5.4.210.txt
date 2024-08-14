@@ -1,0 +1,612 @@
+commit de0cd3ea700d1e8ed76705d02e33b524cbb84cf3
+Author: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+Date:   Thu Aug 11 12:57:53 2022 +0200
+
+    Linux 5.4.210
+    
+    Link: https://lore.kernel.org/r/20220809175510.312431319@linuxfoundation.org
+    Tested-by: Florian Fainelli <f.fainelli@gmail.com>
+    Tested-by: Linux Kernel Functional Testing <lkft@linaro.org>
+    Tested-by: Sudip Mukherjee <sudip.mukherjee@codethink.co.uk>
+    Tested-by: Guenter Roeck <linux@roeck-us.net>
+    Tested-by: Jon Hunter <jonathanh@nvidia.com>
+    Tested-by: Shuah Khan <skhan@linuxfoundation.org>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit b58882c69f6633dcebd66bdb38658f688aa52ec9
+Author: Pawan Gupta <pawan.kumar.gupta@linux.intel.com>
+Date:   Tue Aug 2 15:47:02 2022 -0700
+
+    x86/speculation: Add LFENCE to RSB fill sequence
+    
+    commit ba6e31af2be96c4d0536f2152ed6f7b6c11bca47 upstream.
+    
+    RSB fill sequence does not have any protection for miss-prediction of
+    conditional branch at the end of the sequence. CPU can speculatively
+    execute code immediately after the sequence, while RSB filling hasn't
+    completed yet.
+    
+      #define __FILL_RETURN_BUFFER(reg, nr, sp)     \
+            mov     $(nr/2), reg;                   \
+      771:                                          \
+            call    772f;                           \
+      773:  /* speculation trap */                  \
+            pause;                                  \
+            lfence;                                 \
+            jmp     773b;                           \
+      772:                                          \
+            call    774f;                           \
+      775:  /* speculation trap */                  \
+            pause;                                  \
+            lfence;                                 \
+            jmp     775b;                           \
+      774:                                          \
+            dec     reg;                            \
+            jnz     771b;  <----- CPU can miss-predict here.                                \
+            add     $(BITS_PER_LONG/8) * nr, sp;
+    
+    Before RSB is filled, RETs that come in program order after this macro
+    can be executed speculatively, making them vulnerable to RSB-based
+    attacks.
+    
+    Mitigate it by adding an LFENCE after the conditional branch to prevent
+    speculation while RSB is being filled.
+    
+    Suggested-by: Andrew Cooper <andrew.cooper3@citrix.com>
+    Signed-off-by: Pawan Gupta <pawan.kumar.gupta@linux.intel.com>
+    Signed-off-by: Borislav Petkov <bp@suse.de>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit f2f41ef0352db9679bfae250d7a44b3113f3a3cc
+Author: Daniel Sneddon <daniel.sneddon@linux.intel.com>
+Date:   Tue Aug 2 15:47:01 2022 -0700
+
+    x86/speculation: Add RSB VM Exit protections
+    
+    commit 2b1299322016731d56807aa49254a5ea3080b6b3 upstream.
+    
+    tl;dr: The Enhanced IBRS mitigation for Spectre v2 does not work as
+    documented for RET instructions after VM exits. Mitigate it with a new
+    one-entry RSB stuffing mechanism and a new LFENCE.
+    
+    == Background ==
+    
+    Indirect Branch Restricted Speculation (IBRS) was designed to help
+    mitigate Branch Target Injection and Speculative Store Bypass, i.e.
+    Spectre, attacks. IBRS prevents software run in less privileged modes
+    from affecting branch prediction in more privileged modes. IBRS requires
+    the MSR to be written on every privilege level change.
+    
+    To overcome some of the performance issues of IBRS, Enhanced IBRS was
+    introduced.  eIBRS is an "always on" IBRS, in other words, just turn
+    it on once instead of writing the MSR on every privilege level change.
+    When eIBRS is enabled, more privileged modes should be protected from
+    less privileged modes, including protecting VMMs from guests.
+    
+    == Problem ==
+    
+    Here's a simplification of how guests are run on Linux' KVM:
+    
+    void run_kvm_guest(void)
+    {
+            // Prepare to run guest
+            VMRESUME();
+            // Clean up after guest runs
+    }
+    
+    The execution flow for that would look something like this to the
+    processor:
+    
+    1. Host-side: call run_kvm_guest()
+    2. Host-side: VMRESUME
+    3. Guest runs, does "CALL guest_function"
+    4. VM exit, host runs again
+    5. Host might make some "cleanup" function calls
+    6. Host-side: RET from run_kvm_guest()
+    
+    Now, when back on the host, there are a couple of possible scenarios of
+    post-guest activity the host needs to do before executing host code:
+    
+    * on pre-eIBRS hardware (legacy IBRS, or nothing at all), the RSB is not
+    touched and Linux has to do a 32-entry stuffing.
+    
+    * on eIBRS hardware, VM exit with IBRS enabled, or restoring the host
+    IBRS=1 shortly after VM exit, has a documented side effect of flushing
+    the RSB except in this PBRSB situation where the software needs to stuff
+    the last RSB entry "by hand".
+    
+    IOW, with eIBRS supported, host RET instructions should no longer be
+    influenced by guest behavior after the host retires a single CALL
+    instruction.
+    
+    However, if the RET instructions are "unbalanced" with CALLs after a VM
+    exit as is the RET in #6, it might speculatively use the address for the
+    instruction after the CALL in #3 as an RSB prediction. This is a problem
+    since the (untrusted) guest controls this address.
+    
+    Balanced CALL/RET instruction pairs such as in step #5 are not affected.
+    
+    == Solution ==
+    
+    The PBRSB issue affects a wide variety of Intel processors which
+    support eIBRS. But not all of them need mitigation. Today,
+    X86_FEATURE_RETPOLINE triggers an RSB filling sequence that mitigates
+    PBRSB. Systems setting RETPOLINE need no further mitigation - i.e.,
+    eIBRS systems which enable retpoline explicitly.
+    
+    However, such systems (X86_FEATURE_IBRS_ENHANCED) do not set RETPOLINE
+    and most of them need a new mitigation.
+    
+    Therefore, introduce a new feature flag X86_FEATURE_RSB_VMEXIT_LITE
+    which triggers a lighter-weight PBRSB mitigation versus RSB Filling at
+    vmexit.
+    
+    The lighter-weight mitigation performs a CALL instruction which is
+    immediately followed by a speculative execution barrier (INT3). This
+    steers speculative execution to the barrier -- just like a retpoline
+    -- which ensures that speculation can never reach an unbalanced RET.
+    Then, ensure this CALL is retired before continuing execution with an
+    LFENCE.
+    
+    In other words, the window of exposure is opened at VM exit where RET
+    behavior is troublesome. While the window is open, force RSB predictions
+    sampling for RET targets to a dead end at the INT3. Close the window
+    with the LFENCE.
+    
+    There is a subset of eIBRS systems which are not vulnerable to PBRSB.
+    Add these systems to the cpu_vuln_whitelist[] as NO_EIBRS_PBRSB.
+    Future systems that aren't vulnerable will set ARCH_CAP_PBRSB_NO.
+    
+      [ bp: Massage, incorporate review comments from Andy Cooper. ]
+      [ Pawan: Update commit message to replace RSB_VMEXIT with RETPOLINE ]
+    
+    Signed-off-by: Daniel Sneddon <daniel.sneddon@linux.intel.com>
+    Co-developed-by: Pawan Gupta <pawan.kumar.gupta@linux.intel.com>
+    Signed-off-by: Pawan Gupta <pawan.kumar.gupta@linux.intel.com>
+    Signed-off-by: Borislav Petkov <bp@suse.de>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 3a0ef79c6abe61f5cb9583ac2f5e2748291bc056
+Author: Ning Qiang <sohu0106@126.com>
+Date:   Wed Jul 13 23:37:34 2022 +0800
+
+    macintosh/adb: fix oob read in do_adb_query() function
+    
+    commit fd97e4ad6d3b0c9fce3bca8ea8e6969d9ce7423b upstream.
+    
+    In do_adb_query() function of drivers/macintosh/adb.c, req->data is copied
+    form userland. The parameter "req->data[2]" is missing check, the array
+    size of adb_handler[] is 16, so adb_handler[req->data[2]].original_address and
+    adb_handler[req->data[2]].handler_id will lead to oob read.
+    
+    Cc: stable <stable@kernel.org>
+    Signed-off-by: Ning Qiang <sohu0106@126.com>
+    Reviewed-by: Kees Cook <keescook@chromium.org>
+    Reviewed-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+    Acked-by: Benjamin Herrenschmidt <benh@kernel.crashing.org>
+    Signed-off-by: Michael Ellerman <mpe@ellerman.id.au>
+    Link: https://lore.kernel.org/r/20220713153734.2248-1-sohu0106@126.com
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 54e1abbe856020522a7952140c26a4426f01dab6
+Author: Chen-Yu Tsai <wenst@chromium.org>
+Date:   Thu Dec 9 17:38:03 2021 +0100
+
+    media: v4l2-mem2mem: Apply DST_QUEUE_OFF_BASE on MMAP buffers across ioctls
+    
+    commit 8310ca94075e784bbb06593cd6c068ee6b6e4ca6 upstream.
+    
+    DST_QUEUE_OFF_BASE is applied to offset/mem_offset on MMAP capture buffers
+    only for the VIDIOC_QUERYBUF ioctl, while the userspace fields (including
+    offset/mem_offset) are filled in for VIDIOC_{QUERY,PREPARE,Q,DQ}BUF
+    ioctls. This leads to differences in the values presented to userspace.
+    If userspace attempts to mmap the capture buffer directly using values
+    from DQBUF, it will fail.
+    
+    Move the code that applies the magic offset into a helper, and call
+    that helper from all four ioctl entry points.
+    
+    [hverkuil: drop unnecessary '= 0' in v4l2_m2m_querybuf() for ret]
+    
+    Fixes: 7f98639def42 ("V4L/DVB: add memory-to-memory device helper framework for videobuf")
+    Fixes: 908a0d7c588e ("[media] v4l: mem2mem: port to videobuf2")
+    Signed-off-by: Chen-Yu Tsai <wenst@chromium.org>
+    Signed-off-by: Hans Verkuil <hverkuil-cisco@xs4all.nl>
+    Signed-off-by: Mauro Carvalho Chehab <mchehab@kernel.org>
+    [OP: backport to 5.4: adjusted return logic in v4l2_m2m_qbuf() to match the
+    logic in the original commit: call v4l2_m2m_adjust_mem_offset() only if !ret
+    and before the v4l2_m2m_try_schedule() call]
+    Signed-off-by: Ovidiu Panait <ovidiu.panait@windriver.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 17c2356e467f1382addc5522dc02073d2326bc3b
+Author: Raghavendra Rao Ananta <rananta@google.com>
+Date:   Wed Jun 15 18:57:06 2022 +0000
+
+    selftests: KVM: Handle compiler optimizations in ucall
+    
+    [ Upstream commit 9e2f6498efbbc880d7caa7935839e682b64fe5a6 ]
+    
+    The selftests, when built with newer versions of clang, is found
+    to have over optimized guests' ucall() function, and eliminating
+    the stores for uc.cmd (perhaps due to no immediate readers). This
+    resulted in the userspace side always reading a value of '0', and
+    causing multiple test failures.
+    
+    As a result, prevent the compiler from optimizing the stores in
+    ucall() with WRITE_ONCE().
+    
+    Suggested-by: Ricardo Koller <ricarkol@google.com>
+    Suggested-by: Reiji Watanabe <reijiw@google.com>
+    Signed-off-by: Raghavendra Rao Ananta <rananta@google.com>
+    Message-Id: <20220615185706.1099208-1-rananta@google.com>
+    Reviewed-by: Andrew Jones <drjones@redhat.com>
+    Signed-off-by: Paolo Bonzini <pbonzini@redhat.com>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 170465715a60cbb7876e6b961b21bd3225469da8
+Author: Alexey Kardashevskiy <aik@ozlabs.ru>
+Date:   Wed Jun 1 03:43:28 2022 +0200
+
+    KVM: Don't null dereference ops->destroy
+    
+    [ Upstream commit e8bc2427018826e02add7b0ed0fc625a60390ae5 ]
+    
+    A KVM device cleanup happens in either of two callbacks:
+    1) destroy() which is called when the VM is being destroyed;
+    2) release() which is called when a device fd is closed.
+    
+    Most KVM devices use 1) but Book3s's interrupt controller KVM devices
+    (XICS, XIVE, XIVE-native) use 2) as they need to close and reopen during
+    the machine execution. The error handling in kvm_ioctl_create_device()
+    assumes destroy() is always defined which leads to NULL dereference as
+    discovered by Syzkaller.
+    
+    This adds a checks for destroy!=NULL and adds a missing release().
+    
+    This is not changing kvm_destroy_devices() as devices with defined
+    release() should have been removed from the KVM devices list by then.
+    
+    Suggested-by: Paolo Bonzini <pbonzini@redhat.com>
+    Signed-off-by: Alexey Kardashevskiy <aik@ozlabs.ru>
+    Signed-off-by: Paolo Bonzini <pbonzini@redhat.com>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 6098562ed9df1babcc0ba5b89c4fb47715ba3f72
+Author: Jean-Philippe Brucker <jean-philippe@linaro.org>
+Date:   Wed Aug 3 17:50:05 2022 +0300
+
+    selftests/bpf: Fix "dubious pointer arithmetic" test
+    
+    commit 3615bdf6d9b19db12b1589861609b4f1c6a8d303 upstream.
+    
+    The verifier trace changed following a bugfix. After checking the 64-bit
+    sign, only the upper bit mask is known, not bit 31. Update the test
+    accordingly.
+    
+    Signed-off-by: Jean-Philippe Brucker <jean-philippe@linaro.org>
+    Acked-by: John Fastabend <john.fastabend@gmail.com>
+    Signed-off-by: Alexei Starovoitov <ast@kernel.org>
+    Signed-off-by: Ovidiu Panait <ovidiu.panait@windriver.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 6a9b3f0f3bad4ca6421f8c20e1dde9839699db0f
+Author: Stanislav Fomichev <sdf@google.com>
+Date:   Wed Aug 3 17:50:04 2022 +0300
+
+    selftests/bpf: Fix test_align verifier log patterns
+    
+    commit 5366d2269139ba8eb6a906d73a0819947e3e4e0a upstream.
+    
+    Commit 294f2fc6da27 ("bpf: Verifer, adjust_scalar_min_max_vals to always
+    call update_reg_bounds()") changed the way verifier logs some of its state,
+    adjust the test_align accordingly. Where possible, I tried to not copy-paste
+    the entire log line and resorted to dropping the last closing brace instead.
+    
+    Fixes: 294f2fc6da27 ("bpf: Verifer, adjust_scalar_min_max_vals to always call update_reg_bounds()")
+    Signed-off-by: Stanislav Fomichev <sdf@google.com>
+    Signed-off-by: Daniel Borkmann <daniel@iogearbox.net>
+    Link: https://lore.kernel.org/bpf/20200515194904.229296-1-sdf@google.com
+    Signed-off-by: Ovidiu Panait <ovidiu.panait@windriver.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 9d6f67365d9cdb389fbdac2bb5b00e59e345930e
+Author: John Fastabend <john.fastabend@gmail.com>
+Date:   Wed Aug 3 17:50:03 2022 +0300
+
+    bpf: Test_verifier, #70 error message updates for 32-bit right shift
+    
+    commit aa131ed44ae1d76637f0dbec33cfcf9115af9bc3 upstream.
+    
+    After changes to add update_reg_bounds after ALU ops and adding ALU32
+    bounds tracking the error message is changed in the 32-bit right shift
+    tests.
+    
+    Test "#70/u bounds check after 32-bit right shift with 64-bit input FAIL"
+    now fails with,
+    
+    Unexpected error message!
+            EXP: R0 invalid mem access
+            RES: func#0 @0
+    
+    7: (b7) r1 = 2
+    8: R0_w=map_value(id=0,off=0,ks=8,vs=8,imm=0) R1_w=invP2 R10=fp0 fp-8_w=mmmmmmmm
+    8: (67) r1 <<= 31
+    9: R0_w=map_value(id=0,off=0,ks=8,vs=8,imm=0) R1_w=invP4294967296 R10=fp0 fp-8_w=mmmmmmmm
+    9: (74) w1 >>= 31
+    10: R0_w=map_value(id=0,off=0,ks=8,vs=8,imm=0) R1_w=invP0 R10=fp0 fp-8_w=mmmmmmmm
+    10: (14) w1 -= 2
+    11: R0_w=map_value(id=0,off=0,ks=8,vs=8,imm=0) R1_w=invP4294967294 R10=fp0 fp-8_w=mmmmmmmm
+    11: (0f) r0 += r1
+    math between map_value pointer and 4294967294 is not allowed
+    
+    And test "#70/p bounds check after 32-bit right shift with 64-bit input
+    FAIL" now fails with,
+    
+    Unexpected error message!
+            EXP: R0 invalid mem access
+            RES: func#0 @0
+    
+    7: (b7) r1 = 2
+    8: R0_w=map_value(id=0,off=0,ks=8,vs=8,imm=0) R1_w=inv2 R10=fp0 fp-8_w=mmmmmmmm
+    8: (67) r1 <<= 31
+    9: R0_w=map_value(id=0,off=0,ks=8,vs=8,imm=0) R1_w=inv4294967296 R10=fp0 fp-8_w=mmmmmmmm
+    9: (74) w1 >>= 31
+    10: R0_w=map_value(id=0,off=0,ks=8,vs=8,imm=0) R1_w=inv0 R10=fp0 fp-8_w=mmmmmmmm
+    10: (14) w1 -= 2
+    11: R0_w=map_value(id=0,off=0,ks=8,vs=8,imm=0) R1_w=inv4294967294 R10=fp0 fp-8_w=mmmmmmmm
+    11: (0f) r0 += r1
+    last_idx 11 first_idx 0
+    regs=2 stack=0 before 10: (14) w1 -= 2
+    regs=2 stack=0 before 9: (74) w1 >>= 31
+    regs=2 stack=0 before 8: (67) r1 <<= 31
+    regs=2 stack=0 before 7: (b7) r1 = 2
+    math between map_value pointer and 4294967294 is not allowed
+    
+    Before this series we did not trip the "math between map_value pointer..."
+    error because check_reg_sane_offset is never called in
+    adjust_ptr_min_max_vals(). Instead we have a register state that looks
+    like this at line 11*,
+    
+    11: R0_w=map_value(id=0,off=0,ks=8,vs=8,
+                       smin_value=0,smax_value=0,
+                       umin_value=0,umax_value=0,
+                       var_off=(0x0; 0x0))
+        R1_w=invP(id=0,
+                  smin_value=0,smax_value=4294967295,
+                  umin_value=0,umax_value=4294967295,
+                  var_off=(0xfffffffe; 0x0))
+        R10=fp(id=0,off=0,
+               smin_value=0,smax_value=0,
+               umin_value=0,umax_value=0,
+               var_off=(0x0; 0x0)) fp-8_w=mmmmmmmm
+    11: (0f) r0 += r1
+    
+    In R1 'smin_val != smax_val' yet we have a tnum_const as seen
+    by 'var_off(0xfffffffe; 0x0))' with a 0x0 mask. So we hit this check
+    in adjust_ptr_min_max_vals()
+    
+     if ((known && (smin_val != smax_val || umin_val != umax_val)) ||
+          smin_val > smax_val || umin_val > umax_val) {
+           /* Taint dst register if offset had invalid bounds derived from
+            * e.g. dead branches.
+            */
+           __mark_reg_unknown(env, dst_reg);
+           return 0;
+     }
+    
+    So we don't throw an error here and instead only throw an error
+    later in the verification when the memory access is made.
+    
+    The root cause in verifier without alu32 bounds tracking is having
+    'umin_value = 0' and 'umax_value = U64_MAX' from BPF_SUB which we set
+    when 'umin_value < umax_val' here,
+    
+     if (dst_reg->umin_value < umax_val) {
+        /* Overflow possible, we know nothing */
+        dst_reg->umin_value = 0;
+        dst_reg->umax_value = U64_MAX;
+     } else { ...}
+    
+    Later in adjust_calar_min_max_vals we previously did a
+    coerce_reg_to_size() which will clamp the U64_MAX to U32_MAX by
+    truncating to 32bits. But either way without a call to update_reg_bounds
+    the less precise bounds tracking will fall out of the alu op
+    verification.
+    
+    After latest changes we now exit adjust_scalar_min_max_vals with the
+    more precise umin value, due to zero extension propogating bounds from
+    alu32 bounds into alu64 bounds and then calling update_reg_bounds.
+    This then causes the verifier to trigger an earlier error and we get
+    the error in the output above.
+    
+    This patch updates tests to reflect new error message.
+    
+    * I have a local patch to print entire verifier state regardless if we
+     believe it is a constant so we can get a full picture of the state.
+     Usually if tnum_is_const() then bounds are also smin=smax, etc. but
+     this is not always true and is a bit subtle. Being able to see these
+     states helps understand dataflow imo. Let me know if we want something
+     similar upstream.
+    
+    Signed-off-by: John Fastabend <john.fastabend@gmail.com>
+    Signed-off-by: Alexei Starovoitov <ast@kernel.org>
+    Link: https://lore.kernel.org/bpf/158507161475.15666.3061518385241144063.stgit@john-Precision-5820-Tower
+    Signed-off-by: Ovidiu Panait <ovidiu.panait@windriver.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 751f05bc6f955ae3f9aa0385cf2a9a01d21117e6
+Author: Jakub Sitnicki <jakub@cloudflare.com>
+Date:   Wed Aug 3 17:50:02 2022 +0300
+
+    selftests/bpf: Extend verifier and bpf_sock tests for dst_port loads
+    
+    commit 8f50f16ff39dd4e2d43d1548ca66925652f8aff7 upstream.
+    
+    Add coverage to the verifier tests and tests for reading bpf_sock fields to
+    ensure that 32-bit, 16-bit, and 8-bit loads from dst_port field are allowed
+    only at intended offsets and produce expected values.
+    
+    While 16-bit and 8-bit access to dst_port field is straight-forward, 32-bit
+    wide loads need be allowed and produce a zero-padded 16-bit value for
+    backward compatibility.
+    
+    Signed-off-by: Jakub Sitnicki <jakub@cloudflare.com>
+    Link: https://lore.kernel.org/r/20220130115518.213259-3-jakub@cloudflare.com
+    Signed-off-by: Alexei Starovoitov <ast@kernel.org>
+    [OP: backport to 5.4: cherry-pick verifier changes only]
+    Signed-off-by: Ovidiu Panait <ovidiu.panait@windriver.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 7c1134c7da997523e2834dd516e2ddc51920699a
+Author: John Fastabend <john.fastabend@gmail.com>
+Date:   Wed Aug 3 17:50:01 2022 +0300
+
+    bpf: Verifer, adjust_scalar_min_max_vals to always call update_reg_bounds()
+    
+    commit 294f2fc6da27620a506e6c050241655459ccd6bd upstream.
+    
+    Currently, for all op verification we call __red_deduce_bounds() and
+    __red_bound_offset() but we only call __update_reg_bounds() in bitwise
+    ops. However, we could benefit from calling __update_reg_bounds() in
+    BPF_ADD, BPF_SUB, and BPF_MUL cases as well.
+    
+    For example, a register with state 'R1_w=invP0' when we subtract from
+    it,
+    
+     w1 -= 2
+    
+    Before coerce we will now have an smin_value=S64_MIN, smax_value=U64_MAX
+    and unsigned bounds umin_value=0, umax_value=U64_MAX. These will then
+    be clamped to S32_MIN, U32_MAX values by coerce in the case of alu32 op
+    as done in above example. However tnum will be a constant because the
+    ALU op is done on a constant.
+    
+    Without update_reg_bounds() we have a scenario where tnum is a const
+    but our unsigned bounds do not reflect this. By calling update_reg_bounds
+    after coerce to 32bit we further refine the umin_value to U64_MAX in the
+    alu64 case or U32_MAX in the alu32 case above.
+    
+    Signed-off-by: John Fastabend <john.fastabend@gmail.com>
+    Signed-off-by: Alexei Starovoitov <ast@kernel.org>
+    Link: https://lore.kernel.org/bpf/158507151689.15666.566796274289413203.stgit@john-Precision-5820-Tower
+    Signed-off-by: Ovidiu Panait <ovidiu.panait@windriver.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit a8ba72bbeda5fb6b50b17faab6d15fa373132355
+Author: Tony Luck <tony.luck@intel.com>
+Date:   Wed Jun 22 10:09:06 2022 -0700
+
+    ACPI: APEI: Better fix to avoid spamming the console with old error logs
+    
+    commit c3481b6b75b4797657838f44028fd28226ab48e0 upstream.
+    
+    The fix in commit 3f8dec116210 ("ACPI/APEI: Limit printable size of BERT
+    table data") does not work as intended on systems where the BIOS has a
+    fixed size block of memory for the BERT table, relying on s/w to quit
+    when it finds a record with estatus->block_status == 0. On these systems
+    all errors are suppressed because the check:
+    
+            if (region_len < ACPI_BERT_PRINT_MAX_LEN)
+    
+    always fails.
+    
+    New scheme skips individual CPER records that are too large, and also
+    limits the total number of records that will be printed to 5.
+    
+    Fixes: 3f8dec116210 ("ACPI/APEI: Limit printable size of BERT table data")
+    Cc: All applicable <stable@vger.kernel.org>
+    Signed-off-by: Tony Luck <tony.luck@intel.com>
+    Signed-off-by: Rafael J. Wysocki <rafael.j.wysocki@intel.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit fa829bd4af43ac4a36fbaa38c871bf4e8c22d000
+Author: Werner Sembach <wse@tuxedocomputers.com>
+Date:   Thu Jul 7 20:09:53 2022 +0200
+
+    ACPI: video: Shortening quirk list by identifying Clevo by board_name only
+    
+    commit f0341e67b3782603737f7788e71bd3530012a4f4 upstream.
+    
+    Taking a recent change in the i8042 quirklist to this one: Clevo
+    board_names are somewhat unique, and if not: The generic Board_-/Sys_Vendor
+    string "Notebook" doesn't help much anyway. So identifying the devices just
+    by the board_name helps keeping the list significantly shorter and might
+    even hit more devices requiring the fix.
+    
+    Signed-off-by: Werner Sembach <wse@tuxedocomputers.com>
+    Fixes: c844d22fe0c0 ("ACPI: video: Force backlight native for Clevo NL5xRU and NL5xNU")
+    Cc: All applicable <stable@vger.kernel.org>
+    Reviewed-by: Hans de Goede <hdegoede@redhat.com>
+    Signed-off-by: Rafael J. Wysocki <rafael.j.wysocki@intel.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 8ed6e5c5e23ce3a46b84268c6520773acc6a281a
+Author: Werner Sembach <wse@tuxedocomputers.com>
+Date:   Thu Jul 7 20:09:52 2022 +0200
+
+    ACPI: video: Force backlight native for some TongFang devices
+    
+    commit c752089f7cf5b5800c6ace4cdd1a8351ee78a598 upstream.
+    
+    The TongFang PF5PU1G, PF4NU1F, PF5NU1G, and PF5LUXG/TUXEDO BA15 Gen10,
+    Pulse 14/15 Gen1, and Pulse 15 Gen2 have the same problem as the Clevo
+    NL5xRU and NL5xNU/TUXEDO Aura 15 Gen1 and Gen2:
+    They have a working native and video interface. However the default
+    detection mechanism first registers the video interface before
+    unregistering it again and switching to the native interface during boot.
+    This results in a dangling SBIOS request for backlight change for some
+    reason, causing the backlight to switch to ~2% once per boot on the first
+    power cord connect or disconnect event. Setting the native interface
+    explicitly circumvents this buggy behaviour by avoiding the unregistering
+    process.
+    
+    Signed-off-by: Werner Sembach <wse@tuxedocomputers.com>
+    Cc: All applicable <stable@vger.kernel.org>
+    Reviewed-by: Hans de Goede <hdegoede@redhat.com>
+    Signed-off-by: Rafael J. Wysocki <rafael.j.wysocki@intel.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 828f4c31684da94ecf0b44a2cbd35bbede04f0bd
+Author: Subbaraman Narayanamurthy <quic_subbaram@quicinc.com>
+Date:   Thu Nov 4 16:57:07 2021 -0700
+
+    thermal: Fix NULL pointer dereferences in of_thermal_ functions
+    
+    commit 96cfe05051fd8543cdedd6807ec59a0e6c409195 upstream.
+    
+    of_parse_thermal_zones() parses the thermal-zones node and registers a
+    thermal_zone device for each subnode. However, if a thermal zone is
+    consuming a thermal sensor and that thermal sensor device hasn't probed
+    yet, an attempt to set trip_point_*_temp for that thermal zone device
+    can cause a NULL pointer dereference. Fix it.
+    
+     console:/sys/class/thermal/thermal_zone87 # echo 120000 > trip_point_0_temp
+     ...
+     Unable to handle kernel NULL pointer dereference at virtual address 0000000000000020
+     ...
+     Call trace:
+      of_thermal_set_trip_temp+0x40/0xc4
+      trip_point_temp_store+0xc0/0x1dc
+      dev_attr_store+0x38/0x88
+      sysfs_kf_write+0x64/0xc0
+      kernfs_fop_write_iter+0x108/0x1d0
+      vfs_write+0x2f4/0x368
+      ksys_write+0x7c/0xec
+      __arm64_sys_write+0x20/0x30
+      el0_svc_common.llvm.7279915941325364641+0xbc/0x1bc
+      do_el0_svc+0x28/0xa0
+      el0_svc+0x14/0x24
+      el0_sync_handler+0x88/0xec
+      el0_sync+0x1c0/0x200
+    
+    While at it, fix the possible NULL pointer dereference in other
+    functions as well: of_thermal_get_temp(), of_thermal_set_emul_temp(),
+    of_thermal_get_trend().
+    
+    Suggested-by: David Collins <quic_collinsd@quicinc.com>
+    Signed-off-by: Subbaraman Narayanamurthy <quic_subbaram@quicinc.com>
+    Acked-by: Daniel Lezcano <daniel.lezcano@linaro.org>
+    Signed-off-by: Rafael J. Wysocki <rafael.j.wysocki@intel.com>
+    Signed-off-by: Mark-PK Tsai <mark-pk.tsai@mediatek.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>

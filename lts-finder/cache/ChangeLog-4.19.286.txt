@@ -1,0 +1,631 @@
+commit c111487599ab513f5a7ae4bb6fedaa077b022ecb
+Author: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+Date:   Wed Jun 14 10:57:15 2023 +0200
+
+    Linux 4.19.286
+    
+    Link: https://lore.kernel.org/r/20230612101651.138592130@linuxfoundation.org
+    Tested-by: Chris Paterson (CIP) <chris.paterson2@renesas.com>
+    Tested-by: Shuah Khan <skhan@linuxfoundation.org>
+    Tested-by: Jon Hunter <jonathanh@nvidia.com>
+    Tested-by: Linux Kernel Functional Testing <lkft@linaro.org>
+    Tested-by: Sudip Mukherjee <sudip.mukherjee@codethink.co.uk>
+    Tested-by: Guenter Roeck <linux@roeck-us.net>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit f54ca87b5fb3c6b5eb978b94346a37f7f6adef04
+Author: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+Date:   Mon Jun 12 12:06:32 2023 +0200
+
+    Revert "staging: rtl8192e: Replace macro RTL_PCI_DEVICE with PCI_DEVICE"
+    
+    This reverts commit ec310591cf839653a5b2c1fcf6b8a110c3f2485c which is
+    commit a80f4c7dc4dbd2925cf3da86004137965cb16086 upstream.
+    
+    Ben reports that this should not have been backported to the older
+    kernels as the rest of the macro is not empty.  It was a clean-up patch
+    in 6.4-rc1 only, it did not add new device ids.
+    
+    Reported-by: Ben Hutchings <ben@decadent.org.uk>
+    Cc: Philipp Hortmann <philipp.g.hortmann@gmail.com>
+    Cc: Sasha Levin <sashal@kernel.org>
+    Link: https://lore.kernel.org/r/aa0d401a7f63448cd4c2fe4a2d7e8495d9aa123e.camel@decadent.org.uk
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit dcb11fe0a0a9cca2b7425191b9bf30dc29f2ad0f
+Author: Zixuan Fu <r33s3n6@gmail.com>
+Date:   Thu Jul 21 15:48:29 2022 +0800
+
+    btrfs: unset reloc control if transaction commit fails in prepare_to_relocate()
+    
+    commit 85f02d6c856b9f3a0acf5219de6e32f58b9778eb upstream.
+    
+    In btrfs_relocate_block_group(), the rc is allocated.  Then
+    btrfs_relocate_block_group() calls
+    
+    relocate_block_group()
+      prepare_to_relocate()
+        set_reloc_control()
+    
+    that assigns rc to the variable fs_info->reloc_ctl. When
+    prepare_to_relocate() returns, it calls
+    
+    btrfs_commit_transaction()
+      btrfs_start_dirty_block_groups()
+        btrfs_alloc_path()
+          kmem_cache_zalloc()
+    
+    which may fail for example (or other errors could happen). When the
+    failure occurs, btrfs_relocate_block_group() detects the error and frees
+    rc and doesn't set fs_info->reloc_ctl to NULL. After that, in
+    btrfs_init_reloc_root(), rc is retrieved from fs_info->reloc_ctl and
+    then used, which may cause a use-after-free bug.
+    
+    This possible bug can be triggered by calling btrfs_ioctl_balance()
+    before calling btrfs_ioctl_defrag().
+    
+    To fix this possible bug, in prepare_to_relocate(), check if
+    btrfs_commit_transaction() fails. If the failure occurs,
+    unset_reloc_control() is called to set fs_info->reloc_ctl to NULL.
+    
+    The error log in our fault-injection testing is shown as follows:
+    
+      [   58.751070] BUG: KASAN: use-after-free in btrfs_init_reloc_root+0x7ca/0x920 [btrfs]
+      ...
+      [   58.753577] Call Trace:
+      ...
+      [   58.755800]  kasan_report+0x45/0x60
+      [   58.756066]  btrfs_init_reloc_root+0x7ca/0x920 [btrfs]
+      [   58.757304]  record_root_in_trans+0x792/0xa10 [btrfs]
+      [   58.757748]  btrfs_record_root_in_trans+0x463/0x4f0 [btrfs]
+      [   58.758231]  start_transaction+0x896/0x2950 [btrfs]
+      [   58.758661]  btrfs_defrag_root+0x250/0xc00 [btrfs]
+      [   58.759083]  btrfs_ioctl_defrag+0x467/0xa00 [btrfs]
+      [   58.759513]  btrfs_ioctl+0x3c95/0x114e0 [btrfs]
+      ...
+      [   58.768510] Allocated by task 23683:
+      [   58.768777]  ____kasan_kmalloc+0xb5/0xf0
+      [   58.769069]  __kmalloc+0x227/0x3d0
+      [   58.769325]  alloc_reloc_control+0x10a/0x3d0 [btrfs]
+      [   58.769755]  btrfs_relocate_block_group+0x7aa/0x1e20 [btrfs]
+      [   58.770228]  btrfs_relocate_chunk+0xf1/0x760 [btrfs]
+      [   58.770655]  __btrfs_balance+0x1326/0x1f10 [btrfs]
+      [   58.771071]  btrfs_balance+0x3150/0x3d30 [btrfs]
+      [   58.771472]  btrfs_ioctl_balance+0xd84/0x1410 [btrfs]
+      [   58.771902]  btrfs_ioctl+0x4caa/0x114e0 [btrfs]
+      ...
+      [   58.773337] Freed by task 23683:
+      ...
+      [   58.774815]  kfree+0xda/0x2b0
+      [   58.775038]  free_reloc_control+0x1d6/0x220 [btrfs]
+      [   58.775465]  btrfs_relocate_block_group+0x115c/0x1e20 [btrfs]
+      [   58.775944]  btrfs_relocate_chunk+0xf1/0x760 [btrfs]
+      [   58.776369]  __btrfs_balance+0x1326/0x1f10 [btrfs]
+      [   58.776784]  btrfs_balance+0x3150/0x3d30 [btrfs]
+      [   58.777185]  btrfs_ioctl_balance+0xd84/0x1410 [btrfs]
+      [   58.777621]  btrfs_ioctl+0x4caa/0x114e0 [btrfs]
+      ...
+    
+    Reported-by: TOTE Robot <oslab@tsinghua.edu.cn>
+    CC: stable@vger.kernel.org # 5.15+
+    Reviewed-by: Sweet Tea Dorminy <sweettea-kernel@dorminy.me>
+    Reviewed-by: Nikolay Borisov <nborisov@suse.com>
+    Signed-off-by: Zixuan Fu <r33s3n6@gmail.com>
+    Signed-off-by: David Sterba <dsterba@suse.com>
+    Signed-off-by: Stefan Ghinea <stefan.ghinea@windriver.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 499d29bf151951399367ba83645abfdb429a3af9
+Author: Josef Bacik <josef@toxicpanda.com>
+Date:   Fri Mar 12 15:25:34 2021 -0500
+
+    btrfs: check return value of btrfs_commit_transaction in relocation
+    
+    commit fb686c6824dd6294ca772b92424b8fba666e7d00 upstream.
+    
+    There are a few places where we don't check the return value of
+    btrfs_commit_transaction in relocation.c.  Thankfully all these places
+    have straightforward error handling, so simply change all of the sites
+    at once.
+    
+    Reviewed-by: Qu Wenruo <wqu@suse.com>
+    Signed-off-by: Josef Bacik <josef@toxicpanda.com>
+    Reviewed-by: David Sterba <dsterba@suse.com>
+    Signed-off-by: David Sterba <dsterba@suse.com>
+    Signed-off-by: Stefan Ghinea <stefan.ghinea@windriver.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 55b55f3ffdbe50623a277db2a1a3ef7ed5fcf302
+Author: Theodore Ts'o <tytso@mit.edu>
+Date:   Thu Jun 8 10:06:40 2023 -0400
+
+    ext4: only check dquot_initialize_needed() when debugging
+    
+    commit dea9d8f7643fab07bf89a1155f1f94f37d096a5e upstream.
+    
+    ext4_xattr_block_set() relies on its caller to call dquot_initialize()
+    on the inode.  To assure that this has happened there are WARN_ON
+    checks.  Unfortunately, this is subject to false positives if there is
+    an antagonist thread which is flipping the file system at high rates
+    between r/o and rw.  So only do the check if EXT4_XATTR_DEBUG is
+    enabled.
+    
+    Link: https://lore.kernel.org/r/20230608044056.GA1418535@mit.edu
+    Signed-off-by: Theodore Ts'o <tytso@mit.edu>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit b43c35da1735d692b3e9935718b6ab2d6d554067
+Author: Uwe Kleine-König <u.kleine-koenig@pengutronix.de>
+Date:   Thu Mar 9 10:58:19 2023 +0100
+
+    i2c: sprd: Delete i2c adapter in .remove's error path
+    
+    [ Upstream commit ca0aa17f2db3468fd017038d23a78e17388e2f67 ]
+    
+    If pm runtime resume fails the .remove callback used to exit early. This
+    resulted in an error message by the driver core but the device gets
+    removed anyhow. This lets the registered i2c adapter stay around with an
+    unbound parent device.
+    
+    So only skip clk disabling if resume failed, but do delete the adapter.
+    
+    Fixes: 8b9ec0719834 ("i2c: Add Spreadtrum I2C controller driver")
+    Signed-off-by: Uwe Kleine-König <u.kleine-koenig@pengutronix.de>
+    Reviewed-by: Andi Shyti <andi.shyti@kernel.org>
+    Signed-off-by: Wolfram Sang <wsa@kernel.org>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 67c1b939ad32255c9d209adae044e17a1dbd9f9d
+Author: Martin Hundebøll <martin@geanix.com>
+Date:   Fri May 12 08:49:25 2023 +0200
+
+    pinctrl: meson-axg: add missing GPIOA_18 gpio group
+    
+    commit 5b10ff013e8a57f8845615ac2cc37edf7f6eef05 upstream.
+    
+    Without this, the gpio cannot be explicitly mux'ed to its gpio function.
+    
+    Fixes: 83c566806a68a ("pinctrl: meson-axg: Add new pinctrl driver for Meson AXG SoC")
+    Cc: stable@vger.kernel.org
+    Signed-off-by: Martin Hundebøll <martin@geanix.com>
+    Reviewed-by: Neil Armstrong <neil.armstrong@linaro.org>
+    Reviewed-by: Dmitry Rokosov <ddrokosov@sberdevices.ru>
+    Link: https://lore.kernel.org/r/20230512064925.133516-1-martin@geanix.com
+    Signed-off-by: Linus Walleij <linus.walleij@linaro.org>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit c900deb180537b1a77cc4872f873c9a6cc6e32c2
+Author: Luiz Augusto von Dentz <luiz.von.dentz@intel.com>
+Date:   Tue May 30 13:48:44 2023 -0700
+
+    Bluetooth: Fix use-after-free in hci_remove_ltk/hci_remove_irk
+    
+    commit c5d2b6fa26b5b8386a9cc902cdece3a46bef2bd2 upstream.
+    
+    Similar to commit 0f7d9b31ce7a ("netfilter: nf_tables: fix use-after-free
+    in nft_set_catchall_destroy()"). We can not access k after kfree_rcu()
+    call.
+    
+    Cc: stable@vger.kernel.org
+    Signed-off-by: Min Li <lm0963hack@gmail.com>
+    Signed-off-by: Luiz Augusto von Dentz <luiz.von.dentz@intel.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit cf7bb1099585be44a70e358cff1866ca23a7e168
+Author: Xiubo Li <xiubli@redhat.com>
+Date:   Thu Jun 1 08:59:31 2023 +0800
+
+    ceph: fix use-after-free bug for inodes when flushing capsnaps
+    
+    commit 409e873ea3c1fd3079909718bbeb06ac1ec7f38b upstream.
+    
+    There is a race between capsnaps flush and removing the inode from
+    'mdsc->snap_flush_list' list:
+    
+       == Thread A ==                     == Thread B ==
+    ceph_queue_cap_snap()
+     -> allocate 'capsnapA'
+     ->ihold('&ci->vfs_inode')
+     ->add 'capsnapA' to 'ci->i_cap_snaps'
+     ->add 'ci' to 'mdsc->snap_flush_list'
+        ...
+       == Thread C ==
+    ceph_flush_snaps()
+     ->__ceph_flush_snaps()
+      ->__send_flush_snap()
+                                    handle_cap_flushsnap_ack()
+                                     ->iput('&ci->vfs_inode')
+                                       this also will release 'ci'
+                                        ...
+                                          == Thread D ==
+                                    ceph_handle_snap()
+                                     ->flush_snaps()
+                                      ->iterate 'mdsc->snap_flush_list'
+                                       ->get the stale 'ci'
+     ->remove 'ci' from                ->ihold(&ci->vfs_inode) this
+       'mdsc->snap_flush_list'           will WARNING
+    
+    To fix this we will increase the inode's i_count ref when adding 'ci'
+    to the 'mdsc->snap_flush_list' list.
+    
+    [ idryomov: need_put int -> bool ]
+    
+    Cc: stable@vger.kernel.org
+    Link: https://bugzilla.redhat.com/show_bug.cgi?id=2209299
+    Signed-off-by: Xiubo Li <xiubli@redhat.com>
+    Reviewed-by: Milind Changire <mchangir@redhat.com>
+    Reviewed-by: Ilya Dryomov <idryomov@gmail.com>
+    Signed-off-by: Ilya Dryomov <idryomov@gmail.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 46a036d213efa78018e825a284da06255bcee8f1
+Author: Chia-I Wu <olvaffe@gmail.com>
+Date:   Thu Jun 1 14:48:08 2023 -0700
+
+    drm/amdgpu: fix xclk freq on CHIP_STONEY
+    
+    commit b447b079cf3a9971ea4d31301e673f49612ccc18 upstream.
+    
+    According to Alex, most APUs from that time seem to have the same issue
+    (vbios says 48Mhz, actual is 100Mhz).  I only have a CHIP_STONEY so I
+    limit the fixup to CHIP_STONEY
+    
+    Signed-off-by: Chia-I Wu <olvaffe@gmail.com>
+    Signed-off-by: Alex Deucher <alexander.deucher@amd.com>
+    Cc: stable@vger.kernel.org
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit a80ea8aeb3d32b184267b47deeb691395b36871e
+Author: Dmitry Torokhov <dmitry.torokhov@gmail.com>
+Date:   Thu May 11 12:08:37 2023 -0700
+
+    Input: psmouse - fix OOB access in Elantech protocol
+    
+    commit 7b63a88bb62ba2ddf5fcd956be85fe46624628b9 upstream.
+    
+    The kernel only allocate 5 MT slots; check that transmitted slot ID
+    falls within the acceptable range.
+    
+    Link: https://lore.kernel.org/r/ZFnEL91nrT789dbG@google.com
+    Cc: stable@vger.kernel.org
+    Signed-off-by: Dmitry Torokhov <dmitry.torokhov@gmail.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit c41d5cbfaf20b39f6b98e3a5accb1de4dd5177c0
+Author: Ismael Ferreras Morezuelas <swyterzone@gmail.com>
+Date:   Tue May 23 14:45:10 2023 -0700
+
+    Input: xpad - delete a Razer DeathAdder mouse VID/PID entry
+    
+    commit feee70f4568650cf44c573488798ffc0a2faeea3 upstream.
+    
+    While doing my research to improve the xpad device names I noticed
+    that the 1532:0037 VID/PID seems to be used by the DeathAdder 2013,
+    so that Razer Sabertooth instance looked wrong and very suspect to
+    me. I didn't see any mention in the official drivers, either.
+    
+    After doing more research, it turns out that the xpad list
+    is used by many other projects (like Steam) as-is [1], this
+    issue was reported [2] and Valve/Sam Lantinga fixed it [3]:
+    
+    [1]: https://github.com/libsdl-org/SDL/blob/dcc5eef0e2395854b254ea2873a4899edab347c6/src/joystick/controller_type.h#L251
+    [2]: https://steamcommunity.com/app/353380/discussions/0/1743392486228754770/
+    [3]: https://hg.libsdl.org/SDL/rev/29809f6f0271
+    
+    (With multiple Internet users reporting similar issues, not linked here)
+    
+    After not being able to find the correct VID/PID combination anywhere
+    on the Internet and not receiving any reply from Razer support I did
+    some additional detective work, it seems like it presents itself as
+    "Razer Sabertooth Gaming Controller (XBOX360)", code 1689:FE00.
+    
+    Leaving us with this:
+     * Razer Sabertooth (1689:fe00)
+     * Razer Sabertooth Elite (24c6:5d04)
+     * Razer DeathAdder 2013 (1532:0037) [note: not a gamepad]
+    
+    So, to sum things up; remove this conflicting/duplicate entry:
+    
+    { 0x1532, 0x0037, "Razer Sabertooth", 0, XTYPE_XBOX360 },
+    
+    As the real/correct one is already present there, even if
+    the Internet as a whole insists on presenting it as the
+    Razer Sabertooth Elite, which (by all accounts) is not:
+    
+    { 0x1689, 0xfe00, "Razer Sabertooth", 0, XTYPE_XBOX360 },
+    
+    Actual change in SDL2 referencing this kernel issue:
+    https://github.com/libsdl-org/SDL/commit/e5e54169754ca5d3e86339d968b20126d9da0a15
+    
+    For more information of the device, take a look here:
+    https://github.com/xboxdrv/xboxdrv/pull/59
+    
+    You can see a lsusb dump here: https://github.com/xboxdrv/xboxdrv/files/76581/Qa6dBcrv.txt
+    
+    Fixes: f554f619b70 ("Input: xpad - sync device IDs with xboxdrv")
+    Signed-off-by: Ismael Ferreras Morezuelas <swyterzone@gmail.com>
+    Reviewed-by: Cameron Gutman <aicommander@gmail.com>
+    Cc: stable@vger.kernel.org
+    Link: https://lore.kernel.org/r/5c12dbdb-5774-fc68-5c58-ca596383663e@gmail.com
+    Signed-off-by: Dmitry Torokhov <dmitry.torokhov@gmail.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 819c30857d1306b3a61f75474998a82d0a9fbd40
+Author: Vladislav Efanov <VEfanov@ispras.ru>
+Date:   Fri May 26 19:16:32 2023 +0300
+
+    batman-adv: Broken sync while rescheduling delayed work
+    
+    commit abac3ac97fe8734b620e7322a116450d7f90aa43 upstream.
+    
+    Syzkaller got a lot of crashes like:
+    KASAN: use-after-free Write in *_timers*
+    
+    All of these crashes point to the same memory area:
+    
+    The buggy address belongs to the object at ffff88801f870000
+     which belongs to the cache kmalloc-8k of size 8192
+    The buggy address is located 5320 bytes inside of
+     8192-byte region [ffff88801f870000, ffff88801f872000)
+    
+    This area belongs to :
+            batadv_priv->batadv_priv_dat->delayed_work->timer_list
+    
+    The reason for these issues is the lack of synchronization. Delayed
+    work (batadv_dat_purge) schedules new timer/work while the device
+    is being deleted. As the result new timer/delayed work is set after
+    cancel_delayed_work_sync() was called. So after the device is freed
+    the timer list contains pointer to already freed memory.
+    
+    Found by Linux Verification Center (linuxtesting.org) with syzkaller.
+    
+    Cc: stable@kernel.org
+    Fixes: 2f1dfbe18507 ("batman-adv: Distributed ARP Table - implement local storage")
+    Signed-off-by: Vladislav Efanov <VEfanov@ispras.ru>
+    Acked-by: Sven Eckelmann <sven@narfation.org>
+    Signed-off-by: Simon Wunderlich <sw@simonwunderlich.de>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 53f16fa73f71abfcac67e71a5513653b8db28b76
+Author: Ben Hutchings <ben@decadent.org.uk>
+Date:   Fri Jun 2 20:28:15 2023 +0200
+
+    lib: cpu_rmap: Fix potential use-after-free in irq_cpu_rmap_release()
+    
+    [ Upstream commit 7c5d4801ecf0564c860033d89726b99723c55146 ]
+    
+    irq_cpu_rmap_release() calls cpu_rmap_put(), which may free the rmap.
+    So we need to clear the pointer to our glue structure in rmap before
+    doing that, not after.
+    
+    Fixes: 4e0473f1060a ("lib: cpu_rmap: Avoid use after free on rmap->obj array entries")
+    Signed-off-by: Ben Hutchings <ben@decadent.org.uk>
+    Reviewed-by: Simon Horman <simon.horman@corigine.com>
+    Link: https://lore.kernel.org/r/ZHo0vwquhOy3FaXc@decadent.org.uk
+    Signed-off-by: Jakub Kicinski <kuba@kernel.org>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 3cc54473badeb4cdb3798a079480114f0738432f
+Author: Hangyu Hua <hbh25y@gmail.com>
+Date:   Wed Jun 7 10:23:01 2023 +0800
+
+    net: sched: fix possible refcount leak in tc_chain_tmplt_add()
+    
+    [ Upstream commit 44f8baaf230c655c249467ca415b570deca8df77 ]
+    
+    try_module_get will be called in tcf_proto_lookup_ops. So module_put needs
+    to be called to drop the refcount if ops don't implement the required
+    function.
+    
+    Fixes: 9f407f1768d3 ("net: sched: introduce chain templates")
+    Signed-off-by: Hangyu Hua <hbh25y@gmail.com>
+    Reviewed-by: Larysa Zaremba <larysa.zaremba@intel.com>
+    Signed-off-by: David S. Miller <davem@davemloft.net>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 9b2903fc0cdeb64b4637adebfc7f046ada9a0e6f
+Author: Eric Dumazet <edumazet@google.com>
+Date:   Tue Jun 6 11:42:33 2023 +0000
+
+    net: sched: move rtm_tca_policy declaration to include file
+    
+    [ Upstream commit 886bc7d6ed3357975c5f1d3c784da96000d4bbb4 ]
+    
+    rtm_tca_policy is used from net/sched/sch_api.c and net/sched/cls_api.c,
+    thus should be declared in an include file.
+    
+    This fixes the following sparse warning:
+    net/sched/sch_api.c:1434:25: warning: symbol 'rtm_tca_policy' was not declared. Should it be static?
+    
+    Fixes: e331473fee3d ("net/sched: cls_api: add missing validation of netlink attributes")
+    Signed-off-by: Eric Dumazet <edumazet@google.com>
+    Acked-by: Jamal Hadi Salim <jhs@mojatatu.com>
+    Signed-off-by: David S. Miller <davem@davemloft.net>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 28dbabef5bb865c5a573ebee831a4b9f3544e2e1
+Author: Eric Dumazet <edumazet@google.com>
+Date:   Tue Jun 6 07:41:15 2023 +0000
+
+    rfs: annotate lockless accesses to RFS sock flow table
+    
+    [ Upstream commit 5c3b74a92aa285a3df722bf6329ba7ccf70346d6 ]
+    
+    Add READ_ONCE()/WRITE_ONCE() on accesses to the sock flow table.
+    
+    This also prevents a (smart ?) compiler to remove the condition in:
+    
+    if (table->ents[index] != newval)
+            table->ents[index] = newval;
+    
+    We need the condition to avoid dirtying a shared cache line.
+    
+    Fixes: fec5e652e58f ("rfs: Receive Flow Steering")
+    Signed-off-by: Eric Dumazet <edumazet@google.com>
+    Reviewed-by: Simon Horman <simon.horman@corigine.com>
+    Reviewed-by: Kuniyuki Iwashima <kuniyu@amazon.com>
+    Signed-off-by: David S. Miller <davem@davemloft.net>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 9b3907c57b044d4709fcadd7b0690004fb310962
+Author: Eric Dumazet <edumazet@google.com>
+Date:   Tue Jun 6 07:41:14 2023 +0000
+
+    rfs: annotate lockless accesses to sk->sk_rxhash
+    
+    [ Upstream commit 1e5c647c3f6d4f8497dedcd226204e1880e0ffb3 ]
+    
+    Add READ_ONCE()/WRITE_ONCE() on accesses to sk->sk_rxhash.
+    
+    This also prevents a (smart ?) compiler to remove the condition in:
+    
+    if (sk->sk_rxhash != newval)
+            sk->sk_rxhash = newval;
+    
+    We need the condition to avoid dirtying a shared cache line.
+    
+    Fixes: fec5e652e58f ("rfs: Receive Flow Steering")
+    Signed-off-by: Eric Dumazet <edumazet@google.com>
+    Reviewed-by: Simon Horman <simon.horman@corigine.com>
+    Reviewed-by: Kuniyuki Iwashima <kuniyu@amazon.com>
+    Signed-off-by: David S. Miller <davem@davemloft.net>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 8a2000677d6ee0ef2ec2e6bff8e7572b74a391ef
+Author: Sungwoo Kim <iam@sung-woo.kim>
+Date:   Sat Jun 3 08:28:09 2023 -0400
+
+    Bluetooth: L2CAP: Add missing checks for invalid DCID
+    
+    [ Upstream commit 75767213f3d9b97f63694d02260b6a49a2271876 ]
+    
+    When receiving a connect response we should make sure that the DCID is
+    within the valid range and that we don't already have another channel
+    allocated for the same DCID.
+    Missing checks may violate the specification (BLUETOOTH CORE SPECIFICATION
+    Version 5.4 | Vol 3, Part A, Page 1046).
+    
+    Fixes: 40624183c202 ("Bluetooth: L2CAP: Add missing checks for invalid LE DCID")
+    Signed-off-by: Sungwoo Kim <iam@sung-woo.kim>
+    Signed-off-by: Luiz Augusto von Dentz <luiz.von.dentz@intel.com>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 5822e209bcfc04fd7d45cc56f5ab0358403ba6c2
+Author: Ying Hsu <yinghsu@chromium.org>
+Date:   Wed May 31 03:44:56 2023 +0000
+
+    Bluetooth: Fix l2cap_disconnect_req deadlock
+    
+    [ Upstream commit 02c5ea5246a44d6ffde0fddebfc1d56188052976 ]
+    
+    L2CAP assumes that the locks conn->chan_lock and chan->lock are
+    acquired in the order conn->chan_lock, chan->lock to avoid
+    potential deadlock.
+    For example, l2sock_shutdown acquires these locks in the order:
+      mutex_lock(&conn->chan_lock)
+      l2cap_chan_lock(chan)
+    
+    However, l2cap_disconnect_req acquires chan->lock in
+    l2cap_get_chan_by_scid first and then acquires conn->chan_lock
+    before calling l2cap_chan_del. This means that these locks are
+    acquired in unexpected order, which leads to potential deadlock:
+      l2cap_chan_lock(c)
+      mutex_lock(&conn->chan_lock)
+    
+    This patch releases chan->lock before acquiring the conn_chan_lock
+    to avoid the potential deadlock.
+    
+    Fixes: a2a9339e1c9d ("Bluetooth: L2CAP: Fix use-after-free in l2cap_disconnect_{req,rsp}")
+    Signed-off-by: Ying Hsu <yinghsu@chromium.org>
+    Signed-off-by: Luiz Augusto von Dentz <luiz.von.dentz@intel.com>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit fe286b286ea9fe6bdebd1d21908f5254f8e769f5
+Author: Alexander Sverdlin <alexander.sverdlin@siemens.com>
+Date:   Wed May 31 16:38:26 2023 +0200
+
+    net: dsa: lan9303: allow vid != 0 in port_fdb_{add|del} methods
+    
+    [ Upstream commit 5a59a58ec25d44f853c26bdbfda47d73b3067435 ]
+    
+    LAN9303 doesn't associate FDB (ALR) entries with VLANs, it has just one
+    global Address Logic Resolution table [1].
+    
+    Ignore VID in port_fdb_{add|del} methods, go on with the global table. This
+    is the same semantics as hellcreek or RZ/N1 implement.
+    
+    Visible symptoms:
+    LAN9303_MDIO 5b050000.ethernet-1:00: port 2 failed to delete 00:xx:xx:xx:xx:cf vid 1 from fdb: -2
+    LAN9303_MDIO 5b050000.ethernet-1:00: port 2 failed to add 00:xx:xx:xx:xx:cf vid 1 to fdb: -95
+    
+    [1] https://ww1.microchip.com/downloads/en/DeviceDoc/00002308A.pdf
+    
+    Fixes: 0620427ea0d6 ("net: dsa: lan9303: Add fdb/mdb manipulation")
+    Signed-off-by: Alexander Sverdlin <alexander.sverdlin@siemens.com>
+    Reviewed-by: Vladimir Oltean <olteanv@gmail.com>
+    Link: https://lore.kernel.org/r/20230531143826.477267-1-alexander.sverdlin@siemens.com
+    Signed-off-by: Jakub Kicinski <kuba@kernel.org>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 7434af0995ad3795e9a0cbbc1d2d7d55155fa58f
+Author: Stephan Gerhold <stephan@gerhold.net>
+Date:   Thu May 18 15:04:25 2023 +0200
+
+    spi: qup: Request DMA before enabling clocks
+    
+    [ Upstream commit 0c331fd1dccfba657129380ee084b95c1cedfbef ]
+    
+    It is usually better to request all necessary resources (clocks,
+    regulators, ...) before starting to make use of them. That way they do
+    not change state in case one of the resources is not available yet and
+    probe deferral (-EPROBE_DEFER) is necessary. This is particularly
+    important for DMA channels and IOMMUs which are not enforced by
+    fw_devlink yet (unless you use fw_devlink.strict=1).
+    
+    spi-qup does this in the wrong order, the clocks are enabled and
+    disabled again when the DMA channels are not available yet.
+    
+    This causes issues in some cases: On most SoCs one of the SPI QUP
+    clocks is shared with the UART controller. When using earlycon UART is
+    actively used during boot but might not have probed yet, usually for
+    the same reason (waiting for the DMA controller). In this case, the
+    brief enable/disable cycle ends up gating the clock and further UART
+    console output will halt the system completely.
+    
+    Avoid this by requesting the DMA channels before changing the clock
+    state.
+    
+    Fixes: 612762e82ae6 ("spi: qup: Add DMA capabilities")
+    Signed-off-by: Stephan Gerhold <stephan@gerhold.net>
+    Link: https://lore.kernel.org/r/20230518-spi-qup-clk-defer-v1-1-f49fc9ca4e02@gerhold.net
+    Signed-off-by: Mark Brown <broonie@kernel.org>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 0821988113421c85cc9bf02772673816c18345aa
+Author: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+Date:   Fri Jun 9 17:10:11 2023 +0200
+
+    i40e: fix build warnings in i40e_alloc.h
+    
+    Not upstream as it was fixed in a much larger api change in newer
+    kernels.
+    
+    gcc-13 rightfully complains that enum is not the same as an int, so fix
+    up the function prototypes in i40e_alloc.h to be correct, solving a
+    bunch of build warnings.
+    
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 047bf6291b6a9b5a18a05c97cf71beaf06be629c
+Author: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+Date:   Fri Jun 9 16:58:27 2023 +0200
+
+    i40iw: fix build warning in i40iw_manage_apbvt()
+    
+    Not upstream as this function is no longer around anymore.
+    
+    The function i40iw_manage_apbvt() has the wrong prototype match from the
+    .h file to the .c declaration, so fix it up, otherwise gcc-13 complains
+    (rightfully) that the type is incorrect.
+    
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>

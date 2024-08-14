@@ -1,0 +1,1011 @@
+commit 0f4ac6b4c5f00f45b7a429c8a5b028a598c6400c
+Author: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+Date:   Sat Jul 1 13:16:27 2023 +0200
+
+    Linux 6.1.37
+    
+    Link: https://lore.kernel.org/r/20230629184151.651069086@linuxfoundation.org
+    Tested-by: Salvatore Bonaccorso <carnil@debian.org>
+    Tested-by: Takeshi Ogasawara <takeshi.ogasawara@futuring-girl.com>
+    Link: https://lore.kernel.org/r/20230630055632.571288857@linuxfoundation.org
+    Link: https://lore.kernel.org/r/20230630072124.944461414@linuxfoundation.org
+    Tested-by: Takeshi Ogasawara <takeshi.ogasawara@futuring-girl.com>
+    Tested-by: Ron Economos <re@w6rz.net>
+    Tested-by: Jon Hunter <jonathanh@nvidia.com>
+    Tested-by: Salvatore Bonaccorso <carnil@debian.org>
+    Tested-by: Markus Reichelt <lkt+2023@mareichelt.com>
+    Tested-by: Linux Kernel Functional Testing <lkft@linaro.org>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 323846590c55fd9b05dfb9d768d76583a556d254
+Author: Linus Torvalds <torvalds@linux-foundation.org>
+Date:   Fri Jun 30 18:24:49 2023 -0700
+
+    xtensa: fix NOMMU build with lock_mm_and_find_vma() conversion
+    
+    commit d85a143b69abb4d7544227e26d12c4c7735ab27d upstream.
+    
+    It turns out that xtensa has a really odd configuration situation: you
+    can do a no-MMU config, but still have the page fault code enabled.
+    Which doesn't sound all that sensible, but it turns out that xtensa can
+    have protection faults even without the MMU, and we have this:
+    
+        config PFAULT
+            bool "Handle protection faults" if EXPERT && !MMU
+            default y
+            help
+              Handle protection faults. MMU configurations must enable it.
+              noMMU configurations may disable it if used memory map never
+              generates protection faults or faults are always fatal.
+    
+              If unsure, say Y.
+    
+    which completely violated my expectations of the page fault handling.
+    
+    End result: Guenter reports that the xtensa no-MMU builds all fail with
+    
+      arch/xtensa/mm/fault.c: In function ‘do_page_fault’:
+      arch/xtensa/mm/fault.c:133:8: error: implicit declaration of function ‘lock_mm_and_find_vma’
+    
+    because I never exposed the new lock_mm_and_find_vma() function for the
+    no-MMU case.
+    
+    Doing so is simple enough, and fixes the problem.
+    
+    Reported-and-tested-by: Guenter Roeck <linux@roeck-us.net>
+    Fixes: a050ba1e7422 ("mm/fault: convert remaining simple cases to lock_mm_and_find_vma()")
+    Signed-off-by: Linus Torvalds <torvalds@linux-foundation.org>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit c2d89256de75c61764183a65534dea231d5ae66d
+Author: Linus Torvalds <torvalds@linux-foundation.org>
+Date:   Thu Jun 29 23:34:29 2023 -0700
+
+    csky: fix up lock_mm_and_find_vma() conversion
+    
+    commit e55e5df193d247a38a5e1ac65a5316a0adcc22fa upstream.
+    
+    As already mentioned in my merge message for the 'expand-stack' branch,
+    we have something like 24 different versions of the page fault path for
+    all our different architectures, all just _slightly_ different due to
+    various historical reasons (usually related to exactly when they
+    branched off the original i386 version, and the details of the other
+    architectures they had in their history).
+    
+    And a few of them had some silly mistake in the conversion.
+    
+    Most of the architectures call the faulting address 'address' in the
+    fault path.  But not all.  Some just call it 'addr'.  And if you end up
+    doing a bit too much copy-and-paste, you end up with the wrong version
+    in the places that do it differently.
+    
+    In this case it was csky.
+    
+    Fixes: a050ba1e7422 ("mm/fault: convert remaining simple cases to lock_mm_and_find_vma()")
+    Reported-by: Guenter Roeck <linux@roeck-us.net>
+    Signed-off-by: Linus Torvalds <torvalds@linux-foundation.org>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 4a1db15878aacb89e8f24c98a2f96fad6db3f967
+Author: Linus Torvalds <torvalds@linux-foundation.org>
+Date:   Thu Jun 29 23:04:57 2023 -0700
+
+    parisc: fix expand_stack() conversion
+    
+    commit ea3f8272876f2958463992f6736ab690fde7fa9c upstream.
+    
+    In commit 8d7071af8907 ("mm: always expand the stack with the mmap write
+    lock held") I tried to deal with the remaining odd page fault handling
+    cases.  The oddest one is ia64, which has stacks that grow both up and
+    down.  And because ia64 was _so_ odd, I asked people to verify the end
+    result.
+    
+    But a close second oddity is parisc, which is the only one that has a
+    main stack growing up (our "CONFIG_STACK_GROWSUP" config option).  But
+    it looked obvious enough that I didn't worry about it.
+    
+    I should have worried a bit more.  Not because it was particularly
+    complex, but because I just used the wrong variable name.
+    
+    The previous vma isn't called "prev", it's called "prev_vma".  Blush.
+    
+    Fixes: 8d7071af8907 ("mm: always expand the stack with the mmap write lock held")
+    Signed-off-by: Linus Torvalds <torvalds@linux-foundation.org>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 0a1da2dde461cc8adac196a10d76a1fb977b7cdf
+Author: Linus Torvalds <torvalds@linux-foundation.org>
+Date:   Thu Jun 29 20:41:24 2023 -0700
+
+    sparc32: fix lock_mm_and_find_vma() conversion
+    
+    commit 0b26eadbf200abf6c97c6d870286c73219cdac65 upstream.
+    
+    The sparc32 conversion to lock_mm_and_find_vma() in commit a050ba1e7422
+    ("mm/fault: convert remaining simple cases to lock_mm_and_find_vma()")
+    missed the fact that we didn't actually have a 'regs' pointer available
+    in the 'force_user_fault()' case.
+    
+    It's there in the regular page fault path ("do_sparc_fault()"), but not
+    the window underflow/overflow paths.
+    
+    Which is all fine - we can just pass in a NULL pointer.  The register
+    state is only used to avoid deadlock with kernel faults, which is not
+    the case for any of these register window faults.
+    
+    Reported-by: Stephen Rothwell <sfr@canb.auug.org.au>
+    Fixes: a050ba1e7422 ("mm/fault: convert remaining simple cases to lock_mm_and_find_vma()")
+    Signed-off-by: Linus Torvalds <torvalds@linux-foundation.org>
+    Cc: Naresh Kamboju <naresh.kamboju@linaro.org>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 00f04a3385f72f0e36f3a217ab5236b94daddb46
+Author: Ricardo Cañuelo <ricardo.canuelo@collabora.com>
+Date:   Thu May 25 14:18:11 2023 +0200
+
+    Revert "thermal/drivers/mediatek: Use devm_of_iomap to avoid resource leak in mtk_thermal_probe"
+    
+    commit 86edac7d3888c715fe3a81bd61f3617ecfe2e1dd upstream.
+    
+    This reverts commit f05c7b7d9ea9477fcc388476c6f4ade8c66d2d26.
+    
+    That change was causing a regression in the generic-adc-thermal-probed
+    bootrr test as reported in the kernelci-results list [1].
+    A proper rework will take longer, so revert it for now.
+    
+    [1] https://groups.io/g/kernelci-results/message/42660
+    
+    Fixes: f05c7b7d9ea9 ("thermal/drivers/mediatek: Use devm_of_iomap to avoid resource leak in mtk_thermal_probe")
+    Signed-off-by: Ricardo Cañuelo <ricardo.canuelo@collabora.com>
+    Suggested-by: AngeloGioacchino Del Regno <angelogioacchino.delregno@collabora.com>
+    Reviewed-by: AngeloGioacchino Del Regno <angelogioacchino.delregno@collabora.com>
+    Signed-off-by: Daniel Lezcano <daniel.lezcano@linaro.org>
+    Link: https://lore.kernel.org/r/20230525121811.3360268-1-ricardo.canuelo@collabora.com
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit a536383ef030b15ace93b2ca865c4132a1fd8794
+Author: Mike Hommey <mh@glandium.org>
+Date:   Sun Jun 18 08:09:57 2023 +0900
+
+    HID: logitech-hidpp: add HIDPP_QUIRK_DELAYED_INIT for the T651.
+    
+    commit 5fe251112646d8626818ea90f7af325bab243efa upstream.
+    
+    commit 498ba2069035 ("HID: logitech-hidpp: Don't restart communication if
+    not necessary") put restarting communication behind that flag, and this
+    was apparently necessary on the T651, but the flag was not set for it.
+    
+    Fixes: 498ba2069035 ("HID: logitech-hidpp: Don't restart communication if not necessary")
+    Cc: stable@vger.kernel.org
+    Signed-off-by: Mike Hommey <mh@glandium.org>
+    Link: https://lore.kernel.org/r/20230617230957.6mx73th4blv7owqk@glandium.org
+    Signed-off-by: Benjamin Tissoires <benjamin.tissoires@redhat.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit d89750b19681581796dfbe3689bbb5d439b99b24
+Author: Jason Gerecke <jason.gerecke@wacom.com>
+Date:   Thu Jun 8 14:38:28 2023 -0700
+
+    HID: wacom: Use ktime_t rather than int when dealing with timestamps
+    
+    commit 9a6c0e28e215535b2938c61ded54603b4e5814c5 upstream.
+    
+    Code which interacts with timestamps needs to use the ktime_t type
+    returned by functions like ktime_get. The int type does not offer
+    enough space to store these values, and attempting to use it is a
+    recipe for problems. In this particular case, overflows would occur
+    when calculating/storing timestamps leading to incorrect values being
+    reported to userspace. In some cases these bad timestamps cause input
+    handling in userspace to appear hung.
+    
+    Link: https://gitlab.freedesktop.org/libinput/libinput/-/issues/901
+    Fixes: 17d793f3ed53 ("HID: wacom: insert timestamp to packed Bluetooth (BT) events")
+    CC: stable@vger.kernel.org
+    Signed-off-by: Jason Gerecke <jason.gerecke@wacom.com>
+    Reviewed-by: Benjamin Tissoires <benjamin.tissoires@redhat.com>
+    Link: https://lore.kernel.org/r/20230608213828.2108-1-jason.gerecke@wacom.com
+    Signed-off-by: Benjamin Tissoires <bentiss@kernel.org>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 879e79c3aead41b8aa2e91164354b30bd1c4ef3b
+Author: Ludvig Michaelsson <ludvig.michaelsson@yubico.com>
+Date:   Wed Jun 21 13:17:43 2023 +0200
+
+    HID: hidraw: fix data race on device refcount
+    
+    commit 944ee77dc6ec7b0afd8ec70ffc418b238c92f12b upstream.
+    
+    The hidraw_open() function increments the hidraw device reference
+    counter. The counter has no dedicated synchronization mechanism,
+    resulting in a potential data race when concurrently opening a device.
+    
+    The race is a regression introduced by commit 8590222e4b02 ("HID:
+    hidraw: Replace hidraw device table mutex with a rwsem"). While
+    minors_rwsem is intended to protect the hidraw_table itself, by instead
+    acquiring the lock for writing, the reference counter is also protected.
+    This is symmetrical to hidraw_release().
+    
+    Link: https://github.com/systemd/systemd/issues/27947
+    Fixes: 8590222e4b02 ("HID: hidraw: Replace hidraw device table mutex with a rwsem")
+    Cc: stable@vger.kernel.org
+    Signed-off-by: Ludvig Michaelsson <ludvig.michaelsson@yubico.com>
+    Link: https://lore.kernel.org/r/20230621-hidraw-race-v1-1-a58e6ac69bab@yubico.com
+    Signed-off-by: Benjamin Tissoires <benjamin.tissoires@redhat.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit cae85424957884cb5665241b3f12e52f0346d1d6
+Author: Zhang Shurong <zhang_shurong@foxmail.com>
+Date:   Sun Jun 25 00:16:49 2023 +0800
+
+    fbdev: fix potential OOB read in fast_imageblit()
+    
+    commit c2d22806aecb24e2de55c30a06e5d6eb297d161d upstream.
+    
+    There is a potential OOB read at fast_imageblit, for
+    "colortab[(*src >> 4)]" can become a negative value due to
+    "const char *s = image->data, *src".
+    This change makes sure the index for colortab always positive
+    or zero.
+    
+    Similar commit:
+    https://patchwork.kernel.org/patch/11746067
+    
+    Potential bug report:
+    https://groups.google.com/g/syzkaller-bugs/c/9ubBXKeKXf4/m/k-QXy4UgAAAJ
+    
+    Signed-off-by: Zhang Shurong <zhang_shurong@foxmail.com>
+    Cc: stable@vger.kernel.org
+    Signed-off-by: Helge Deller <deller@gmx.de>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit e6bbad75712a97b9b16433563c1358652a33003e
+Author: Linus Torvalds <torvalds@linux-foundation.org>
+Date:   Sat Jun 24 13:45:51 2023 -0700
+
+    mm: always expand the stack with the mmap write lock held
+    
+    commit 8d7071af890768438c14db6172cc8f9f4d04e184 upstream
+    
+    This finishes the job of always holding the mmap write lock when
+    extending the user stack vma, and removes the 'write_locked' argument
+    from the vm helper functions again.
+    
+    For some cases, we just avoid expanding the stack at all: drivers and
+    page pinning really shouldn't be extending any stacks.  Let's see if any
+    strange users really wanted that.
+    
+    It's worth noting that architectures that weren't converted to the new
+    lock_mm_and_find_vma() helper function are left using the legacy
+    "expand_stack()" function, but it has been changed to drop the mmap_lock
+    and take it for writing while expanding the vma.  This makes it fairly
+    straightforward to convert the remaining architectures.
+    
+    As a result of dropping and re-taking the lock, the calling conventions
+    for this function have also changed, since the old vma may no longer be
+    valid.  So it will now return the new vma if successful, and NULL - and
+    the lock dropped - if the area could not be extended.
+    
+    Signed-off-by: Linus Torvalds <torvalds@linux-foundation.org>
+    [6.1: Patch drivers/iommu/io-pgfault.c instead]
+    Signed-off-by: Samuel Mendoza-Jonas <samjonas@amazon.com>
+    Signed-off-by: David Woodhouse <dwmw@amazon.co.uk>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit c4b31d1b694e101cae7469a20762647185e11721
+Author: Linus Torvalds <torvalds@linux-foundation.org>
+Date:   Mon Jun 19 11:34:15 2023 -0700
+
+    execve: expand new process stack manually ahead of time
+    
+    commit f313c51d26aa87e69633c9b46efb37a930faca71 upstream.
+    
+    This is a small step towards a model where GUP itself would not expand
+    the stack, and any user that needs GUP to not look up existing mappings,
+    but actually expand on them, would have to do so manually before-hand,
+    and with the mm lock held for writing.
+    
+    It turns out that execve() already did almost exactly that, except it
+    didn't take the mm lock at all (it's single-threaded so no locking
+    technically needed, but it could cause lockdep errors).  And it only did
+    it for the CONFIG_STACK_GROWSUP case, since in that case GUP has
+    obviously never expanded the stack downwards.
+    
+    So just make that CONFIG_STACK_GROWSUP case do the right thing with
+    locking, and enable it generally.  This will eventually help GUP, and in
+    the meantime avoids a special case and the lockdep issue.
+    
+    Signed-off-by: Linus Torvalds <torvalds@linux-foundation.org>
+    [6.1 Minor context from still having FOLL_FORCE flags set]
+    Signed-off-by: Samuel Mendoza-Jonas <samjonas@amazon.com>
+    Signed-off-by: David Woodhouse <dwmw@amazon.co.uk>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 6a6b5616c3d04eba12dd0abc0522e5bae5f1ee5a
+Author: Liam R. Howlett <Liam.Howlett@oracle.com>
+Date:   Fri Jun 16 15:58:54 2023 -0700
+
+    mm: make find_extend_vma() fail if write lock not held
+    
+    commit f440fa1ac955e2898893f9301568435eb5cdfc4b upstream.
+    
+    Make calls to extend_vma() and find_extend_vma() fail if the write lock
+    is required.
+    
+    To avoid making this a flag-day event, this still allows the old
+    read-locking case for the trivial situations, and passes in a flag to
+    say "is it write-locked".  That way write-lockers can say "yes, I'm
+    being careful", and legacy users will continue to work in all the common
+    cases until they have been fully converted to the new world order.
+    
+    Co-Developed-by: Matthew Wilcox (Oracle) <willy@infradead.org>
+    Signed-off-by: Matthew Wilcox (Oracle) <willy@infradead.org>
+    Signed-off-by: Liam R. Howlett <Liam.Howlett@oracle.com>
+    Signed-off-by: Linus Torvalds <torvalds@linux-foundation.org>
+    Signed-off-by: Samuel Mendoza-Jonas <samjonas@amazon.com>
+    Signed-off-by: David Woodhouse <dwmw@amazon.co.uk>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 48c232819e77dcd7ff476e964bc671e0589daae6
+Author: Linus Torvalds <torvalds@linux-foundation.org>
+Date:   Sat Jun 24 11:17:05 2023 -0700
+
+    powerpc/mm: convert coprocessor fault to lock_mm_and_find_vma()
+    
+    commit 2cd76c50d0b41cec5c87abfcdf25b236a2793fb6 upstream.
+    
+    This is one of the simple cases, except there's no pt_regs pointer.
+    Which is fine, as lock_mm_and_find_vma() is set up to work fine with a
+    NULL pt_regs.
+    
+    Powerpc already enabled LOCK_MM_AND_FIND_VMA for the main CPU faulting,
+    so we can just use the helper without any extra work.
+    
+    Signed-off-by: Linus Torvalds <torvalds@linux-foundation.org>
+    Signed-off-by: Samuel Mendoza-Jonas <samjonas@amazon.com>
+    Signed-off-by: David Woodhouse <dwmw@amazon.co.uk>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 21ee33d51bf9f9489c7e0eb8cb17c803e2d03bd0
+Author: Linus Torvalds <torvalds@linux-foundation.org>
+Date:   Sat Jun 24 10:55:38 2023 -0700
+
+    mm/fault: convert remaining simple cases to lock_mm_and_find_vma()
+    
+    commit a050ba1e7422f2cc60ff8bfde3f96d34d00cb585 upstream.
+    
+    This does the simple pattern conversion of alpha, arc, csky, hexagon,
+    loongarch, nios2, sh, sparc32, and xtensa to the lock_mm_and_find_vma()
+    helper.  They all have the regular fault handling pattern without odd
+    special cases.
+    
+    The remaining architectures all have something that keeps us from a
+    straightforward conversion: ia64 and parisc have stacks that can grow
+    both up as well as down (and ia64 has special address region checks).
+    
+    And m68k, microblaze, openrisc, sparc64, and um end up having extra
+    rules about only expanding the stack down a limited amount below the
+    user space stack pointer.  That is something that x86 used to do too
+    (long long ago), and it probably could just be skipped, but it still
+    makes the conversion less than trivial.
+    
+    Note that this conversion was done manually and with the exception of
+    alpha without any build testing, because I have a fairly limited cross-
+    building environment.  The cases are all simple, and I went through the
+    changes several times, but...
+    
+    Signed-off-by: Linus Torvalds <torvalds@linux-foundation.org>
+    Signed-off-by: Samuel Mendoza-Jonas <samjonas@amazon.com>
+    Signed-off-by: David Woodhouse <dwmw@amazon.co.uk>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 1f4197f050dec016783663682b9eccbb603befa7
+Author: Ben Hutchings <ben@decadent.org.uk>
+Date:   Thu Jun 22 21:24:30 2023 +0200
+
+    arm/mm: Convert to using lock_mm_and_find_vma()
+    
+    commit 8b35ca3e45e35a26a21427f35d4093606e93ad0a upstream.
+    
+    arm has an additional check for address < FIRST_USER_ADDRESS before
+    expanding the stack.  Since FIRST_USER_ADDRESS is defined everywhere
+    (generally as 0), move that check to the generic expand_downwards().
+    
+    Signed-off-by: Ben Hutchings <ben@decadent.org.uk>
+    Signed-off-by: Linus Torvalds <torvalds@linux-foundation.org>
+    Signed-off-by: Samuel Mendoza-Jonas <samjonas@amazon.com>
+    Signed-off-by: David Woodhouse <dwmw@amazon.co.uk>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit ac764deea709b4d13fa78265cb2ec463da05a5d6
+Author: Ben Hutchings <ben@decadent.org.uk>
+Date:   Thu Jun 22 20:18:18 2023 +0200
+
+    riscv/mm: Convert to using lock_mm_and_find_vma()
+    
+    commit 7267ef7b0b77f4ed23b7b3c87d8eca7bd9c2d007 upstream.
+    
+    Signed-off-by: Ben Hutchings <ben@decadent.org.uk>
+    Signed-off-by: Linus Torvalds <torvalds@linux-foundation.org>
+    [6.1: Kconfig context]
+    Signed-off-by: Samuel Mendoza-Jonas <samjonas@amazon.com>
+    Signed-off-by: David Woodhouse <dwmw@amazon.co.uk>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 7227d70acc7813c77e797be00503177ce484228a
+Author: Ben Hutchings <ben@decadent.org.uk>
+Date:   Thu Jun 22 18:47:40 2023 +0200
+
+    mips/mm: Convert to using lock_mm_and_find_vma()
+    
+    commit 4bce37a68ff884e821a02a731897a8119e0c37b7 upstream.
+    
+    Signed-off-by: Ben Hutchings <ben@decadent.org.uk>
+    Signed-off-by: Linus Torvalds <torvalds@linux-foundation.org>
+    Signed-off-by: Samuel Mendoza-Jonas <samjonas@amazon.com>
+    Signed-off-by: David Woodhouse <dwmw@amazon.co.uk>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 82972ea17b47e2f9b08a91d62e92731367475f11
+Author: Michael Ellerman <mpe@ellerman.id.au>
+Date:   Fri Jun 16 15:51:29 2023 +1000
+
+    powerpc/mm: Convert to using lock_mm_and_find_vma()
+    
+    commit e6fe228c4ffafdfc970cf6d46883a1f481baf7ea upstream.
+    
+    Signed-off-by: Michael Ellerman <mpe@ellerman.id.au>
+    Signed-off-by: Linus Torvalds <torvalds@linux-foundation.org>
+    Signed-off-by: Samuel Mendoza-Jonas <samjonas@amazon.com>
+    Signed-off-by: David Woodhouse <dwmw@amazon.co.uk>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit b92cd80e5f0b14760a49ff68da23959a38452cda
+Author: Linus Torvalds <torvalds@linux-foundation.org>
+Date:   Thu Jun 15 17:11:44 2023 -0700
+
+    arm64/mm: Convert to using lock_mm_and_find_vma()
+    
+    commit ae870a68b5d13d67cf4f18d47bb01ee3fee40acb upstream.
+    
+    This converts arm64 to use the new page fault helper.  It was very
+    straightforward, but still needed a fix for the "obvious" conversion I
+    initially did.  Thanks to Suren for the fix and testing.
+    
+    Fixed-and-tested-by: Suren Baghdasaryan <surenb@google.com>
+    Unnecessary-code-removal-by: Liam R. Howlett <Liam.Howlett@oracle.com>
+    Signed-off-by: Linus Torvalds <torvalds@linux-foundation.org>
+    [6.1: Ignore CONFIG_PER_VMA_LOCK context]
+    Signed-off-by: Samuel Mendoza-Jonas <samjonas@amazon.com>
+    Signed-off-by: David Woodhouse <dwmw@amazon.co.uk>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 755aa1bc6aaf9961aa4bdb54f32faaba06c08792
+Author: Linus Torvalds <torvalds@linux-foundation.org>
+Date:   Thu Jun 15 16:17:48 2023 -0700
+
+    mm: make the page fault mmap locking killable
+    
+    commit eda0047296a16d65a7f2bc60a408f70d178b2014 upstream.
+    
+    This is done as a separate patch from introducing the new
+    lock_mm_and_find_vma() helper, because while it's an obvious change,
+    it's not what x86 used to do in this area.
+    
+    We already abort the page fault on fatal signals anyway, so why should
+    we wait for the mmap lock only to then abort later? With the new helper
+    function that returns without the lock held on failure anyway, this is
+    particularly easy and straightforward.
+    
+    Signed-off-by: Linus Torvalds <torvalds@linux-foundation.org>
+    Signed-off-by: Samuel Mendoza-Jonas <samjonas@amazon.com>
+    Signed-off-by: David Woodhouse <dwmw@amazon.co.uk>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit d6a5c7a1a6e52d4c46fe181237ca96cd46a42386
+Author: Linus Torvalds <torvalds@linux-foundation.org>
+Date:   Thu Jun 15 15:17:36 2023 -0700
+
+    mm: introduce new 'lock_mm_and_find_vma()' page fault helper
+    
+    commit c2508ec5a58db67093f4fb8bf89a9a7c53a109e9 upstream.
+    
+    .. and make x86 use it.
+    
+    This basically extracts the existing x86 "find and expand faulting vma"
+    code, but extends it to also take the mmap lock for writing in case we
+    actually do need to expand the vma.
+    
+    We've historically short-circuited that case, and have some rather ugly
+    special logic to serialize the stack segment expansion (since we only
+    hold the mmap lock for reading) that doesn't match the normal VM
+    locking.
+    
+    That slight violation of locking worked well, right up until it didn't:
+    the maple tree code really does want proper locking even for simple
+    extension of an existing vma.
+    
+    So extract the code for "look up the vma of the fault" from x86, fix it
+    up to do the necessary write locking, and make it available as a helper
+    function for other architectures that can use the common helper.
+    
+    Note: I say "common helper", but it really only handles the normal
+    stack-grows-down case.  Which is all architectures except for PA-RISC
+    and IA64.  So some rare architectures can't use the helper, but if they
+    care they'll just need to open-code this logic.
+    
+    It's also worth pointing out that this code really would like to have an
+    optimistic "mmap_upgrade_trylock()" to make it quicker to go from a
+    read-lock (for the common case) to taking the write lock (for having to
+    extend the vma) in the normal single-threaded situation where there is
+    no other locking activity.
+    
+    But that _is_ all the very uncommon special case, so while it would be
+    nice to have such an operation, it probably doesn't matter in reality.
+    I did put in the skeleton code for such a possible future expansion,
+    even if it only acts as pseudo-documentation for what we're doing.
+    
+    Signed-off-by: Linus Torvalds <torvalds@linux-foundation.org>
+    [6.1: Ignore CONFIG_PER_VMA_LOCK context]
+    Signed-off-by: Samuel Mendoza-Jonas <samjonas@amazon.com>
+    Signed-off-by: David Woodhouse <dwmw@amazon.co.uk>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 4e2ad53ababeaac44d71162650984abfe783960c
+Author: Peng Zhang <zhangpeng.00@bytedance.com>
+Date:   Sat May 6 10:47:52 2023 +0800
+
+    maple_tree: fix potential out-of-bounds access in mas_wr_end_piv()
+    
+    commit cd00dd2585c4158e81fdfac0bbcc0446afbad26d upstream.
+    
+    Check the write offset end bounds before using it as the offset into the
+    pivot array.  This avoids a possible out-of-bounds access on the pivot
+    array if the write extends to the last slot in the node, in which case the
+    node maximum should be used as the end pivot.
+    
+    akpm: this doesn't affect any current callers, but new users of mapletree
+    may encounter this problem if backported into earlier kernels, so let's
+    fix it in -stable kernels in case of this.
+    
+    Link: https://lkml.kernel.org/r/20230506024752.2550-1-zhangpeng.00@bytedance.com
+    Fixes: 54a611b60590 ("Maple Tree: add new data structure")
+    Signed-off-by: Peng Zhang <zhangpeng.00@bytedance.com>
+    Reviewed-by: Liam R. Howlett <Liam.Howlett@oracle.com>
+    Cc: <stable@vger.kernel.org>
+    Signed-off-by: Andrew Morton <akpm@linux-foundation.org>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 31cde3bdadca2c660f768b3df43425e88041a691
+Author: Oliver Hartkopp <socketcan@hartkopp.net>
+Date:   Wed Jun 7 09:27:08 2023 +0200
+
+    can: isotp: isotp_sendmsg(): fix return error fix on TX path
+    
+    commit e38910c0072b541a91954682c8b074a93e57c09b upstream.
+    
+    With commit d674a8f123b4 ("can: isotp: isotp_sendmsg(): fix return
+    error on FC timeout on TX path") the missing correct return value in
+    the case of a protocol error was introduced.
+    
+    But the way the error value has been read and sent to the user space
+    does not follow the common scheme to clear the error after reading
+    which is provided by the sock_error() function. This leads to an error
+    report at the following write() attempt although everything should be
+    working.
+    
+    Fixes: d674a8f123b4 ("can: isotp: isotp_sendmsg(): fix return error on FC timeout on TX path")
+    Reported-by: Carsten Schmidt <carsten.schmidt-achim@t-online.de>
+    Signed-off-by: Oliver Hartkopp <socketcan@hartkopp.net>
+    Link: https://lore.kernel.org/all/20230607072708.38809-1-socketcan@hartkopp.net
+    Cc: stable@vger.kernel.org
+    Signed-off-by: Marc Kleine-Budde <mkl@pengutronix.de>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 0af4750eaaeda20bc2ce8da414d85cc1653ae240
+Author: Thomas Gleixner <tglx@linutronix.de>
+Date:   Thu Jun 15 22:33:57 2023 +0200
+
+    x86/smp: Cure kexec() vs. mwait_play_dead() breakage
+    
+    commit d7893093a7417527c0d73c9832244e65c9d0114f upstream.
+    
+    TLDR: It's a mess.
+    
+    When kexec() is executed on a system with offline CPUs, which are parked in
+    mwait_play_dead() it can end up in a triple fault during the bootup of the
+    kexec kernel or cause hard to diagnose data corruption.
+    
+    The reason is that kexec() eventually overwrites the previous kernel's text,
+    page tables, data and stack. If it writes to the cache line which is
+    monitored by a previously offlined CPU, MWAIT resumes execution and ends
+    up executing the wrong text, dereferencing overwritten page tables or
+    corrupting the kexec kernels data.
+    
+    Cure this by bringing the offlined CPUs out of MWAIT into HLT.
+    
+    Write to the monitored cache line of each offline CPU, which makes MWAIT
+    resume execution. The written control word tells the offlined CPUs to issue
+    HLT, which does not have the MWAIT problem.
+    
+    That does not help, if a stray NMI, MCE or SMI hits the offlined CPUs as
+    those make it come out of HLT.
+    
+    A follow up change will put them into INIT, which protects at least against
+    NMI and SMI.
+    
+    Fixes: ea53069231f9 ("x86, hotplug: Use mwait to offline a processor, fix the legacy case")
+    Reported-by: Ashok Raj <ashok.raj@intel.com>
+    Signed-off-by: Thomas Gleixner <tglx@linutronix.de>
+    Tested-by: Ashok Raj <ashok.raj@intel.com>
+    Reviewed-by: Ashok Raj <ashok.raj@intel.com>
+    Cc: stable@vger.kernel.org
+    Link: https://lore.kernel.org/r/20230615193330.492257119@linutronix.de
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 6d3b2e0aef6c0118596928f697cb4471f6258a26
+Author: Thomas Gleixner <tglx@linutronix.de>
+Date:   Thu Jun 15 22:33:55 2023 +0200
+
+    x86/smp: Use dedicated cache-line for mwait_play_dead()
+    
+    commit f9c9987bf52f4e42e940ae217333ebb5a4c3b506 upstream.
+    
+    Monitoring idletask::thread_info::flags in mwait_play_dead() has been an
+    obvious choice as all what is needed is a cache line which is not written
+    by other CPUs.
+    
+    But there is a use case where a "dead" CPU needs to be brought out of
+    MWAIT: kexec().
+    
+    This is required as kexec() can overwrite text, pagetables, stacks and the
+    monitored cacheline of the original kernel. The latter causes MWAIT to
+    resume execution which obviously causes havoc on the kexec kernel which
+    results usually in triple faults.
+    
+    Use a dedicated per CPU storage to prepare for that.
+    
+    Signed-off-by: Thomas Gleixner <tglx@linutronix.de>
+    Reviewed-by: Ashok Raj <ashok.raj@intel.com>
+    Reviewed-by: Borislav Petkov (AMD) <bp@alien8.de>
+    Cc: stable@vger.kernel.org
+    Link: https://lore.kernel.org/r/20230615193330.434553750@linutronix.de
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 50a1abc67702f76968162402d8fb113dd6e22f31
+Author: Thomas Gleixner <tglx@linutronix.de>
+Date:   Thu Jun 15 22:33:54 2023 +0200
+
+    x86/smp: Remove pointless wmb()s from native_stop_other_cpus()
+    
+    commit 2affa6d6db28855e6340b060b809c23477aa546e upstream.
+    
+    The wmb()s before sending the IPIs are not synchronizing anything.
+    
+    If at all then the apic IPI functions have to provide or act as appropriate
+    barriers.
+    
+    Remove these cargo cult barriers which have no explanation of what they are
+    synchronizing.
+    
+    Signed-off-by: Thomas Gleixner <tglx@linutronix.de>
+    Reviewed-by: Borislav Petkov (AMD) <bp@alien8.de>
+    Cc: stable@vger.kernel.org
+    Link: https://lore.kernel.org/r/20230615193330.378358382@linutronix.de
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit e47037d28b7398d7a8f1a3e071087ea9dbfcebf5
+Author: Tony Battersby <tonyb@cybernetics.com>
+Date:   Thu Jun 15 22:33:52 2023 +0200
+
+    x86/smp: Dont access non-existing CPUID leaf
+    
+    commit 9b040453d4440659f33dc6f0aa26af418ebfe70b upstream.
+    
+    stop_this_cpu() tests CPUID leaf 0x8000001f::EAX unconditionally. Intel
+    CPUs return the content of the highest supported leaf when a non-existing
+    leaf is read, while AMD CPUs return all zeros for unsupported leafs.
+    
+    So the result of the test on Intel CPUs is lottery.
+    
+    While harmless it's incorrect and causes the conditional wbinvd() to be
+    issued where not required.
+    
+    Check whether the leaf is supported before reading it.
+    
+    [ tglx: Adjusted changelog ]
+    
+    Fixes: 08f253ec3767 ("x86/cpu: Clear SME feature flag when not in use")
+    Signed-off-by: Tony Battersby <tonyb@cybernetics.com>
+    Signed-off-by: Thomas Gleixner <tglx@linutronix.de>
+    Reviewed-by: Mario Limonciello <mario.limonciello@amd.com>
+    Reviewed-by: Borislav Petkov (AMD) <bp@alien8.de>
+    Cc: stable@vger.kernel.org
+    Link: https://lore.kernel.org/r/3817d810-e0f1-8ef8-0bbd-663b919ca49b@cybernetics.com
+    Link: https://lore.kernel.org/r/20230615193330.322186388@linutronix.de
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit edadebb349e89461109643dd92ee986e01a47aa1
+Author: Thomas Gleixner <tglx@linutronix.de>
+Date:   Wed Apr 26 18:37:00 2023 +0200
+
+    x86/smp: Make stop_other_cpus() more robust
+    
+    commit 1f5e7eb7868e42227ac426c96d437117e6e06e8e upstream.
+    
+    Tony reported intermittent lockups on poweroff. His analysis identified the
+    wbinvd() in stop_this_cpu() as the culprit. This was added to ensure that
+    on SME enabled machines a kexec() does not leave any stale data in the
+    caches when switching from encrypted to non-encrypted mode or vice versa.
+    
+    That wbinvd() is conditional on the SME feature bit which is read directly
+    from CPUID. But that readout does not check whether the CPUID leaf is
+    available or not. If it's not available the CPU will return the value of
+    the highest supported leaf instead. Depending on the content the "SME" bit
+    might be set or not.
+    
+    That's incorrect but harmless. Making the CPUID readout conditional makes
+    the observed hangs go away, but it does not fix the underlying problem:
+    
+    CPU0                                    CPU1
+    
+     stop_other_cpus()
+       send_IPIs(REBOOT);                   stop_this_cpu()
+       while (num_online_cpus() > 1);         set_online(false);
+       proceed... -> hang
+                                              wbinvd()
+    
+    WBINVD is an expensive operation and if multiple CPUs issue it at the same
+    time the resulting delays are even larger.
+    
+    But CPU0 already observed num_online_cpus() going down to 1 and proceeds
+    which causes the system to hang.
+    
+    This issue exists independent of WBINVD, but the delays caused by WBINVD
+    make it more prominent.
+    
+    Make this more robust by adding a cpumask which is initialized to the
+    online CPU mask before sending the IPIs and CPUs clear their bit in
+    stop_this_cpu() after the WBINVD completed. Check for that cpumask to
+    become empty in stop_other_cpus() instead of watching num_online_cpus().
+    
+    The cpumask cannot plug all holes either, but it's better than a raw
+    counter and allows to restrict the NMI fallback IPI to be sent only the
+    CPUs which have not reported within the timeout window.
+    
+    Fixes: 08f253ec3767 ("x86/cpu: Clear SME feature flag when not in use")
+    Reported-by: Tony Battersby <tonyb@cybernetics.com>
+    Signed-off-by: Thomas Gleixner <tglx@linutronix.de>
+    Reviewed-by: Borislav Petkov (AMD) <bp@alien8.de>
+    Reviewed-by: Ashok Raj <ashok.raj@intel.com>
+    Cc: stable@vger.kernel.org
+    Link: https://lore.kernel.org/all/3817d810-e0f1-8ef8-0bbd-663b919ca49b@cybernetics.com
+    Link: https://lore.kernel.org/r/87h6r770bv.ffs@tglx
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 94a69d6999419cd21365111b4493070182712299
+Author: Borislav Petkov (AMD) <bp@alien8.de>
+Date:   Tue May 2 19:53:50 2023 +0200
+
+    x86/microcode/AMD: Load late on both threads too
+    
+    commit a32b0f0db3f396f1c9be2fe621e77c09ec3d8e7d upstream.
+    
+    Do the same as early loading - load on both threads.
+    
+    Signed-off-by: Borislav Petkov (AMD) <bp@alien8.de>
+    Cc: <stable@kernel.org>
+    Link: https://lore.kernel.org/r/20230605141332.25948-1-bp@alien8.de
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 84f077802e56ae43f4b6c6eb9ad59b19df9db374
+Author: Tony Luck <tony.luck@intel.com>
+Date:   Fri Oct 21 13:01:20 2022 -0700
+
+    mm, hwpoison: when copy-on-write hits poison, take page offline
+    
+    commit d302c2398ba269e788a4f37ae57c07a7fcabaa42 upstream.
+    
+    Cannot call memory_failure() directly from the fault handler because
+    mmap_lock (and others) are held.
+    
+    It is important, but not urgent, to mark the source page as h/w poisoned
+    and unmap it from other tasks.
+    
+    Use memory_failure_queue() to request a call to memory_failure() for the
+    page with the error.
+    
+    Also provide a stub version for CONFIG_MEMORY_FAILURE=n
+    
+    Link: https://lkml.kernel.org/r/20221021200120.175753-3-tony.luck@intel.com
+    Signed-off-by: Tony Luck <tony.luck@intel.com>
+    Reviewed-by: Miaohe Lin <linmiaohe@huawei.com>
+    Cc: Christophe Leroy <christophe.leroy@csgroup.eu>
+    Cc: Dan Williams <dan.j.williams@intel.com>
+    Cc: Matthew Wilcox (Oracle) <willy@infradead.org>
+    Cc: Michael Ellerman <mpe@ellerman.id.au>
+    Cc: Naoya Horiguchi <naoya.horiguchi@nec.com>
+    Cc: Nicholas Piggin <npiggin@gmail.com>
+    Cc: Shuai Xue <xueshuai@linux.alibaba.com>
+    Signed-off-by: Andrew Morton <akpm@linux-foundation.org>
+    [ Due to missing commits
+      e591ef7d96d6e ("mm,hwpoison,hugetlb,memory_hotplug: hotremove memory section with hwpoisoned hugepage")
+      5033091de814a ("mm/hwpoison: introduce per-memory_block hwpoison counter")
+      The impact of e591ef7d96d6e is its introduction of an additional flag in
+      __get_huge_page_for_hwpoison() that serves as an indication a hwpoisoned
+      hugetlb page should have its migratable bit cleared.
+      The impact of 5033091de814a is contexual.
+      Resolve by ignoring both missing commits. - jane]
+    Signed-off-by: Jane Chu <jane.chu@oracle.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 4af5960d7cd46c3834f65b75577b775cbcd0f7b2
+Author: Tony Luck <tony.luck@intel.com>
+Date:   Fri Oct 21 13:01:19 2022 -0700
+
+    mm, hwpoison: try to recover from copy-on write faults
+    
+    commit a873dfe1032a132bf89f9e19a6ac44f5a0b78754 upstream.
+    
+    Patch series "Copy-on-write poison recovery", v3.
+    
+    Part 1 deals with the process that triggered the copy on write fault with
+    a store to a shared read-only page.  That process is send a SIGBUS with
+    the usual machine check decoration to specify the virtual address of the
+    lost page, together with the scope.
+    
+    Part 2 sets up to asynchronously take the page with the uncorrected error
+    offline to prevent additional machine check faults.  H/t to Miaohe Lin
+    <linmiaohe@huawei.com> and Shuai Xue <xueshuai@linux.alibaba.com> for
+    pointing me to the existing function to queue a call to memory_failure().
+    
+    On x86 there is some duplicate reporting (because the error is also
+    signalled by the memory controller as well as by the core that triggered
+    the machine check).  Console logs look like this:
+    
+    
+    This patch (of 2):
+    
+    If the kernel is copying a page as the result of a copy-on-write
+    fault and runs into an uncorrectable error, Linux will crash because
+    it does not have recovery code for this case where poison is consumed
+    by the kernel.
+    
+    It is easy to set up a test case. Just inject an error into a private
+    page, fork(2), and have the child process write to the page.
+    
+    I wrapped that neatly into a test at:
+    
+      git://git.kernel.org/pub/scm/linux/kernel/git/aegl/ras-tools.git
+    
+    just enable ACPI error injection and run:
+    
+      # ./einj_mem-uc -f copy-on-write
+    
+    Add a new copy_user_highpage_mc() function that uses copy_mc_to_kernel()
+    on architectures where that is available (currently x86 and powerpc).
+    When an error is detected during the page copy, return VM_FAULT_HWPOISON
+    to caller of wp_page_copy(). This propagates up the call stack. Both x86
+    and powerpc have code in their fault handler to deal with this code by
+    sending a SIGBUS to the application.
+    
+    Note that this patch avoids a system crash and signals the process that
+    triggered the copy-on-write action. It does not take any action for the
+    memory error that is still in the shared page. To handle that a call to
+    memory_failure() is needed. But this cannot be done from wp_page_copy()
+    because it holds mmap_lock(). Perhaps the architecture fault handlers
+    can deal with this loose end in a subsequent patch?
+    
+    On Intel/x86 this loose end will often be handled automatically because
+    the memory controller provides an additional notification of the h/w
+    poison in memory, the handler for this will call memory_failure(). This
+    isn't a 100% solution. If there are multiple errors, not all may be
+    logged in this way.
+    
+    [tony.luck@intel.com: add call to kmsan_unpoison_memory(), per Miaohe Lin]
+      Link: https://lkml.kernel.org/r/20221031201029.102123-2-tony.luck@intel.com
+    Link: https://lkml.kernel.org/r/20221021200120.175753-1-tony.luck@intel.com
+    Link: https://lkml.kernel.org/r/20221021200120.175753-2-tony.luck@intel.com
+    Signed-off-by: Tony Luck <tony.luck@intel.com>
+    Reviewed-by: Dan Williams <dan.j.williams@intel.com>
+    Reviewed-by: Naoya Horiguchi <naoya.horiguchi@nec.com>
+    Reviewed-by: Miaohe Lin <linmiaohe@huawei.com>
+    Reviewed-by: Alexander Potapenko <glider@google.com>
+    Tested-by: Shuai Xue <xueshuai@linux.alibaba.com>
+    Cc: Christophe Leroy <christophe.leroy@csgroup.eu>
+    Cc: Matthew Wilcox (Oracle) <willy@infradead.org>
+    Cc: Michael Ellerman <mpe@ellerman.id.au>
+    Cc: Nicholas Piggin <npiggin@gmail.com>
+    Signed-off-by: Andrew Morton <akpm@linux-foundation.org>
+    Igned-off-by: Jane Chu <jane.chu@oracle.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 69925a346acb70be33059f4940ed703ffe0b0756
+Author: Paolo Abeni <pabeni@redhat.com>
+Date:   Tue Jun 20 18:24:23 2023 +0200
+
+    mptcp: ensure listener is unhashed before updating the sk status
+    
+    commit 57fc0f1ceaa4016354cf6f88533e20b56190e41a upstream.
+    
+    The MPTCP protocol access the listener subflow in a lockless
+    manner in a couple of places (poll, diag). That works only if
+    the msk itself leaves the listener status only after that the
+    subflow itself has been closed/disconnected. Otherwise we risk
+    deadlock in diag, as reported by Christoph.
+    
+    Address the issue ensuring that the first subflow (the listener
+    one) is always disconnected before updating the msk socket status.
+    
+    Reported-by: Christoph Paasch <cpaasch@apple.com>
+    Closes: https://github.com/multipath-tcp/mptcp_net-next/issues/407
+    Fixes: b29fcfb54cd7 ("mptcp: full disconnect implementation")
+    Cc: stable@vger.kernel.org
+    Signed-off-by: Paolo Abeni <pabeni@redhat.com>
+    Reviewed-by: Matthieu Baerts <matthieu.baerts@tessares.net>
+    Signed-off-by: Matthieu Baerts <matthieu.baerts@tessares.net>
+    Signed-off-by: Jakub Kicinski <kuba@kernel.org>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 42a018a796d1eedb0d7c38b2778ef3dbf05aca36
+Author: David Woodhouse <dwmw@amazon.co.uk>
+Date:   Wed Jun 28 10:55:03 2023 +0100
+
+    mm/mmap: Fix error return in do_vmi_align_munmap()
+    
+    commit 6c26bd4384da24841bac4f067741bbca18b0fb74 upstream,
+    
+    If mas_store_gfp() in the gather loop failed, the 'error' variable that
+    ultimately gets returned was not being set. In many cases, its original
+    value of -ENOMEM was still in place, and that was fine. But if VMAs had
+    been split at the start or end of the range, then 'error' could be zero.
+    
+    Change to the 'error = foo(); if (error) goto â¦' idiom to fix the bug.
+    
+    Also clean up a later case which avoided the same bug by *explicitly*
+    setting error = -ENOMEM right before calling the function that might
+    return -ENOMEM.
+    
+    In a final cosmetic change, move the 'Point of no return' comment to
+    *after* the goto. That's been in the wrong place since the preallocation
+    was removed, and this new error path was added.
+    
+    Fixes: 606c812eb1d5 ("mm/mmap: Fix error path in do_vmi_align_munmap()")
+    Signed-off-by: David Woodhouse <dwmw@amazon.co.uk>
+    Cc: stable@vger.kernel.org
+    Reviewed-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+    Reviewed-by: Liam R. Howlett <Liam.Howlett@oracle.com>
+    Signed-off-by: David Woodhouse <dwmw@amazon.co.uk>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit a149174ff8bbdd8d5a0a591feaa3668ea4f43387
+Author: Liam R. Howlett <Liam.Howlett@oracle.com>
+Date:   Sat Jun 17 20:47:08 2023 -0400
+
+    mm/mmap: Fix error path in do_vmi_align_munmap()
+    
+    commit 606c812eb1d5b5fb0dd9e330ca94b52d7c227830 upstream
+    
+    The error unrolling was leaving the VMAs detached in many cases and
+    leaving the locked_vm statistic altered, and skipping the unrolling
+    entirely in the case of the vma tree write failing.
+    
+    Fix the error path by re-attaching the detached VMAs and adding the
+    necessary goto for the failed vma tree write, and fix the locked_vm
+    statistic by only updating after the vma tree write succeeds.
+    
+    Fixes: 763ecb035029 ("mm: remove the vma linked list")
+    Reported-by: Vegard Nossum <vegard.nossum@oracle.com>
+    Signed-off-by: Liam R. Howlett <Liam.Howlett@oracle.com>
+    Signed-off-by: Linus Torvalds <torvalds@linux-foundation.org>
+    [ dwmw2: Strictly, the original patch wasn't *re-attaching* the
+             detached VMAs. They *were* still attached but just had
+             the 'detached' flag set, which is an optimisation. Which
+             doesn't exist in 6.3, so drop that. Also drop the call
+             to vma_start_write() which came in with the per-VMA
+             locking in 6.4. ]
+    [ dwmw2 (6.1): It's do_mas_align_munmap() here. And has two call
+             sites for the now-removed munmap_sidetree() function.
+             Inline them both rather then trying to backport various
+             dependencies with potentially subtle interactions. ]
+    Signed-off-by: David Woodhouse <dwmw@amazon.co.uk>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
