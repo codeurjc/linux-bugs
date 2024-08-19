@@ -39,4 +39,4 @@ Additionally, there is a ```--cache``` that could be used to cache downloaded fi
 
 ## Look for annotated commits in upstream commits
 
-...
+Open `UpstreamCommitsAnalyzer.ipynb` notebook.
