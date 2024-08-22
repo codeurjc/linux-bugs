@@ -5,10 +5,11 @@ import os
 import argparse
 import csv
 
-CURRENT_BRANCHES = ["6.6", "6.1", "5.15", "5.10", "5.4", "4.19"]
+CURRENT_BRANCHES = ["6.6", "6.1", "5.15", "5.10", "5.4", "4.19", "4.14", "4.9", "4.4", "4.1"]
 
 BASE_URL = "https://cdn.kernel.org/pub/linux/kernel/"
 
+upstream_regex = "commit ([0-9a-f]{5,40}) upstream|Upstream commit:* ([0-9a-f]{5,40})"
 
 def get_branch(branch_id, cache=False):
     upstream_commits = []
@@ -21,7 +22,9 @@ def get_branch(branch_id, cache=False):
         # HTML changelog page (e.g. https://cdn.kernel.org/pub/linux/kernel/v6.x/ChangeLog-6.6)
         changelog_page_html = get_html_document(BASE_URL + release_range + "/" + link.get('href'), cache)
         # Find commit hash using regex
-        upstream_commits_in_changelog = re.findall("commit ([0-9a-f]{5,40}) upstream", changelog_page_html)
+        upstream_tuples_in_changelog = re.findall(upstream_regex, changelog_page_html)
+        # We get tuples, because the regex has several groups. Get the actual commits from them
+        upstream_commits_in_changelog = [next(s for s in i if s) for i in upstream_tuples_in_changelog]
         print(" > Upstream commits found: %d" % len(upstream_commits_in_changelog))
         # Save upstream commits in a file
         with open('results/%s.txt' % link.get('href'), 'w') as f:
