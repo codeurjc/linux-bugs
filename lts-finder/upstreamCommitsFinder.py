@@ -54,7 +54,7 @@ def get_all(cache=False):
 
     with open('upstream_commits.csv', 'w') as out:
         csv_out = csv.writer(out)
-        csv_out.writerow(['branch', 'commit'])
+        csv_out.writerow(['branch', 'minor', 'commit'])
         for row in all_upstream_commits:
             csv_out.writerow(row)
 
