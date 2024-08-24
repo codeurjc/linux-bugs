@@ -2,12 +2,12 @@
 
 ## Objetives
 
-- Locate all upstream commits listed in kernel.org from the following releases/branches: 6.6, 6.1, 5.15, 5.10, 5.4, and 4.19
-- From the 1000 commits annotated by us, check which ones are also upstreamed commits
+- Locate all upstream commits listed in kernel.org from the LTS releases.
+- Analyze the annotated (by us) commits that also happen to be in LTS releases.
 
 ## Locate all upstream commits listed in kernel.org
 
-To track the Long-Term Support (LTS) versions listed on kernel.org (currently 6.6, 6.1, 5.15, 5.10, 5.4, and 4.19), we gather all commits for each of these branches. This can be done by checking the changelog files for each branch (e.g., 6.6.x, 6.1.x, 5.15.x, etc.). 
+To track the Long-Term Support (LTS) versions listed on kernel.org, we gather all commits for each of these branches. This can be done by checking the changelog files for each branch (e.g., 6.6.x, 6.1.x, 5.15.x, etc.). 
 
 In summary, the script "upstreamCommitsFinder.py" accesses this online directory and retrieves all "upstream" commits for each branch.
 
