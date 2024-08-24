@@ -30,7 +30,7 @@ def get_branch(branch_id, cache=False):
         try:
             minor_id = cl_version.split('.')[2]
         except IndexError:
-            minor_id = ''
+            minor_id = '0'
         print(branch_id, minor_id, cl_link)
         # HTML changelog page (e.g. https://cdn.kernel.org/pub/linux/kernel/v6.x/ChangeLog-6.6)
         changelog_page_html = get_document(cl_link, cache)
