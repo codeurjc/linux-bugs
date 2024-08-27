@@ -1,9 +1,11 @@
+import argparse
+import dateutil.parser
+import os
+import re
+
+import csv
 from bs4 import BeautifulSoup
 import requests
-import re
-import os
-import argparse
-import csv
 
 CURRENT_BRANCHES = ["6.6", "6.1", "5.15", "5.10", "5.4", "4.19", "4.14", "4.9", "4.4", "4.1"]
 
@@ -19,6 +21,7 @@ def get_branch(branch_id, cache=False):
     release_range = f"v{branch_id.split(".")[0]}.x"
     # Change log page (e.g. https://cdn.kernel.org/pub/linux/kernel/v6.x)
     changelog_list_page = get_bsoup_document(BASE_URL + release_range, cache)
+
     for link in changelog_list_page.find_all('a', string=re.compile("^ChangeLog-" + branch_id)):
         cl_file = link.get('href')
         if cl_file.endswith('.sign'):
@@ -34,6 +37,12 @@ def get_branch(branch_id, cache=False):
         print(branch_id, minor_id, cl_link)
         # HTML changelog page (e.g. https://cdn.kernel.org/pub/linux/kernel/v6.x/ChangeLog-6.6)
         changelog_page_html = get_document(cl_link, cache)
+        # Find date of first commit of the changelog (date of the release)
+        changelog_date = re.search("Date:(.*)", changelog_page_html)
+        changelog_date = changelog_date.groups()[0].strip()
+        changelog_date = dt = dateutil.parser.parse(changelog_date)
+        with open(os.path.join('results', 'release_dates.csv'), 'a') as f:
+            print(f"{branch_id},{minor_id},{changelog_date}", file=f)
         # Find upstream commit hashes using regex
         upstream_tuples_in_changelog = re.findall(upstream_regex, changelog_page_html)
         # We get tuples, because the regex has several groups. Get the actual commits from them
@@ -49,6 +58,7 @@ def get_branch(branch_id, cache=False):
 
 def get_all(cache=False):
     all_upstream_commits = []
+
     for branch_id in CURRENT_BRANCHES:
         all_upstream_commits += get_branch(branch_id, cache=cache)
 
@@ -86,6 +96,10 @@ if __name__ == "__main__":
     parser.add_argument('--all', action='store_true', help='Get upstream commits in all branches')
     parser.add_argument('-b', type=str, choices=CURRENT_BRANCHES, help='Get upstream commits in a specific branch')
     args = parser.parse_args()
+
+    # Create the file for releases dates (overwriting the old one)
+    with open(os.path.join('results', 'release_dates.csv'), 'w') as f:
+        print("branch,minor,date", file=f)
 
     if args.all:
         print("Finding upstream commits in all branches")
