@@ -1,0 +1,1229 @@
+commit 66dd212d9c3b996c5978ffdbf8075e6ad52016bc
+Author: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+Date:   Mon Sep 5 10:23:58 2022 +0200
+
+    Linux 4.9.327
+    
+    Link: https://lore.kernel.org/r/20220902121356.732130937@linuxfoundation.org
+    Tested-by: Jon Hunter <jonathanh@nvidia.com>
+    Tested-by: Florian Fainelli <f.fainelli@gmail.com>
+    Tested-by: Shuah Khan <skhan@linuxfoundation.org>
+    Tested-by: Guenter Roeck <linux@roeck-us.net>
+    Tested-by: Linux Kernel Functional Testing <lkft@linaro.org>
+    Tested-by: Pavel Machek (CIP) <pavel@denx.de>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 19cd630712e7c13a3dedfc6986a9b983fed6fd98
+Author: Kuniyuki Iwashima <kuniyu@amazon.com>
+Date:   Fri Aug 12 19:05:09 2022 -0700
+
+    kprobes: don't call disarm_kprobe() for disabled kprobes
+    
+    commit 9c80e79906b4ca440d09e7f116609262bb747909 upstream.
+    
+    The assumption in __disable_kprobe() is wrong, and it could try to disarm
+    an already disarmed kprobe and fire the WARN_ONCE() below. [0]  We can
+    easily reproduce this issue.
+    
+    1. Write 0 to /sys/kernel/debug/kprobes/enabled.
+    
+      # echo 0 > /sys/kernel/debug/kprobes/enabled
+    
+    2. Run execsnoop.  At this time, one kprobe is disabled.
+    
+      # /usr/share/bcc/tools/execsnoop &
+      [1] 2460
+      PCOMM            PID    PPID   RET ARGS
+    
+      # cat /sys/kernel/debug/kprobes/list
+      ffffffff91345650  r  __x64_sys_execve+0x0    [FTRACE]
+      ffffffff91345650  k  __x64_sys_execve+0x0    [DISABLED][FTRACE]
+    
+    3. Write 1 to /sys/kernel/debug/kprobes/enabled, which changes
+       kprobes_all_disarmed to false but does not arm the disabled kprobe.
+    
+      # echo 1 > /sys/kernel/debug/kprobes/enabled
+    
+      # cat /sys/kernel/debug/kprobes/list
+      ffffffff91345650  r  __x64_sys_execve+0x0    [FTRACE]
+      ffffffff91345650  k  __x64_sys_execve+0x0    [DISABLED][FTRACE]
+    
+    4. Kill execsnoop, when __disable_kprobe() calls disarm_kprobe() for the
+       disabled kprobe and hits the WARN_ONCE() in __disarm_kprobe_ftrace().
+    
+      # fg
+      /usr/share/bcc/tools/execsnoop
+      ^C
+    
+    Actually, WARN_ONCE() is fired twice, and __unregister_kprobe_top() misses
+    some cleanups and leaves the aggregated kprobe in the hash table.  Then,
+    __unregister_trace_kprobe() initialises tk->rp.kp.list and creates an
+    infinite loop like this.
+    
+      aggregated kprobe.list -> kprobe.list -.
+                                         ^    |
+                                         '.__.'
+    
+    In this situation, these commands fall into the infinite loop and result
+    in RCU stall or soft lockup.
+    
+      cat /sys/kernel/debug/kprobes/list : show_kprobe_addr() enters into the
+                                           infinite loop with RCU.
+    
+      /usr/share/bcc/tools/execsnoop : warn_kprobe_rereg() holds kprobe_mutex,
+                                       and __get_valid_kprobe() is stuck in
+                                       the loop.
+    
+    To avoid the issue, make sure we don't call disarm_kprobe() for disabled
+    kprobes.
+    
+    [0]
+    Failed to disarm kprobe-ftrace at __x64_sys_execve+0x0/0x40 (error -2)
+    WARNING: CPU: 6 PID: 2460 at kernel/kprobes.c:1130 __disarm_kprobe_ftrace.isra.19 (kernel/kprobes.c:1129)
+    Modules linked in: ena
+    CPU: 6 PID: 2460 Comm: execsnoop Not tainted 5.19.0+ #28
+    Hardware name: Amazon EC2 c5.2xlarge/, BIOS 1.0 10/16/2017
+    RIP: 0010:__disarm_kprobe_ftrace.isra.19 (kernel/kprobes.c:1129)
+    Code: 24 8b 02 eb c1 80 3d c4 83 f2 01 00 75 d4 48 8b 75 00 89 c2 48 c7 c7 90 fa 0f 92 89 04 24 c6 05 ab 83 01 e8 e4 94 f0 ff <0f> 0b 8b 04 24 eb b1 89 c6 48 c7 c7 60 fa 0f 92 89 04 24 e8 cc 94
+    RSP: 0018:ffff9e6ec154bd98 EFLAGS: 00010282
+    RAX: 0000000000000000 RBX: ffffffff930f7b00 RCX: 0000000000000001
+    RDX: 0000000080000001 RSI: ffffffff921461c5 RDI: 00000000ffffffff
+    RBP: ffff89c504286da8 R08: 0000000000000000 R09: c0000000fffeffff
+    R10: 0000000000000000 R11: ffff9e6ec154bc28 R12: ffff89c502394e40
+    R13: ffff89c502394c00 R14: ffff9e6ec154bc00 R15: 0000000000000000
+    FS:  00007fe800398740(0000) GS:ffff89c812d80000(0000) knlGS:0000000000000000
+    CS:  0010 DS: 0000 ES: 0000 CR0: 0000000080050033
+    CR2: 000000c00057f010 CR3: 0000000103b54006 CR4: 00000000007706e0
+    DR0: 0000000000000000 DR1: 0000000000000000 DR2: 0000000000000000
+    DR3: 0000000000000000 DR6: 00000000fffe0ff0 DR7: 0000000000000400
+    PKRU: 55555554
+    Call Trace:
+    <TASK>
+     __disable_kprobe (kernel/kprobes.c:1716)
+     disable_kprobe (kernel/kprobes.c:2392)
+     __disable_trace_kprobe (kernel/trace/trace_kprobe.c:340)
+     disable_trace_kprobe (kernel/trace/trace_kprobe.c:429)
+     perf_trace_event_unreg.isra.2 (./include/linux/tracepoint.h:93 kernel/trace/trace_event_perf.c:168)
+     perf_kprobe_destroy (kernel/trace/trace_event_perf.c:295)
+     _free_event (kernel/events/core.c:4971)
+     perf_event_release_kernel (kernel/events/core.c:5176)
+     perf_release (kernel/events/core.c:5186)
+     __fput (fs/file_table.c:321)
+     task_work_run (./include/linux/sched.h:2056 (discriminator 1) kernel/task_work.c:179 (discriminator 1))
+     exit_to_user_mode_prepare (./include/linux/resume_user_mode.h:49 kernel/entry/common.c:169 kernel/entry/common.c:201)
+     syscall_exit_to_user_mode (./arch/x86/include/asm/jump_label.h:55 ./arch/x86/include/asm/nospec-branch.h:384 ./arch/x86/include/asm/entry-common.h:94 kernel/entry/common.c:133 kernel/entry/common.c:296)
+     do_syscall_64 (arch/x86/entry/common.c:87)
+     entry_SYSCALL_64_after_hwframe (arch/x86/entry/entry_64.S:120)
+    RIP: 0033:0x7fe7ff210654
+    Code: 15 79 89 20 00 f7 d8 64 89 02 48 c7 c0 ff ff ff ff eb be 0f 1f 00 8b 05 9a cd 20 00 48 63 ff 85 c0 75 11 b8 03 00 00 00 0f 05 <48> 3d 00 f0 ff ff 77 3a f3 c3 48 83 ec 18 48 89 7c 24 08 e8 34 fc
+    RSP: 002b:00007ffdbd1d3538 EFLAGS: 00000246 ORIG_RAX: 0000000000000003
+    RAX: 0000000000000000 RBX: 0000000000000008 RCX: 00007fe7ff210654
+    RDX: 0000000000000000 RSI: 0000000000002401 RDI: 0000000000000008
+    RBP: 0000000000000000 R08: 94ae31d6fda838a4 R0900007fe8001c9d30
+    R10: 00007ffdbd1d34b0 R11: 0000000000000246 R12: 00007ffdbd1d3600
+    R13: 0000000000000000 R14: fffffffffffffffc R15: 00007ffdbd1d3560
+    </TASK>
+    
+    Link: https://lkml.kernel.org/r/20220813020509.90805-1-kuniyu@amazon.com
+    Fixes: 69d54b916d83 ("kprobes: makes kprobes/enabled works correctly for optimized kprobes.")
+    Signed-off-by: Kuniyuki Iwashima <kuniyu@amazon.com>
+    Reported-by: Ayushman Dutta <ayudutta@amazon.com>
+    Cc: "Naveen N. Rao" <naveen.n.rao@linux.ibm.com>
+    Cc: Anil S Keshavamurthy <anil.s.keshavamurthy@intel.com>
+    Cc: "David S. Miller" <davem@davemloft.net>
+    Cc: Masami Hiramatsu <mhiramat@kernel.org>
+    Cc: Wang Nan <wangnan0@huawei.com>
+    Cc: Kuniyuki Iwashima <kuniyu@amazon.com>
+    Cc: Kuniyuki Iwashima <kuni1840@gmail.com>
+    Cc: Ayushman Dutta <ayudutta@amazon.com>
+    Cc: <stable@vger.kernel.org>
+    Signed-off-by: Andrew Morton <akpm@linux-foundation.org>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit c24ca0f172905d593ad8ab276b0992bb74353a8d
+Author: Jann Horn <jannh@google.com>
+Date:   Wed Aug 31 19:06:00 2022 +0200
+
+    mm/rmap: Fix anon_vma->degree ambiguity leading to double-reuse
+    
+    commit 2555283eb40df89945557273121e9393ef9b542b upstream.
+    
+    anon_vma->degree tracks the combined number of child anon_vmas and VMAs
+    that use the anon_vma as their ->anon_vma.
+    
+    anon_vma_clone() then assumes that for any anon_vma attached to
+    src->anon_vma_chain other than src->anon_vma, it is impossible for it to
+    be a leaf node of the VMA tree, meaning that for such VMAs ->degree is
+    elevated by 1 because of a child anon_vma, meaning that if ->degree
+    equals 1 there are no VMAs that use the anon_vma as their ->anon_vma.
+    
+    This assumption is wrong because the ->degree optimization leads to leaf
+    nodes being abandoned on anon_vma_clone() - an existing anon_vma is
+    reused and no new parent-child relationship is created.  So it is
+    possible to reuse an anon_vma for one VMA while it is still tied to
+    another VMA.
+    
+    This is an issue because is_mergeable_anon_vma() and its callers assume
+    that if two VMAs have the same ->anon_vma, the list of anon_vmas
+    attached to the VMAs is guaranteed to be the same.  When this assumption
+    is violated, vma_merge() can merge pages into a VMA that is not attached
+    to the corresponding anon_vma, leading to dangling page->mapping
+    pointers that will be dereferenced during rmap walks.
+    
+    Fix it by separately tracking the number of child anon_vmas and the
+    number of VMAs using the anon_vma as their ->anon_vma.
+    
+    Fixes: 7a3ef208e662 ("mm: prevent endless growth of anon_vma hierarchy")
+    Cc: stable@kernel.org
+    Acked-by: Michal Hocko <mhocko@suse.com>
+    Acked-by: Vlastimil Babka <vbabka@suse.cz>
+    Signed-off-by: Jann Horn <jannh@google.com>
+    Signed-off-by: Linus Torvalds <torvalds@linux-foundation.org>
+    [manually fixed up different indentation in stable]
+    Signed-off-by: Jann Horn <jannh@google.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit e7a5ead5a469d824f3253a7a4841995c01772cf9
+Author: Geert Uytterhoeven <geert@linux-m68k.org>
+Date:   Mon Aug 15 12:39:20 2022 +0200
+
+    netfilter: conntrack: NF_CONNTRACK_PROCFS should no longer default to y
+    
+    [ Upstream commit aa5762c34213aba7a72dc58e70601370805fa794 ]
+    
+    NF_CONNTRACK_PROCFS was marked obsolete in commit 54b07dca68557b09
+    ("netfilter: provide config option to disable ancient procfs parts") in
+    v3.3.
+    
+    Signed-off-by: Geert Uytterhoeven <geert@linux-m68k.org>
+    Signed-off-by: Florian Westphal <fw@strlen.de>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 4a06817ce7ef6777a55a46f5435439c669d346b5
+Author: Juergen Gross <jgross@suse.com>
+Date:   Mon Jun 20 11:45:34 2022 +0200
+
+    s390/hypfs: avoid error message under KVM
+    
+    [ Upstream commit 7b6670b03641ac308aaa6fa2e6f964ac993b5ea3 ]
+    
+    When booting under KVM the following error messages are issued:
+    
+    hypfs.7f5705: The hardware system does not support hypfs
+    hypfs.7a79f0: Initialization of hypfs failed with rc=-61
+    
+    Demote the severity of first message from "error" to "info" and issue
+    the second message only in other error cases.
+    
+    Signed-off-by: Juergen Gross <jgross@suse.com>
+    Acked-by: Heiko Carstens <hca@linux.ibm.com>
+    Acked-by: Christian Borntraeger <borntraeger@linux.ibm.com>
+    Link: https://lore.kernel.org/r/20220620094534.18967-1-jgross@suse.com
+    [arch/s390/hypfs/hypfs_diag.c changed description]
+    Signed-off-by: Alexander Gordeev <agordeev@linux.ibm.com>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 3e930a2deac2ea232965fd6650ebc7d0cbc782dd
+Author: Hsin-Yi Wang <hsinyi@chromium.org>
+Date:   Fri Aug 23 14:24:50 2019 +0800
+
+    arm64: map FDT as RW for early_init_dt_scan()
+    
+    commit e112b032a72c78f15d0c803c5dc6be444c2e6c66 upstream.
+    
+    Currently in arm64, FDT is mapped to RO before it's passed to
+    early_init_dt_scan(). However, there might be some codes
+    (eg. commit "fdt: add support for rng-seed") that need to modify FDT
+    during init. Map FDT to RO after early fixups are done.
+    
+    Signed-off-by: Hsin-Yi Wang <hsinyi@chromium.org>
+    Reviewed-by: Stephen Boyd <swboyd@chromium.org>
+    Reviewed-by: Mike Rapoport <rppt@linux.ibm.com>
+    Signed-off-by: Will Deacon <will@kernel.org>
+    [mkbestas: fixed trivial conflicts for 4.9 backport]
+    Signed-off-by: Michael Bestas <mkbestas@gmail.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 8569b4ada1e0b9bfaa125bd0c0967918b6560fa2
+Author: Yang Jihong <yangjihong1@huawei.com>
+Date:   Thu Aug 18 11:26:59 2022 +0800
+
+    ftrace: Fix NULL pointer dereference in is_ftrace_trampoline when ftrace is dead
+    
+    commit c3b0f72e805f0801f05fa2aa52011c4bfc694c44 upstream.
+    
+    ftrace_startup does not remove ops from ftrace_ops_list when
+    ftrace_startup_enable fails:
+    
+    register_ftrace_function
+      ftrace_startup
+        __register_ftrace_function
+          ...
+          add_ftrace_ops(&ftrace_ops_list, ops)
+          ...
+        ...
+        ftrace_startup_enable // if ftrace failed to modify, ftrace_disabled is set to 1
+        ...
+      return 0 // ops is in the ftrace_ops_list.
+    
+    When ftrace_disabled = 1, unregister_ftrace_function simply returns without doing anything:
+    unregister_ftrace_function
+      ftrace_shutdown
+        if (unlikely(ftrace_disabled))
+                return -ENODEV;  // return here, __unregister_ftrace_function is not executed,
+                                 // as a result, ops is still in the ftrace_ops_list
+        __unregister_ftrace_function
+        ...
+    
+    If ops is dynamically allocated, it will be free later, in this case,
+    is_ftrace_trampoline accesses NULL pointer:
+    
+    is_ftrace_trampoline
+      ftrace_ops_trampoline
+        do_for_each_ftrace_op(op, ftrace_ops_list) // OOPS! op may be NULL!
+    
+    Syzkaller reports as follows:
+    [ 1203.506103] BUG: kernel NULL pointer dereference, address: 000000000000010b
+    [ 1203.508039] #PF: supervisor read access in kernel mode
+    [ 1203.508798] #PF: error_code(0x0000) - not-present page
+    [ 1203.509558] PGD 800000011660b067 P4D 800000011660b067 PUD 130fb8067 PMD 0
+    [ 1203.510560] Oops: 0000 [#1] SMP KASAN PTI
+    [ 1203.511189] CPU: 6 PID: 29532 Comm: syz-executor.2 Tainted: G    B   W         5.10.0 #8
+    [ 1203.512324] Hardware name: QEMU Standard PC (i440FX + PIIX, 1996), BIOS rel-1.14.0-0-g155821a1990b-prebuilt.qemu.org 04/01/2014
+    [ 1203.513895] RIP: 0010:is_ftrace_trampoline+0x26/0xb0
+    [ 1203.514644] Code: ff eb d3 90 41 55 41 54 49 89 fc 55 53 e8 f2 00 fd ff 48 8b 1d 3b 35 5d 03 e8 e6 00 fd ff 48 8d bb 90 00 00 00 e8 2a 81 26 00 <48> 8b ab 90 00 00 00 48 85 ed 74 1d e8 c9 00 fd ff 48 8d bb 98 00
+    [ 1203.518838] RSP: 0018:ffffc900012cf960 EFLAGS: 00010246
+    [ 1203.520092] RAX: 0000000000000000 RBX: 000000000000007b RCX: ffffffff8a331866
+    [ 1203.521469] RDX: 0000000000000000 RSI: 0000000000000008 RDI: 000000000000010b
+    [ 1203.522583] RBP: 0000000000000000 R08: 0000000000000000 R09: ffffffff8df18b07
+    [ 1203.523550] R10: fffffbfff1be3160 R11: 0000000000000001 R12: 0000000000478399
+    [ 1203.524596] R13: 0000000000000000 R14: ffff888145088000 R15: 0000000000000008
+    [ 1203.525634] FS:  00007f429f5f4700(0000) GS:ffff8881daf00000(0000) knlGS:0000000000000000
+    [ 1203.526801] CS:  0010 DS: 0000 ES: 0000 CR0: 0000000080050033
+    [ 1203.527626] CR2: 000000000000010b CR3: 0000000170e1e001 CR4: 00000000003706e0
+    [ 1203.528611] DR0: 0000000000000000 DR1: 0000000000000000 DR2: 0000000000000000
+    [ 1203.529605] DR3: 0000000000000000 DR6: 00000000fffe0ff0 DR7: 0000000000000400
+    
+    Therefore, when ftrace_startup_enable fails, we need to rollback registration
+    process and remove ops from ftrace_ops_list.
+    
+    Link: https://lkml.kernel.org/r/20220818032659.56209-1-yangjihong1@huawei.com
+    
+    Suggested-by: Steven Rostedt <rostedt@goodmis.org>
+    Signed-off-by: Yang Jihong <yangjihong1@huawei.com>
+    Signed-off-by: Steven Rostedt (Google) <rostedt@goodmis.org>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 0f1174f4972ea9fad6becf8881d71adca8e9ca91
+Author: Letu Ren <fantasquex@gmail.com>
+Date:   Thu Aug 18 18:44:24 2022 +0800
+
+    fbdev: fb_pm2fb: Avoid potential divide by zero error
+    
+    commit 19f953e7435644b81332dd632ba1b2d80b1e37af upstream.
+    
+    In `do_fb_ioctl()` of fbmem.c, if cmd is FBIOPUT_VSCREENINFO, var will be
+    copied from user, then go through `fb_set_var()` and
+    `info->fbops->fb_check_var()` which could may be `pm2fb_check_var()`.
+    Along the path, `var->pixclock` won't be modified. This function checks
+    whether reciprocal of `var->pixclock` is too high. If `var->pixclock` is
+    zero, there will be a divide by zero error. So, it is necessary to check
+    whether denominator is zero to avoid crash. As this bug is found by
+    Syzkaller, logs are listed below.
+    
+    divide error in pm2fb_check_var
+    Call Trace:
+     <TASK>
+     fb_set_var+0x367/0xeb0 drivers/video/fbdev/core/fbmem.c:1015
+     do_fb_ioctl+0x234/0x670 drivers/video/fbdev/core/fbmem.c:1110
+     fb_ioctl+0xdd/0x130 drivers/video/fbdev/core/fbmem.c:1189
+    
+    Reported-by: Zheyu Ma <zheyuma97@gmail.com>
+    Signed-off-by: Letu Ren <fantasquex@gmail.com>
+    Signed-off-by: Helge Deller <deller@gmx.de>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 1bea0bbf66001b0c7bf239a4d70eaf47824d3feb
+Author: Karthik Alapati <mail@karthek.com>
+Date:   Thu Jul 28 21:13:17 2022 +0530
+
+    HID: hidraw: fix memory leak in hidraw_release()
+    
+    commit a5623a203cffe2d2b84d2f6c989d9017db1856af upstream.
+    
+    Free the buffered reports before deleting the list entry.
+    
+    BUG: memory leak
+    unreferenced object 0xffff88810e72f180 (size 32):
+      comm "softirq", pid 0, jiffies 4294945143 (age 16.080s)
+      hex dump (first 32 bytes):
+        64 f3 c6 6a d1 88 07 04 00 00 00 00 00 00 00 00  d..j............
+        00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00  ................
+      backtrace:
+        [<ffffffff814ac6c3>] kmemdup+0x23/0x50 mm/util.c:128
+        [<ffffffff8357c1d2>] kmemdup include/linux/fortify-string.h:440 [inline]
+        [<ffffffff8357c1d2>] hidraw_report_event+0xa2/0x150 drivers/hid/hidraw.c:521
+        [<ffffffff8356ddad>] hid_report_raw_event+0x27d/0x740 drivers/hid/hid-core.c:1992
+        [<ffffffff8356e41e>] hid_input_report+0x1ae/0x270 drivers/hid/hid-core.c:2065
+        [<ffffffff835f0d3f>] hid_irq_in+0x1ff/0x250 drivers/hid/usbhid/hid-core.c:284
+        [<ffffffff82d3c7f9>] __usb_hcd_giveback_urb+0xf9/0x230 drivers/usb/core/hcd.c:1670
+        [<ffffffff82d3cc26>] usb_hcd_giveback_urb+0x1b6/0x1d0 drivers/usb/core/hcd.c:1747
+        [<ffffffff82ef1e14>] dummy_timer+0x8e4/0x14c0 drivers/usb/gadget/udc/dummy_hcd.c:1988
+        [<ffffffff812f50a8>] call_timer_fn+0x38/0x200 kernel/time/timer.c:1474
+        [<ffffffff812f5586>] expire_timers kernel/time/timer.c:1519 [inline]
+        [<ffffffff812f5586>] __run_timers.part.0+0x316/0x430 kernel/time/timer.c:1790
+        [<ffffffff812f56e4>] __run_timers kernel/time/timer.c:1768 [inline]
+        [<ffffffff812f56e4>] run_timer_softirq+0x44/0x90 kernel/time/timer.c:1803
+        [<ffffffff848000e6>] __do_softirq+0xe6/0x2ea kernel/softirq.c:571
+        [<ffffffff81246db0>] invoke_softirq kernel/softirq.c:445 [inline]
+        [<ffffffff81246db0>] __irq_exit_rcu kernel/softirq.c:650 [inline]
+        [<ffffffff81246db0>] irq_exit_rcu+0xc0/0x110 kernel/softirq.c:662
+        [<ffffffff84574f02>] sysvec_apic_timer_interrupt+0xa2/0xd0 arch/x86/kernel/apic/apic.c:1106
+        [<ffffffff84600c8b>] asm_sysvec_apic_timer_interrupt+0x1b/0x20 arch/x86/include/asm/idtentry.h:649
+        [<ffffffff8458a070>] native_safe_halt arch/x86/include/asm/irqflags.h:51 [inline]
+        [<ffffffff8458a070>] arch_safe_halt arch/x86/include/asm/irqflags.h:89 [inline]
+        [<ffffffff8458a070>] acpi_safe_halt drivers/acpi/processor_idle.c:111 [inline]
+        [<ffffffff8458a070>] acpi_idle_do_entry+0xc0/0xd0 drivers/acpi/processor_idle.c:554
+    
+    Link: https://syzkaller.appspot.com/bug?id=19a04b43c75ed1092021010419b5e560a8172c4f
+    Reported-by: syzbot+f59100a0428e6ded9443@syzkaller.appspotmail.com
+    Signed-off-by: Karthik Alapati <mail@karthek.com>
+    Signed-off-by: Jiri Kosina <jkosina@suse.cz>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 2fe46195d2f0d5d09ea65433aefe47a4d0d0ff4d
+Author: Dongliang Mu <mudongliangabcd@gmail.com>
+Date:   Thu Jun 9 08:35:28 2022 +0100
+
+    media: pvrusb2: fix memory leak in pvr_probe
+    
+    commit 945a9a8e448b65bec055d37eba58f711b39f66f0 upstream.
+    
+    The error handling code in pvr2_hdw_create forgets to unregister the
+    v4l2 device. When pvr2_hdw_create returns back to pvr2_context_create,
+    it calls pvr2_context_destroy to destroy context, but mp->hdw is NULL,
+    which leads to that pvr2_hdw_destroy directly returns.
+    
+    Fix this by adding v4l2_device_unregister to decrease the refcount of
+    usb interface.
+    
+    Reported-by: syzbot+77b432d57c4791183ed4@syzkaller.appspotmail.com
+    Signed-off-by: Dongliang Mu <mudongliangabcd@gmail.com>
+    Signed-off-by: Hans Verkuil <hverkuil-cisco@xs4all.nl>
+    Signed-off-by: Mauro Carvalho Chehab <mchehab@kernel.org>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit e887ea3d6935d9d51ca6961363d82a4a14bce3d4
+Author: Luiz Augusto von Dentz <luiz.von.dentz@intel.com>
+Date:   Fri Aug 12 15:33:57 2022 -0700
+
+    Bluetooth: L2CAP: Fix build errors in some archs
+    
+    commit b840304fb46cdf7012722f456bce06f151b3e81b upstream.
+    
+    This attempts to fix the follow errors:
+    
+    In function 'memcmp',
+        inlined from 'bacmp' at ./include/net/bluetooth/bluetooth.h:347:9,
+        inlined from 'l2cap_global_chan_by_psm' at
+        net/bluetooth/l2cap_core.c:2003:15:
+    ./include/linux/fortify-string.h:44:33: error: '__builtin_memcmp'
+    specified bound 6 exceeds source size 0 [-Werror=stringop-overread]
+       44 | #define __underlying_memcmp     __builtin_memcmp
+          |                                 ^
+    ./include/linux/fortify-string.h:420:16: note: in expansion of macro
+    '__underlying_memcmp'
+      420 |         return __underlying_memcmp(p, q, size);
+          |                ^~~~~~~~~~~~~~~~~~~
+    In function 'memcmp',
+        inlined from 'bacmp' at ./include/net/bluetooth/bluetooth.h:347:9,
+        inlined from 'l2cap_global_chan_by_psm' at
+        net/bluetooth/l2cap_core.c:2004:15:
+    ./include/linux/fortify-string.h:44:33: error: '__builtin_memcmp'
+    specified bound 6 exceeds source size 0 [-Werror=stringop-overread]
+       44 | #define __underlying_memcmp     __builtin_memcmp
+          |                                 ^
+    ./include/linux/fortify-string.h:420:16: note: in expansion of macro
+    '__underlying_memcmp'
+      420 |         return __underlying_memcmp(p, q, size);
+          |                ^~~~~~~~~~~~~~~~~~~
+    
+    Fixes: 332f1795ca20 ("Bluetooth: L2CAP: Fix l2cap_global_chan_by_psm regression")
+    Signed-off-by: Luiz Augusto von Dentz <luiz.von.dentz@intel.com>
+    Cc: Sudip Mukherjee <sudipm.mukherjee@gmail.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 583daae6b04962d80dbf604a28b796ee9c5ca615
+Author: Jing Leng <jleng@ambarella.com>
+Date:   Tue May 17 18:51:28 2022 +0800
+
+    kbuild: Fix include path in scripts/Makefile.modpost
+    
+    commit 23a0cb8e3225122496bfa79172005c587c2d64bf upstream.
+    
+    When building an external module, if users don't need to separate the
+    compilation output and source code, they run the following command:
+    "make -C $(LINUX_SRC_DIR) M=$(PWD)". At this point, "$(KBUILD_EXTMOD)"
+    and "$(src)" are the same.
+    
+    If they need to separate them, they run "make -C $(KERNEL_SRC_DIR)
+    O=$(KERNEL_OUT_DIR) M=$(OUT_DIR) src=$(PWD)". Before running the
+    command, they need to copy "Kbuild" or "Makefile" to "$(OUT_DIR)" to
+    prevent compilation failure.
+    
+    So the kernel should change the included path to avoid the copy operation.
+    
+    Signed-off-by: Jing Leng <jleng@ambarella.com>
+    [masahiro: I do not think "M=$(OUT_DIR) src=$(PWD)" is the official way,
+    but this patch is a nice clean up anyway.]
+    Signed-off-by: Masahiro Yamada <masahiroy@kernel.org>
+    [nsc: updated context for v4.19]
+    Signed-off-by: Nicolas Schier <n.schier@avm.de>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 0616411a704a855b5236de8b1833767268c39f4c
+Author: Pawan Gupta <pawan.kumar.gupta@linux.intel.com>
+Date:   Wed Aug 3 14:41:32 2022 -0700
+
+    x86/bugs: Add "unknown" reporting for MMIO Stale Data
+    
+    commit 7df548840c496b0141fb2404b889c346380c2b22 upstream.
+    
+    Older Intel CPUs that are not in the affected processor list for MMIO
+    Stale Data vulnerabilities currently report "Not affected" in sysfs,
+    which may not be correct. Vulnerability status for these older CPUs is
+    unknown.
+    
+    Add known-not-affected CPUs to the whitelist. Report "unknown"
+    mitigation status for CPUs that are not in blacklist, whitelist and also
+    don't enumerate MSR ARCH_CAPABILITIES bits that reflect hardware
+    immunity to MMIO Stale Data vulnerabilities.
+    
+    Mitigation is not deployed when the status is unknown.
+    
+      [ bp: Massage, fixup. ]
+    
+    Fixes: 8d50cdf8b834 ("x86/speculation/mmio: Add sysfs reporting for Processor MMIO Stale Data")
+    Suggested-by: Andrew Cooper <andrew.cooper3@citrix.com>
+    Suggested-by: Tony Luck <tony.luck@intel.com>
+    Signed-off-by: Pawan Gupta <pawan.kumar.gupta@linux.intel.com>
+    Signed-off-by: Borislav Petkov <bp@suse.de>
+    Cc: stable@vger.kernel.org
+    Link: https://lore.kernel.org/r/a932c154772f2121794a5f2eded1a11013114711.1657846269.git.pawan.kumar.gupta@linux.intel.com
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 1a2429c45ddd7b93b6db4f2a48c1be7a9c69e679
+Author: Gayatri Kammela <gayatri.kammela@intel.com>
+Date:   Thu Sep 5 12:30:17 2019 -0700
+
+    x86/cpu: Add Tiger Lake to Intel family
+    
+    commit 6e1c32c5dbb4b90eea8f964c2869d0bde050dbe0 upstream.
+    
+    Add the model numbers/CPUIDs of Tiger Lake mobile and desktop to the
+    Intel family.
+    
+    Suggested-by: Tony Luck <tony.luck@intel.com>
+    Signed-off-by: Gayatri Kammela <gayatri.kammela@intel.com>
+    Signed-off-by: Tony Luck <tony.luck@intel.com>
+    Reviewed-by: Tony Luck <tony.luck@intel.com>
+    Cc: Linus Torvalds <torvalds@linux-foundation.org>
+    Cc: Peter Zijlstra <peterz@infradead.org>
+    Cc: Rahul Tanwar <rahul.tanwar@linux.intel.com>
+    Cc: Thomas Gleixner <tglx@linutronix.de>
+    Link: https://lkml.kernel.org/r/20190905193020.14707-2-tony.luck@intel.com
+    Signed-off-by: Ingo Molnar <mingo@kernel.org>
+    Signed-off-by: Pawan Gupta <pawan.kumar.gupta@linux.intel.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 210d22b7480b77bcd20b3ee23e9e16ceef3abed8
+Author: Gerald Schaefer <gerald.schaefer@linux.ibm.com>
+Date:   Wed Aug 17 15:26:03 2022 +0200
+
+    s390/mm: do not trigger write fault when vma does not allow VM_WRITE
+    
+    commit 41ac42f137080bc230b5882e3c88c392ab7f2d32 upstream.
+    
+    For non-protection pXd_none() page faults in do_dat_exception(), we
+    call do_exception() with access == (VM_READ | VM_WRITE | VM_EXEC).
+    In do_exception(), vma->vm_flags is checked against that before
+    calling handle_mm_fault().
+    
+    Since commit 92f842eac7ee3 ("[S390] store indication fault optimization"),
+    we call handle_mm_fault() with FAULT_FLAG_WRITE, when recognizing that
+    it was a write access. However, the vma flags check is still only
+    checking against (VM_READ | VM_WRITE | VM_EXEC), and therefore also
+    calling handle_mm_fault() with FAULT_FLAG_WRITE in cases where the vma
+    does not allow VM_WRITE.
+    
+    Fix this by changing access check in do_exception() to VM_WRITE only,
+    when recognizing write access.
+    
+    Link: https://lkml.kernel.org/r/20220811103435.188481-3-david@redhat.com
+    Fixes: 92f842eac7ee3 ("[S390] store indication fault optimization")
+    Cc: <stable@vger.kernel.org>
+    Reported-by: David Hildenbrand <david@redhat.com>
+    Reviewed-by: Heiko Carstens <hca@linux.ibm.com>
+    Signed-off-by: Gerald Schaefer <gerald.schaefer@linux.ibm.com>
+    Signed-off-by: Vasily Gorbik <gor@linux.ibm.com>
+    Signed-off-by: Gerald Schaefer <gerald.schaefer@linux.ibm.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 390f33a95419f7fa1254ba6b6feeabde480732f9
+Author: Jann Horn <jannh@google.com>
+Date:   Wed Aug 31 21:13:48 2022 +0200
+
+    mm: Force TLB flush for PFNMAP mappings before unlink_file_vma()
+    
+    commit b67fbebd4cf980aecbcc750e1462128bffe8ae15 upstream.
+    
+    Some drivers rely on having all VMAs through which a PFN might be
+    accessible listed in the rmap for correctness.
+    However, on X86, it was possible for a VMA with stale TLB entries
+    to not be listed in the rmap.
+    
+    This was fixed in mainline with
+    commit b67fbebd4cf9 ("mmu_gather: Force tlb-flush VM_PFNMAP vmas"),
+    but that commit relies on preceding refactoring in
+    commit 18ba064e42df3 ("mmu_gather: Let there be one tlb_{start,end}_vma()
+    implementation") and commit 1e9fdf21a4339 ("mmu_gather: Remove per arch
+    tlb_{start,end}_vma()").
+    
+    This patch provides equivalent protection without needing that
+    refactoring, by forcing a TLB flush between removing PTEs in
+    unmap_vmas() and the call to unlink_file_vma() in free_pgtables().
+    
+    [This is a stable-specific rewrite of the upstream commit!]
+    Signed-off-by: Jann Horn <jannh@google.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 9ac3240faa3d4ecab47e6fa19a086d12a46c7062
+Author: David Hildenbrand <david@redhat.com>
+Date:   Thu Aug 11 12:34:34 2022 +0200
+
+    mm/hugetlb: fix hugetlb not supporting softdirty tracking
+    
+    commit f96f7a40874d7c746680c0b9f57cef2262ae551f upstream.
+    
+    Patch series "mm/hugetlb: fix write-fault handling for shared mappings", v2.
+    
+    I observed that hugetlb does not support/expect write-faults in shared
+    mappings that would have to map the R/O-mapped page writable -- and I
+    found two case where we could currently get such faults and would
+    erroneously map an anon page into a shared mapping.
+    
+    Reproducers part of the patches.
+    
+    I propose to backport both fixes to stable trees.  The first fix needs a
+    small adjustment.
+    
+    
+    This patch (of 2):
+    
+    Staring at hugetlb_wp(), one might wonder where all the logic for shared
+    mappings is when stumbling over a write-protected page in a shared
+    mapping.  In fact, there is none, and so far we thought we could get away
+    with that because e.g., mprotect() should always do the right thing and
+    map all pages directly writable.
+    
+    Looks like we were wrong:
+    
+    --------------------------------------------------------------------------
+     #include <stdio.h>
+     #include <stdlib.h>
+     #include <string.h>
+     #include <fcntl.h>
+     #include <unistd.h>
+     #include <errno.h>
+     #include <sys/mman.h>
+    
+     #define HUGETLB_SIZE (2 * 1024 * 1024u)
+    
+     static void clear_softdirty(void)
+     {
+             int fd = open("/proc/self/clear_refs", O_WRONLY);
+             const char *ctrl = "4";
+             int ret;
+    
+             if (fd < 0) {
+                     fprintf(stderr, "open(clear_refs) failed\n");
+                     exit(1);
+             }
+             ret = write(fd, ctrl, strlen(ctrl));
+             if (ret != strlen(ctrl)) {
+                     fprintf(stderr, "write(clear_refs) failed\n");
+                     exit(1);
+             }
+             close(fd);
+     }
+    
+     int main(int argc, char **argv)
+     {
+             char *map;
+             int fd;
+    
+             fd = open("/dev/hugepages/tmp", O_RDWR | O_CREAT);
+             if (!fd) {
+                     fprintf(stderr, "open() failed\n");
+                     return -errno;
+             }
+             if (ftruncate(fd, HUGETLB_SIZE)) {
+                     fprintf(stderr, "ftruncate() failed\n");
+                     return -errno;
+             }
+    
+             map = mmap(NULL, HUGETLB_SIZE, PROT_READ|PROT_WRITE, MAP_SHARED, fd, 0);
+             if (map == MAP_FAILED) {
+                     fprintf(stderr, "mmap() failed\n");
+                     return -errno;
+             }
+    
+             *map = 0;
+    
+             if (mprotect(map, HUGETLB_SIZE, PROT_READ)) {
+                     fprintf(stderr, "mmprotect() failed\n");
+                     return -errno;
+             }
+    
+             clear_softdirty();
+    
+             if (mprotect(map, HUGETLB_SIZE, PROT_READ|PROT_WRITE)) {
+                     fprintf(stderr, "mmprotect() failed\n");
+                     return -errno;
+             }
+    
+             *map = 0;
+    
+             return 0;
+     }
+    --------------------------------------------------------------------------
+    
+    Above test fails with SIGBUS when there is only a single free hugetlb page.
+     # echo 1 > /sys/kernel/mm/hugepages/hugepages-2048kB/nr_hugepages
+     # ./test
+     Bus error (core dumped)
+    
+    And worse, with sufficient free hugetlb pages it will map an anonymous page
+    into a shared mapping, for example, messing up accounting during unmap
+    and breaking MAP_SHARED semantics:
+     # echo 2 > /sys/kernel/mm/hugepages/hugepages-2048kB/nr_hugepages
+     # ./test
+     # cat /proc/meminfo | grep HugePages_
+     HugePages_Total:       2
+     HugePages_Free:        1
+     HugePages_Rsvd:    18446744073709551615
+     HugePages_Surp:        0
+    
+    Reason in this particular case is that vma_wants_writenotify() will
+    return "true", removing VM_SHARED in vma_set_page_prot() to map pages
+    write-protected. Let's teach vma_wants_writenotify() that hugetlb does not
+    support softdirty tracking.
+    
+    Link: https://lkml.kernel.org/r/20220811103435.188481-1-david@redhat.com
+    Link: https://lkml.kernel.org/r/20220811103435.188481-2-david@redhat.com
+    Fixes: 64e455079e1b ("mm: softdirty: enable write notifications on VMAs after VM_SOFTDIRTY cleared")
+    Signed-off-by: David Hildenbrand <david@redhat.com>
+    Reviewed-by: Mike Kravetz <mike.kravetz@oracle.com>
+    Cc: Peter Feiner <pfeiner@google.com>
+    Cc: Kirill A. Shutemov <kirill.shutemov@linux.intel.com>
+    Cc: Cyrill Gorcunov <gorcunov@openvz.org>
+    Cc: Pavel Emelyanov <xemul@parallels.com>
+    Cc: Jamie Liu <jamieliu@google.com>
+    Cc: Hugh Dickins <hughd@google.com>
+    Cc: Naoya Horiguchi <n-horiguchi@ah.jp.nec.com>
+    Cc: Bjorn Helgaas <bhelgaas@google.com>
+    Cc: Muchun Song <songmuchun@bytedance.com>
+    Cc: Peter Xu <peterx@redhat.com>
+    Cc: <stable@vger.kernel.org>    [3.18+]
+    Signed-off-by: Andrew Morton <akpm@linux-foundation.org>
+    Signed-off-by: David Hildenbrand <david@redhat.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 6a0108b13706350f657ddaf701cd87f1ae57ac6d
+Author: Quanyang Wang <quanyang.wang@windriver.com>
+Date:   Fri Aug 19 16:11:45 2022 +0800
+
+    asm-generic: sections: refactor memory_intersects
+    
+    commit 0c7d7cc2b4fe2e74ef8728f030f0f1674f9f6aee upstream.
+    
+    There are two problems with the current code of memory_intersects:
+    
+    First, it doesn't check whether the region (begin, end) falls inside the
+    region (virt, vend), that is (virt < begin && vend > end).
+    
+    The second problem is if vend is equal to begin, it will return true but
+    this is wrong since vend (virt + size) is not the last address of the
+    memory region but (virt + size -1) is.  The wrong determination will
+    trigger the misreporting when the function check_for_illegal_area calls
+    memory_intersects to check if the dma region intersects with stext region.
+    
+    The misreporting is as below (stext is at 0x80100000):
+     WARNING: CPU: 0 PID: 77 at kernel/dma/debug.c:1073 check_for_illegal_area+0x130/0x168
+     DMA-API: chipidea-usb2 e0002000.usb: device driver maps memory from kernel text or rodata [addr=800f0000] [len=65536]
+     Modules linked in:
+     CPU: 1 PID: 77 Comm: usb-storage Not tainted 5.19.0-yocto-standard #5
+     Hardware name: Xilinx Zynq Platform
+      unwind_backtrace from show_stack+0x18/0x1c
+      show_stack from dump_stack_lvl+0x58/0x70
+      dump_stack_lvl from __warn+0xb0/0x198
+      __warn from warn_slowpath_fmt+0x80/0xb4
+      warn_slowpath_fmt from check_for_illegal_area+0x130/0x168
+      check_for_illegal_area from debug_dma_map_sg+0x94/0x368
+      debug_dma_map_sg from __dma_map_sg_attrs+0x114/0x128
+      __dma_map_sg_attrs from dma_map_sg_attrs+0x18/0x24
+      dma_map_sg_attrs from usb_hcd_map_urb_for_dma+0x250/0x3b4
+      usb_hcd_map_urb_for_dma from usb_hcd_submit_urb+0x194/0x214
+      usb_hcd_submit_urb from usb_sg_wait+0xa4/0x118
+      usb_sg_wait from usb_stor_bulk_transfer_sglist+0xa0/0xec
+      usb_stor_bulk_transfer_sglist from usb_stor_bulk_srb+0x38/0x70
+      usb_stor_bulk_srb from usb_stor_Bulk_transport+0x150/0x360
+      usb_stor_Bulk_transport from usb_stor_invoke_transport+0x38/0x440
+      usb_stor_invoke_transport from usb_stor_control_thread+0x1e0/0x238
+      usb_stor_control_thread from kthread+0xf8/0x104
+      kthread from ret_from_fork+0x14/0x2c
+    
+    Refactor memory_intersects to fix the two problems above.
+    
+    Before the 1d7db834a027e ("dma-debug: use memory_intersects()
+    directly"), memory_intersects is called only by printk_late_init:
+    
+    printk_late_init -> init_section_intersects ->memory_intersects.
+    
+    There were few places where memory_intersects was called.
+    
+    When commit 1d7db834a027e ("dma-debug: use memory_intersects()
+    directly") was merged and CONFIG_DMA_API_DEBUG is enabled, the DMA
+    subsystem uses it to check for an illegal area and the calltrace above
+    is triggered.
+    
+    [akpm@linux-foundation.org: fix nearby comment typo]
+    Link: https://lkml.kernel.org/r/20220819081145.948016-1-quanyang.wang@windriver.com
+    Fixes: 979559362516 ("asm/sections: add helpers to check for section data")
+    Signed-off-by: Quanyang Wang <quanyang.wang@windriver.com>
+    Cc: Ard Biesheuvel <ardb@kernel.org>
+    Cc: Arnd Bergmann <arnd@arndb.de>
+    Cc: Thierry Reding <treding@nvidia.com>
+    Cc: <stable@vger.kernel.org>
+    Signed-off-by: Andrew Morton <akpm@linux-foundation.org>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 18e28817cb516b39de6281f6db9b0618b2cc7b42
+Author: Siddh Raman Pant <code@siddh.me>
+Date:   Tue Aug 23 21:38:10 2022 +0530
+
+    loop: Check for overflow while configuring loop
+    
+    commit c490a0b5a4f36da3918181a8acdc6991d967c5f3 upstream.
+    
+    The userspace can configure a loop using an ioctl call, wherein
+    a configuration of type loop_config is passed (see lo_ioctl()'s
+    case on line 1550 of drivers/block/loop.c). This proceeds to call
+    loop_configure() which in turn calls loop_set_status_from_info()
+    (see line 1050 of loop.c), passing &config->info which is of type
+    loop_info64*. This function then sets the appropriate values, like
+    the offset.
+    
+    loop_device has lo_offset of type loff_t (see line 52 of loop.c),
+    which is typdef-chained to long long, whereas loop_info64 has
+    lo_offset of type __u64 (see line 56 of include/uapi/linux/loop.h).
+    
+    The function directly copies offset from info to the device as
+    follows (See line 980 of loop.c):
+            lo->lo_offset = info->lo_offset;
+    
+    This results in an overflow, which triggers a warning in iomap_iter()
+    due to a call to iomap_iter_done() which has:
+            WARN_ON_ONCE(iter->iomap.offset > iter->pos);
+    
+    Thus, check for negative value during loop_set_status_from_info().
+    
+    Bug report: https://syzkaller.appspot.com/bug?id=c620fe14aac810396d3c3edc9ad73848bf69a29e
+    
+    Reported-and-tested-by: syzbot+a8e049cd3abd342936b6@syzkaller.appspotmail.com
+    Cc: stable@vger.kernel.org
+    Reviewed-by: Matthew Wilcox (Oracle) <willy@infradead.org>
+    Signed-off-by: Siddh Raman Pant <code@siddh.me>
+    Reviewed-by: Christoph Hellwig <hch@lst.de>
+    Link: https://lore.kernel.org/r/20220823160810.181275-1-code@siddh.me
+    Signed-off-by: Jens Axboe <axboe@kernel.dk>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit d1f0467fd6f32aa4c03b392ed00742411a390656
+Author: Goldwyn Rodrigues <rgoldwyn@suse.de>
+Date:   Tue Aug 16 16:42:56 2022 -0500
+
+    btrfs: check if root is readonly while setting security xattr
+    
+    commit b51111271b0352aa596c5ae8faf06939e91b3b68 upstream.
+    
+    For a filesystem which has btrfs read-only property set to true, all
+    write operations including xattr should be denied. However, security
+    xattr can still be changed even if btrfs ro property is true.
+    
+    This happens because xattr_permission() does not have any restrictions
+    on security.*, system.*  and in some cases trusted.* from VFS and
+    the decision is left to the underlying filesystem. See comments in
+    xattr_permission() for more details.
+    
+    This patch checks if the root is read-only before performing the set
+    xattr operation.
+    
+    Testcase:
+    
+      DEV=/dev/vdb
+      MNT=/mnt
+    
+      mkfs.btrfs -f $DEV
+      mount $DEV $MNT
+      echo "file one" > $MNT/f1
+    
+      setfattr -n "security.one" -v 2 $MNT/f1
+      btrfs property set /mnt ro true
+    
+      setfattr -n "security.one" -v 1 $MNT/f1
+    
+      umount $MNT
+    
+    CC: stable@vger.kernel.org # 4.9+
+    Reviewed-by: Qu Wenruo <wqu@suse.com>
+    Reviewed-by: Filipe Manana <fdmanana@suse.com>
+    Signed-off-by: Goldwyn Rodrigues <rgoldwyn@suse.com>
+    Reviewed-by: David Sterba <dsterba@suse.com>
+    Signed-off-by: David Sterba <dsterba@suse.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 4e465ee46f457783fc0a6d6f60df14b375fb1ed1
+Author: Jacob Keller <jacob.e.keller@intel.com>
+Date:   Mon Aug 1 17:24:19 2022 -0700
+
+    ixgbe: stop resetting SYSTIME in ixgbe_ptp_start_cyclecounter
+    
+    [ Upstream commit 25d7a5f5a6bb15a2dae0a3f39ea5dda215024726 ]
+    
+    The ixgbe_ptp_start_cyclecounter is intended to be called whenever the
+    cyclecounter parameters need to be changed.
+    
+    Since commit a9763f3cb54c ("ixgbe: Update PTP to support X550EM_x
+    devices"), this function has cleared the SYSTIME registers and reset the
+    TSAUXC DISABLE_SYSTIME bit.
+    
+    While these need to be cleared during ixgbe_ptp_reset, it is wrong to clear
+    them during ixgbe_ptp_start_cyclecounter. This function may be called
+    during both reset and link status change. When link changes, the SYSTIME
+    counter is still operating normally, but the cyclecounter should be updated
+    to account for the possibly changed parameters.
+    
+    Clearing SYSTIME when link changes causes the timecounter to jump because
+    the cycle counter now reads zero.
+    
+    Extract the SYSTIME initialization out to a new function and call this
+    during ixgbe_ptp_reset. This prevents the timecounter adjustment and avoids
+    an unnecessary reset of the current time.
+    
+    This also restores the original SYSTIME clearing that occurred during
+    ixgbe_ptp_reset before the commit above.
+    
+    Reported-by: Steve Payne <spayne@aurora.tech>
+    Reported-by: Ilya Evenbach <ievenbach@aurora.tech>
+    Fixes: a9763f3cb54c ("ixgbe: Update PTP to support X550EM_x devices")
+    Signed-off-by: Jacob Keller <jacob.e.keller@intel.com>
+    Tested-by: Gurucharan <gurucharanx.g@intel.com> (A Contingent worker at Intel)
+    Signed-off-by: Tony Nguyen <anthony.l.nguyen@intel.com>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 29e01227e3fcbb82443c04060fc37e7831a7774c
+Author: Kuniyuki Iwashima <kuniyu@amazon.com>
+Date:   Tue Aug 23 10:47:00 2022 -0700
+
+    net: Fix a data-race around sysctl_somaxconn.
+    
+    [ Upstream commit 3c9ba81d72047f2e81bb535d42856517b613aba7 ]
+    
+    While reading sysctl_somaxconn, it can be changed concurrently.
+    Thus, we need to add READ_ONCE() to its reader.
+    
+    Fixes: 1da177e4c3f4 ("Linux-2.6.12-rc2")
+    Signed-off-by: Kuniyuki Iwashima <kuniyu@amazon.com>
+    Signed-off-by: David S. Miller <davem@davemloft.net>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit add7c2af16bb55c241e114c83ed9baee62f3374b
+Author: Kuniyuki Iwashima <kuniyu@amazon.com>
+Date:   Tue Aug 23 10:46:52 2022 -0700
+
+    net: Fix a data-race around sysctl_net_busy_read.
+    
+    [ Upstream commit e59ef36f0795696ab229569c153936bfd068d21c ]
+    
+    While reading sysctl_net_busy_read, it can be changed concurrently.
+    Thus, we need to add READ_ONCE() to its reader.
+    
+    Fixes: 2d48d67fa8cd ("net: poll/select low latency socket support")
+    Signed-off-by: Kuniyuki Iwashima <kuniyu@amazon.com>
+    Signed-off-by: David S. Miller <davem@davemloft.net>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 7a34fb980e4d69596cd07781620e63d682f9054f
+Author: Kuniyuki Iwashima <kuniyu@amazon.com>
+Date:   Tue Aug 23 10:46:51 2022 -0700
+
+    net: Fix a data-race around sysctl_net_busy_poll.
+    
+    [ Upstream commit c42b7cddea47503411bfb5f2f93a4154aaffa2d9 ]
+    
+    While reading sysctl_net_busy_poll, it can be changed concurrently.
+    Thus, we need to add READ_ONCE() to its reader.
+    
+    Fixes: 060212928670 ("net: add low latency socket poll")
+    Signed-off-by: Kuniyuki Iwashima <kuniyu@amazon.com>
+    Signed-off-by: David S. Miller <davem@davemloft.net>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 64fca2207e068502dd2463ebb8d192083df1f4f8
+Author: Kuniyuki Iwashima <kuniyu@amazon.com>
+Date:   Tue Aug 23 10:46:50 2022 -0700
+
+    net: Fix a data-race around sysctl_tstamp_allow_data.
+    
+    [ Upstream commit d2154b0afa73c0159b2856f875c6b4fe7cf6a95e ]
+    
+    While reading sysctl_tstamp_allow_data, it can be changed
+    concurrently.  Thus, we need to add READ_ONCE() to its reader.
+    
+    Fixes: b245be1f4db1 ("net-timestamp: no-payload only sysctl")
+    Signed-off-by: Kuniyuki Iwashima <kuniyu@amazon.com>
+    Signed-off-by: David S. Miller <davem@davemloft.net>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 509c21ea2776fff3f17558fd4b7da34db208eda0
+Author: Kuniyuki Iwashima <kuniyu@amazon.com>
+Date:   Tue Aug 23 10:46:48 2022 -0700
+
+    ratelimit: Fix data-races in ___ratelimit().
+    
+    [ Upstream commit 6bae8ceb90ba76cdba39496db936164fa672b9be ]
+    
+    While reading rs->interval and rs->burst, they can be changed
+    concurrently via sysctl (e.g. net_ratelimit_state).  Thus, we
+    need to add READ_ONCE() to their readers.
+    
+    Fixes: 1da177e4c3f4 ("Linux-2.6.12-rc2")
+    Signed-off-by: Kuniyuki Iwashima <kuniyu@amazon.com>
+    Signed-off-by: David S. Miller <davem@davemloft.net>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 3cfdaa30d3e28feaab484cdd83aab6b763c0fbd6
+Author: Pablo Neira Ayuso <pablo@netfilter.org>
+Date:   Sun Aug 21 11:47:04 2022 +0200
+
+    netfilter: nft_payload: report ERANGE for too long offset and length
+    
+    [ Upstream commit 94254f990c07e9ddf1634e0b727fab821c3b5bf9 ]
+    
+    Instead of offset and length are truncation to u8, report ERANGE.
+    
+    Fixes: 96518518cc41 ("netfilter: add nftables")
+    Signed-off-by: Pablo Neira Ayuso <pablo@netfilter.org>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 4eec561ac23c6345c7395425a4581b4bdd835d0c
+Author: Jonathan Toppins <jtoppins@redhat.com>
+Date:   Fri Aug 19 11:15:13 2022 -0400
+
+    bonding: 802.3ad: fix no transmission of LACPDUs
+    
+    [ Upstream commit d745b5062ad2b5da90a5e728d7ca884fc07315fd ]
+    
+    This is caused by the global variable ad_ticks_per_sec being zero as
+    demonstrated by the reproducer script discussed below. This causes
+    all timer values in __ad_timer_to_ticks to be zero, resulting
+    in the periodic timer to never fire.
+    
+    To reproduce:
+    Run the script in
+    `tools/testing/selftests/drivers/net/bonding/bond-break-lacpdu-tx.sh` which
+    puts bonding into a state where it never transmits LACPDUs.
+    
+    line 44: ip link add fbond type bond mode 4 miimon 200 \
+                xmit_hash_policy 1 ad_actor_sys_prio 65535 lacp_rate fast
+    setting bond param: ad_actor_sys_prio
+    given:
+        params.ad_actor_system = 0
+    call stack:
+        bond_option_ad_actor_sys_prio()
+        -> bond_3ad_update_ad_actor_settings()
+           -> set ad.system.sys_priority = bond->params.ad_actor_sys_prio
+           -> ad.system.sys_mac_addr = bond->dev->dev_addr; because
+                params.ad_actor_system == 0
+    results:
+         ad.system.sys_mac_addr = bond->dev->dev_addr
+    
+    line 48: ip link set fbond address 52:54:00:3B:7C:A6
+    setting bond MAC addr
+    call stack:
+        bond->dev->dev_addr = new_mac
+    
+    line 52: ip link set fbond type bond ad_actor_sys_prio 65535
+    setting bond param: ad_actor_sys_prio
+    given:
+        params.ad_actor_system = 0
+    call stack:
+        bond_option_ad_actor_sys_prio()
+        -> bond_3ad_update_ad_actor_settings()
+           -> set ad.system.sys_priority = bond->params.ad_actor_sys_prio
+           -> ad.system.sys_mac_addr = bond->dev->dev_addr; because
+                params.ad_actor_system == 0
+    results:
+         ad.system.sys_mac_addr = bond->dev->dev_addr
+    
+    line 60: ip link set veth1-bond down master fbond
+    given:
+        params.ad_actor_system = 0
+        params.mode = BOND_MODE_8023AD
+        ad.system.sys_mac_addr == bond->dev->dev_addr
+    call stack:
+        bond_enslave
+        -> bond_3ad_initialize(); because first slave
+           -> if ad.system.sys_mac_addr != bond->dev->dev_addr
+              return
+    results:
+         Nothing is run in bond_3ad_initialize() because dev_addr equals
+         sys_mac_addr leaving the global ad_ticks_per_sec zero as it is
+         never initialized anywhere else.
+    
+    The if check around the contents of bond_3ad_initialize() is no longer
+    needed due to commit 5ee14e6d336f ("bonding: 3ad: apply ad_actor settings
+    changes immediately") which sets ad.system.sys_mac_addr if any one of
+    the bonding parameters whos set function calls
+    bond_3ad_update_ad_actor_settings(). This is because if
+    ad.system.sys_mac_addr is zero it will be set to the current bond mac
+    address, this causes the if check to never be true.
+    
+    Fixes: 5ee14e6d336f ("bonding: 3ad: apply ad_actor settings changes immediately")
+    Signed-off-by: Jonathan Toppins <jtoppins@redhat.com>
+    Acked-by: Jay Vosburgh <jay.vosburgh@canonical.com>
+    Signed-off-by: Jakub Kicinski <kuba@kernel.org>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 76885373129b13df35ecc9b4ee86ea5840f12133
+Author: Bernard Pidoux <f6bvp@free.fr>
+Date:   Thu Aug 18 02:02:13 2022 +0200
+
+    rose: check NULL rose_loopback_neigh->loopback
+    
+    [ Upstream commit 3c53cd65dece47dd1f9d3a809f32e59d1d87b2b8 ]
+    
+    Commit 3b3fd068c56e3fbea30090859216a368398e39bf added NULL check for
+    `rose_loopback_neigh->dev` in rose_loopback_timer() but omitted to
+    check rose_loopback_neigh->loopback.
+    
+    It thus prevents *all* rose connect.
+    
+    The reason is that a special rose_neigh loopback has a NULL device.
+    
+    /proc/net/rose_neigh illustrates it via rose_neigh_show() function :
+    [...]
+    seq_printf(seq, "%05d %-9s %-4s   %3d %3d  %3s     %3s %3lu %3lu",
+               rose_neigh->number,
+               (rose_neigh->loopback) ? "RSLOOP-0" : ax2asc(buf, &rose_neigh->callsign),
+               rose_neigh->dev ? rose_neigh->dev->name : "???",
+               rose_neigh->count,
+    
+    /proc/net/rose_neigh displays special rose_loopback_neigh->loopback as
+    callsign RSLOOP-0:
+    
+    addr  callsign  dev  count use mode restart  t0  tf digipeaters
+    00001 RSLOOP-0  ???      1   2  DCE     yes   0   0
+    
+    By checking rose_loopback_neigh->loopback, rose_rx_call_request() is called
+    even in case rose_loopback_neigh->dev is NULL. This repairs rose connections.
+    
+    Verification with rose client application FPAC:
+    
+    FPAC-Node v 4.1.3 (built Aug  5 2022) for LINUX (help = h)
+    F6BVP-4 (Commands = ?) : u
+    Users - AX.25 Level 2 sessions :
+    Port   Callsign     Callsign  AX.25 state  ROSE state  NetRom status
+    axudp  F6BVP-5   -> F6BVP-9   Connected    Connected   ---------
+    
+    Fixes: 3b3fd068c56e ("rose: Fix Null pointer dereference in rose_send_frame()")
+    Signed-off-by: Bernard Pidoux <f6bvp@free.fr>
+    Suggested-by: Francois Romieu <romieu@fr.zoreil.com>
+    Cc: Thomas DL9SAU Osterried <thomas@osterried.de>
+    Signed-off-by: David S. Miller <davem@davemloft.net>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit e580d3201ed222c4752ced7e629ad96bc0340713
+Author: Herbert Xu <herbert@gondor.apana.org.au>
+Date:   Thu Aug 4 18:03:46 2022 +0800
+
+    af_key: Do not call xfrm_probe_algs in parallel
+    
+    [ Upstream commit ba953a9d89a00c078b85f4b190bc1dde66fe16b5 ]
+    
+    When namespace support was added to xfrm/afkey, it caused the
+    previously single-threaded call to xfrm_probe_algs to become
+    multi-threaded.  This is buggy and needs to be fixed with a mutex.
+    
+    Reported-by: Abhishek Shah <abhishek.shah@columbia.edu>
+    Fixes: 283bc9f35bbb ("xfrm: Namespacify xfrm state/policy locks")
+    Signed-off-by: Herbert Xu <herbert@gondor.apana.org.au>
+    Signed-off-by: Steffen Klassert <steffen.klassert@secunet.com>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 18e6b6e2555c93f5ca09f2b85ef1fa025c8accea
+Author: Xin Xiong <xiongx18@fudan.edu.cn>
+Date:   Sun Jul 24 17:55:58 2022 +0800
+
+    xfrm: fix refcount leak in __xfrm_policy_check()
+    
+    [ Upstream commit 9c9cb23e00ddf45679b21b4dacc11d1ae7961ebe ]
+    
+    The issue happens on an error path in __xfrm_policy_check(). When the
+    fetching process of the object `pols[1]` fails, the function simply
+    returns 0, forgetting to decrement the reference count of `pols[0]`,
+    which is incremented earlier by either xfrm_sk_policy_lookup() or
+    xfrm_policy_lookup(). This may result in memory leaks.
+    
+    Fix it by decreasing the reference count of `pols[0]` in that path.
+    
+    Fixes: 134b0fc544ba ("IPsec: propagate security module errors up from flow_cache_lookup")
+    Signed-off-by: Xin Xiong <xiongx18@fudan.edu.cn>
+    Signed-off-by: Xin Tan <tanxin.ctf@gmail.com>
+    Signed-off-by: Steffen Klassert <steffen.klassert@secunet.com>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 555666fd6d7f61aa3ce20b126243d4a87025531c
+Author: Helge Deller <deller@gmx.de>
+Date:   Sat Aug 20 17:59:17 2022 +0200
+
+    parisc: Fix exception handler for fldw and fstw instructions
+    
+    commit 7ae1f5508d9a33fd58ed3059bd2d569961e3b8bd upstream.
+    
+    The exception handler is broken for unaligned memory acceses with fldw
+    and fstw instructions, because it trashes or uses randomly some other
+    floating point register than the one specified in the instruction word
+    on loads and stores.
+    
+    The instruction "fldw 0(addr),%fr22L" (and the other fldw/fstw
+    instructions) encode the target register (%fr22) in the rightmost 5 bits
+    of the instruction word. The 7th rightmost bit of the instruction word
+    defines if the left or right half of %fr22 should be used.
+    
+    While processing unaligned address accesses, the FR3() define is used to
+    extract the offset into the local floating-point register set.  But the
+    calculation in FR3() was buggy, so that for example instead of %fr22,
+    register %fr12 [((22 * 2) & 0x1f) = 12] was used.
+    
+    This bug has been since forever in the parisc kernel and I wonder why it
+    wasn't detected earlier. Interestingly I noticed this bug just because
+    the libime debian package failed to build on *native* hardware, while it
+    successfully built in qemu.
+    
+    This patch corrects the bitshift and masking calculation in FR3().
+    
+    Signed-off-by: Helge Deller <deller@gmx.de>
+    Cc: <stable@vger.kernel.org>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>

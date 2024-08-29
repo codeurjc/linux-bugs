@@ -1,0 +1,928 @@
+commit 9645f707f4e67bf0e27bf71ed51c8448f048a179
+Author: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+Date:   Fri Jul 29 17:05:48 2022 +0200
+
+    Linux 4.9.325
+    
+    Link: https://lore.kernel.org/r/20220727160959.122591422@linuxfoundation.org
+    Tested-by: Florian Fainelli <f.fainelli@gmail.com>
+    Tested-by: Pavel Machek (CIP) <pavel@denx.de>
+    Tested-by: Linux Kernel Functional Testing <lkft@linaro.org>
+    Tested-by: Jon Hunter <jonathanh@nvidia.com>
+    Tested-by: Shuah Khan <skhan@linuxfoundation.org>
+    Tested-by: Guenter Roeck <linux@roeck-us.net>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 1b1cf809a7e606230ac7015bf90259ac74c414f3
+Author: Jose Alonso <joalonsof@gmail.com>
+Date:   Mon Jun 13 15:32:44 2022 -0300
+
+    net: usb: ax88179_178a needs FLAG_SEND_ZLP
+    
+    commit 36a15e1cb134c0395261ba1940762703f778438c upstream.
+    
+    The extra byte inserted by usbnet.c when
+     (length % dev->maxpacket == 0) is causing problems to device.
+    
+    This patch sets FLAG_SEND_ZLP to avoid this.
+    
+    Tested with: 0b95:1790 ASIX Electronics Corp. AX88179 Gigabit Ethernet
+    
+    Problems observed:
+    ======================================================================
+    1) Using ssh/sshfs. The remote sshd daemon can abort with the message:
+       "message authentication code incorrect"
+       This happens because the tcp message sent is corrupted during the
+       USB "Bulk out". The device calculate the tcp checksum and send a
+       valid tcp message to the remote sshd. Then the encryption detects
+       the error and aborts.
+    2) NETDEV WATCHDOG: ... (ax88179_178a): transmit queue 0 timed out
+    3) Stop normal work without any log message.
+       The "Bulk in" continue receiving packets normally.
+       The host sends "Bulk out" and the device responds with -ECONNRESET.
+       (The netusb.c code tx_complete ignore -ECONNRESET)
+    Under normal conditions these errors take days to happen and in
+    intense usage take hours.
+    
+    A test with ping gives packet loss, showing that something is wrong:
+    ping -4 -s 462 {destination}    # 462 = 512 - 42 - 8
+    Not all packets fail.
+    My guess is that the device tries to find another packet starting
+    at the extra byte and will fail or not depending on the next
+    bytes (old buffer content).
+    ======================================================================
+    
+    Signed-off-by: Jose Alonso <joalonsof@gmail.com>
+    Signed-off-by: David S. Miller <davem@davemloft.net>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 41ce14090db93fc2f0c8a27ce8a324b0192da7b5
+Author: Jiri Slaby <jirislaby@kernel.org>
+Date:   Thu Jul 7 10:25:58 2022 +0200
+
+    tty: use new tty_insert_flip_string_and_push_buffer() in pty_write()
+    
+    commit a501ab75e7624d133a5a3c7ec010687c8b961d23 upstream.
+    
+    There is a race in pty_write(). pty_write() can be called in parallel
+    with e.g. ioctl(TIOCSTI) or ioctl(TCXONC) which also inserts chars to
+    the buffer. Provided, tty_flip_buffer_push() in pty_write() is called
+    outside the lock, it can commit inconsistent tail. This can lead to out
+    of bounds writes and other issues. See the Link below.
+    
+    To fix this, we have to introduce a new helper called
+    tty_insert_flip_string_and_push_buffer(). It does both
+    tty_insert_flip_string() and tty_flip_buffer_commit() under the port
+    lock. It also calls queue_work(), but outside the lock. See
+    71a174b39f10 (pty: do tty_flip_buffer_push without port->lock in
+    pty_write) for the reasons.
+    
+    Keep the helper internal-only (in drivers' tty.h). It is not intended to
+    be used widely.
+    
+    Link: https://seclists.org/oss-sec/2022/q2/155
+    Fixes: 71a174b39f10 (pty: do tty_flip_buffer_push without port->lock in pty_write)
+    Cc: 一只狗 <chennbnbnb@gmail.com>
+    Cc: Dan Carpenter <dan.carpenter@oracle.com>
+    Suggested-by: Hillf Danton <hdanton@sina.com>
+    Signed-off-by: Jiri Slaby <jslaby@suse.cz>
+    Link: https://lore.kernel.org/r/20220707082558.9250-2-jslaby@suse.cz
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit f031009ddfa3bb3ae6ea501c4cd4856a884d25e6
+Author: Jiri Slaby <jirislaby@kernel.org>
+Date:   Thu Jul 7 10:25:57 2022 +0200
+
+    tty: extract tty_flip_buffer_commit() from tty_flip_buffer_push()
+    
+    commit 716b10580283fda66f2b88140e3964f8a7f9da89 upstream.
+    
+    We will need this new helper in the next patch.
+    
+    Cc: Hillf Danton <hdanton@sina.com>
+    Cc: 一只狗 <chennbnbnb@gmail.com>
+    Cc: Dan Carpenter <dan.carpenter@oracle.com>
+    Signed-off-by: Jiri Slaby <jslaby@suse.cz>
+    Link: https://lore.kernel.org/r/20220707082558.9250-1-jslaby@suse.cz
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit e39085b8b75a4e328efa0ef5207c27d556d82fd7
+Author: Jiri Slaby <jirislaby@kernel.org>
+Date:   Mon Nov 22 12:16:48 2021 +0100
+
+    tty: drop tty_schedule_flip()
+    
+    commit 5db96ef23bda6c2a61a51693c85b78b52d03f654 upstream.
+    
+    Since commit a9c3f68f3cd8d (tty: Fix low_latency BUG) in 2014,
+    tty_flip_buffer_push() is only a wrapper to tty_schedule_flip(). All
+    users were converted in the previous patches, so remove
+    tty_schedule_flip() completely while inlining its body into
+    tty_flip_buffer_push().
+    
+    One less exported function.
+    
+    Reviewed-by: Johan Hovold <johan@kernel.org>
+    Signed-off-by: Jiri Slaby <jslaby@suse.cz>
+    Link: https://lore.kernel.org/r/20211122111648.30379-4-jslaby@suse.cz
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 0a67b4a8e2ae49d4123a8d989238157d404c3c6f
+Author: Jiri Slaby <jirislaby@kernel.org>
+Date:   Mon Nov 22 12:16:47 2021 +0100
+
+    tty: the rest, stop using tty_schedule_flip()
+    
+    commit b68b914494df4f79b4e9b58953110574af1cb7a2 upstream.
+    
+    Since commit a9c3f68f3cd8d (tty: Fix low_latency BUG) in 2014,
+    tty_flip_buffer_push() is only a wrapper to tty_schedule_flip(). We are
+    going to remove the latter (as it is used less), so call the former in
+    the rest of the users.
+    
+    Cc: Richard Henderson <rth@twiddle.net>
+    Cc: Ivan Kokshaysky <ink@jurassic.park.msu.ru>
+    Cc: Matt Turner <mattst88@gmail.com>
+    Cc: William Hubbs <w.d.hubbs@gmail.com>
+    Cc: Chris Brannon <chris@the-brannons.com>
+    Cc: Kirk Reiser <kirk@reisers.ca>
+    Cc: Samuel Thibault <samuel.thibault@ens-lyon.org>
+    Cc: Heiko Carstens <hca@linux.ibm.com>
+    Cc: Vasily Gorbik <gor@linux.ibm.com>
+    Cc: Christian Borntraeger <borntraeger@de.ibm.com>
+    Cc: Alexander Gordeev <agordeev@linux.ibm.com>
+    Reviewed-by: Johan Hovold <johan@kernel.org>
+    Signed-off-by: Jiri Slaby <jslaby@suse.cz>
+    Link: https://lore.kernel.org/r/20211122111648.30379-3-jslaby@suse.cz
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit cb865337fbd7716801e4453c824866500add5f49
+Author: Jiri Slaby <jirislaby@kernel.org>
+Date:   Mon Nov 22 12:16:46 2021 +0100
+
+    tty: drivers/tty/, stop using tty_schedule_flip()
+    
+    commit 5f6a85158ccacc3f09744b3aafe8b11ab3b6c6f6 upstream.
+    
+    Since commit a9c3f68f3cd8d (tty: Fix low_latency BUG) in 2014,
+    tty_flip_buffer_push() is only a wrapper to tty_schedule_flip(). We are
+    going to remove the latter (as it is used less), so call the former in
+    drivers/tty/.
+    
+    Cc: Vladimir Zapolskiy <vz@mleia.com>
+    Reviewed-by: Johan Hovold <johan@kernel.org>
+    Signed-off-by: Jiri Slaby <jslaby@suse.cz>
+    Link: https://lore.kernel.org/r/20211122111648.30379-2-jslaby@suse.cz
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit f52ac912c14c5bf426c0f9e0c6236dbcdf61664e
+Author: Takashi Iwai <tiwai@suse.de>
+Date:   Fri Dec 18 15:56:24 2020 +0100
+
+    ALSA: memalloc: Align buffer allocations in page size
+    
+    commit 5c1733e33c888a3cb7f576564d8ad543d5ad4a9e upstream.
+    
+    Currently the standard memory allocator (snd_dma_malloc_pages*())
+    passes the byte size to allocate as is.  Most of the backends
+    allocates real pages, hence the actual allocations are aligned in page
+    size.  However, the genalloc doesn't seem assuring the size alignment,
+    hence it may result in the access outside the buffer when the whole
+    memory pages are exposed via mmap.
+    
+    For avoiding such inconsistencies, this patch makes the allocation
+    size always to be aligned in page size.
+    
+    Note that, after this change, snd_dma_buffer.bytes field contains the
+    aligned size, not the originally requested size.  This value is also
+    used for releasing the pages in return.
+    
+    Reviewed-by: Lars-Peter Clausen <lars@metafoo.de>
+    Link: https://lore.kernel.org/r/20201218145625.2045-2-tiwai@suse.de
+    Signed-off-by: Takashi Iwai <tiwai@suse.de>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 5cfdb4f1e3cc2838906a5729e6fb2fc4d9d536a7
+Author: Eric Dumazet <edumazet@google.com>
+Date:   Thu Jul 7 12:39:00 2022 +0000
+
+    bpf: Make sure mac_header was set before using it
+    
+    commit 0326195f523a549e0a9d7fd44c70b26fd7265090 upstream.
+    
+    Classic BPF has a way to load bytes starting from the mac header.
+    
+    Some skbs do not have a mac header, and skb_mac_header()
+    in this case is returning a pointer that 65535 bytes after
+    skb->head.
+    
+    Existing range check in bpf_internal_load_pointer_neg_helper()
+    was properly kicking and no illegal access was happening.
+    
+    New sanity check in skb_mac_header() is firing, so we need
+    to avoid it.
+    
+    WARNING: CPU: 1 PID: 28990 at include/linux/skbuff.h:2785 skb_mac_header include/linux/skbuff.h:2785 [inline]
+    WARNING: CPU: 1 PID: 28990 at include/linux/skbuff.h:2785 bpf_internal_load_pointer_neg_helper+0x1b1/0x1c0 kernel/bpf/core.c:74
+    Modules linked in:
+    CPU: 1 PID: 28990 Comm: syz-executor.0 Not tainted 5.19.0-rc4-syzkaller-00865-g4874fb9484be #0
+    Hardware name: Google Google Compute Engine/Google Compute Engine, BIOS Google 06/29/2022
+    RIP: 0010:skb_mac_header include/linux/skbuff.h:2785 [inline]
+    RIP: 0010:bpf_internal_load_pointer_neg_helper+0x1b1/0x1c0 kernel/bpf/core.c:74
+    Code: ff ff 45 31 f6 e9 5a ff ff ff e8 aa 27 40 00 e9 3b ff ff ff e8 90 27 40 00 e9 df fe ff ff e8 86 27 40 00 eb 9e e8 2f 2c f3 ff <0f> 0b eb b1 e8 96 27 40 00 e9 79 fe ff ff 90 41 57 41 56 41 55 41
+    RSP: 0018:ffffc9000309f668 EFLAGS: 00010216
+    RAX: 0000000000000118 RBX: ffffffffffeff00c RCX: ffffc9000e417000
+    RDX: 0000000000040000 RSI: ffffffff81873f21 RDI: 0000000000000003
+    RBP: ffff8880842878c0 R08: 0000000000000003 R09: 000000000000ffff
+    R10: 000000000000ffff R11: 0000000000000001 R12: 0000000000000004
+    R13: ffff88803ac56c00 R14: 000000000000ffff R15: dffffc0000000000
+    FS: 00007f5c88a16700(0000) GS:ffff8880b9b00000(0000) knlGS:0000000000000000
+    CS: 0010 DS: 0000 ES: 0000 CR0: 0000000080050033
+    CR2: 00007fdaa9f6c058 CR3: 000000003a82c000 CR4: 00000000003506e0
+    DR0: 0000000000000000 DR1: 0000000000000000 DR2: 0000000000000000
+    DR3: 0000000000000000 DR6: 00000000fffe0ff0 DR7: 0000000000000400
+    Call Trace:
+    <TASK>
+    ____bpf_skb_load_helper_32 net/core/filter.c:276 [inline]
+    bpf_skb_load_helper_32+0x191/0x220 net/core/filter.c:264
+    
+    Fixes: f9aefd6b2aa3 ("net: warn if mac header was not set")
+    Reported-by: syzbot <syzkaller@googlegroups.com>
+    Signed-off-by: Eric Dumazet <edumazet@google.com>
+    Signed-off-by: Daniel Borkmann <daniel@iogearbox.net>
+    Link: https://lore.kernel.org/bpf/20220707123900.945305-1-edumazet@google.com
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 5735845906fb1d90fe597f8b503fc0a857d475e3
+Author: Wang Cheng <wanngchenng@gmail.com>
+Date:   Thu May 19 14:08:54 2022 -0700
+
+    mm/mempolicy: fix uninit-value in mpol_rebind_policy()
+    
+    commit 018160ad314d75b1409129b2247b614a9f35894c upstream.
+    
+    mpol_set_nodemask()(mm/mempolicy.c) does not set up nodemask when
+    pol->mode is MPOL_LOCAL.  Check pol->mode before access
+    pol->w.cpuset_mems_allowed in mpol_rebind_policy()(mm/mempolicy.c).
+    
+    BUG: KMSAN: uninit-value in mpol_rebind_policy mm/mempolicy.c:352 [inline]
+    BUG: KMSAN: uninit-value in mpol_rebind_task+0x2ac/0x2c0 mm/mempolicy.c:368
+     mpol_rebind_policy mm/mempolicy.c:352 [inline]
+     mpol_rebind_task+0x2ac/0x2c0 mm/mempolicy.c:368
+     cpuset_change_task_nodemask kernel/cgroup/cpuset.c:1711 [inline]
+     cpuset_attach+0x787/0x15e0 kernel/cgroup/cpuset.c:2278
+     cgroup_migrate_execute+0x1023/0x1d20 kernel/cgroup/cgroup.c:2515
+     cgroup_migrate kernel/cgroup/cgroup.c:2771 [inline]
+     cgroup_attach_task+0x540/0x8b0 kernel/cgroup/cgroup.c:2804
+     __cgroup1_procs_write+0x5cc/0x7a0 kernel/cgroup/cgroup-v1.c:520
+     cgroup1_tasks_write+0x94/0xb0 kernel/cgroup/cgroup-v1.c:539
+     cgroup_file_write+0x4c2/0x9e0 kernel/cgroup/cgroup.c:3852
+     kernfs_fop_write_iter+0x66a/0x9f0 fs/kernfs/file.c:296
+     call_write_iter include/linux/fs.h:2162 [inline]
+     new_sync_write fs/read_write.c:503 [inline]
+     vfs_write+0x1318/0x2030 fs/read_write.c:590
+     ksys_write+0x28b/0x510 fs/read_write.c:643
+     __do_sys_write fs/read_write.c:655 [inline]
+     __se_sys_write fs/read_write.c:652 [inline]
+     __x64_sys_write+0xdb/0x120 fs/read_write.c:652
+     do_syscall_x64 arch/x86/entry/common.c:51 [inline]
+     do_syscall_64+0x54/0xd0 arch/x86/entry/common.c:82
+     entry_SYSCALL_64_after_hwframe+0x44/0xae
+    
+    Uninit was created at:
+     slab_post_alloc_hook mm/slab.h:524 [inline]
+     slab_alloc_node mm/slub.c:3251 [inline]
+     slab_alloc mm/slub.c:3259 [inline]
+     kmem_cache_alloc+0x902/0x11c0 mm/slub.c:3264
+     mpol_new mm/mempolicy.c:293 [inline]
+     do_set_mempolicy+0x421/0xb70 mm/mempolicy.c:853
+     kernel_set_mempolicy mm/mempolicy.c:1504 [inline]
+     __do_sys_set_mempolicy mm/mempolicy.c:1510 [inline]
+     __se_sys_set_mempolicy+0x44c/0xb60 mm/mempolicy.c:1507
+     __x64_sys_set_mempolicy+0xd8/0x110 mm/mempolicy.c:1507
+     do_syscall_x64 arch/x86/entry/common.c:51 [inline]
+     do_syscall_64+0x54/0xd0 arch/x86/entry/common.c:82
+     entry_SYSCALL_64_after_hwframe+0x44/0xae
+    
+    KMSAN: uninit-value in mpol_rebind_task (2)
+    https://syzkaller.appspot.com/bug?id=d6eb90f952c2a5de9ea718a1b873c55cb13b59dc
+    
+    This patch seems to fix below bug too.
+    KMSAN: uninit-value in mpol_rebind_mm (2)
+    https://syzkaller.appspot.com/bug?id=f2fecd0d7013f54ec4162f60743a2b28df40926b
+    
+    The uninit-value is pol->w.cpuset_mems_allowed in mpol_rebind_policy().
+    When syzkaller reproducer runs to the beginning of mpol_new(),
+    
+                mpol_new() mm/mempolicy.c
+              do_mbind() mm/mempolicy.c
+            kernel_mbind() mm/mempolicy.c
+    
+    `mode` is 1(MPOL_PREFERRED), nodes_empty(*nodes) is `true` and `flags`
+    is 0. Then
+    
+            mode = MPOL_LOCAL;
+            ...
+            policy->mode = mode;
+            policy->flags = flags;
+    
+    will be executed. So in mpol_set_nodemask(),
+    
+                mpol_set_nodemask() mm/mempolicy.c
+              do_mbind()
+            kernel_mbind()
+    
+    pol->mode is 4 (MPOL_LOCAL), that `nodemask` in `pol` is not initialized,
+    which will be accessed in mpol_rebind_policy().
+    
+    Link: https://lkml.kernel.org/r/20220512123428.fq3wofedp6oiotd4@ppc.localdomain
+    Signed-off-by: Wang Cheng <wanngchenng@gmail.com>
+    Reported-by: <syzbot+217f792c92599518a2ab@syzkaller.appspotmail.com>
+    Tested-by: <syzbot+217f792c92599518a2ab@syzkaller.appspotmail.com>
+    Cc: David Rientjes <rientjes@google.com>
+    Cc: Vlastimil Babka <vbabka@suse.cz>
+    Signed-off-by: Andrew Morton <akpm@linux-foundation.org>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 2bbc39ce7809b1e2cd0f96103d4510550a96d02f
+Author: Jason A. Donenfeld <Jason@zx2c4.com>
+Date:   Sun Jul 24 16:51:48 2022 +0200
+
+    Revert "Revert "char/random: silence a lockdep splat with printk()""
+    
+    In 2019, Sergey fixed a lockdep splat with 15341b1dd409 ("char/random:
+    silence a lockdep splat with printk()"), but that got reverted soon
+    after from 4.19 because back then it apparently caused various problems.
+    But the issue it was fixing is still there, and more generally, many
+    patches turning printk() into printk_deferred() have landed since,
+    making me suspect it's okay to try this out again.
+    
+    This should fix the following deadlock found by the kernel test robot:
+    
+    [   18.287691] WARNING: possible circular locking dependency detected
+    [   18.287692] 4.19.248-00165-g3d1f971aa81f #1 Not tainted
+    [   18.287693] ------------------------------------------------------
+    [   18.287712] stop/202 is trying to acquire lock:
+    [   18.287713] (ptrval) (console_owner){..-.}, at: console_unlock (??:?)
+    [   18.287717]
+    [   18.287718] but task is already holding lock:
+    [   18.287718] (ptrval) (&(&port->lock)->rlock){-...}, at: pty_write (pty.c:?)
+    [   18.287722]
+    [   18.287722] which lock already depends on the new lock.
+    [   18.287723]
+    [   18.287724]
+    [   18.287725] the existing dependency chain (in reverse order) is:
+    [   18.287725]
+    [   18.287726] -> #2 (&(&port->lock)->rlock){-...}:
+    [   18.287729] validate_chain+0x84a/0xe00
+    [   18.287729] __lock_acquire (lockdep.c:?)
+    [   18.287730] lock_acquire (??:?)
+    [   18.287731] _raw_spin_lock_irqsave (??:?)
+    [   18.287732] tty_port_tty_get (??:?)
+    [   18.287733] tty_port_default_wakeup (tty_port.c:?)
+    [   18.287734] tty_port_tty_wakeup (??:?)
+    [   18.287734] uart_write_wakeup (??:?)
+    [   18.287735] serial8250_tx_chars (??:?)
+    [   18.287736] serial8250_handle_irq (??:?)
+    [   18.287737] serial8250_default_handle_irq (8250_port.c:?)
+    [   18.287738] serial8250_interrupt (8250_core.c:?)
+    [   18.287738] __handle_irq_event_percpu (??:?)
+    [   18.287739] handle_irq_event_percpu (??:?)
+    [   18.287740] handle_irq_event (??:?)
+    [   18.287741] handle_edge_irq (??:?)
+    [   18.287742] handle_irq (??:?)
+    [   18.287742] do_IRQ (??:?)
+    [   18.287743] common_interrupt (entry_32.o:?)
+    [   18.287744] _raw_spin_unlock_irqrestore (??:?)
+    [   18.287745] uart_write (serial_core.c:?)
+    [   18.287746] process_output_block (n_tty.c:?)
+    [   18.287747] n_tty_write (n_tty.c:?)
+    [   18.287747] tty_write (tty_io.c:?)
+    [   18.287748] __vfs_write (??:?)
+    [   18.287749] vfs_write (??:?)
+    [   18.287750] ksys_write (??:?)
+    [   18.287750] sys_write (??:?)
+    [   18.287751] do_fast_syscall_32 (??:?)
+    [   18.287752] entry_SYSENTER_32 (??:?)
+    [   18.287752]
+    [   18.287753] -> #1 (&port_lock_key){-.-.}:
+    [   18.287756]
+    [   18.287756] -> #0 (console_owner){..-.}:
+    [   18.287759] check_prevs_add (lockdep.c:?)
+    [   18.287760] validate_chain+0x84a/0xe00
+    [   18.287761] __lock_acquire (lockdep.c:?)
+    [   18.287761] lock_acquire (??:?)
+    [   18.287762] console_unlock (??:?)
+    [   18.287763] vprintk_emit (??:?)
+    [   18.287764] vprintk_default (??:?)
+    [   18.287764] vprintk_func (??:?)
+    [   18.287765] printk (??:?)
+    [   18.287766] get_random_u32 (??:?)
+    [   18.287767] shuffle_freelist (slub.c:?)
+    [   18.287767] allocate_slab (slub.c:?)
+    [   18.287768] new_slab (slub.c:?)
+    [   18.287769] ___slab_alloc+0x6d0/0xb20
+    [   18.287770] __slab_alloc+0xd6/0x2e0
+    [   18.287770] __kmalloc (??:?)
+    [   18.287771] tty_buffer_alloc (tty_buffer.c:?)
+    [   18.287772] __tty_buffer_request_room (tty_buffer.c:?)
+    [   18.287773] tty_insert_flip_string_fixed_flag (??:?)
+    [   18.287774] pty_write (pty.c:?)
+    [   18.287775] process_output_block (n_tty.c:?)
+    [   18.287776] n_tty_write (n_tty.c:?)
+    [   18.287777] tty_write (tty_io.c:?)
+    [   18.287778] __vfs_write (??:?)
+    [   18.287779] vfs_write (??:?)
+    [   18.287780] ksys_write (??:?)
+    [   18.287780] sys_write (??:?)
+    [   18.287781] do_fast_syscall_32 (??:?)
+    [   18.287782] entry_SYSENTER_32 (??:?)
+    [   18.287783]
+    [   18.287783] other info that might help us debug this:
+    [   18.287784]
+    [   18.287785] Chain exists of:
+    [   18.287785]   console_owner --> &port_lock_key --> &(&port->lock)->rlock
+    [   18.287789]
+    [   18.287790]  Possible unsafe locking scenario:
+    [   18.287790]
+    [   18.287791]        CPU0                    CPU1
+    [   18.287792]        ----                    ----
+    [   18.287792]   lock(&(&port->lock)->rlock);
+    [   18.287794]                                lock(&port_lock_key);
+    [   18.287814]                                lock(&(&port->lock)->rlock);
+    [   18.287815]   lock(console_owner);
+    [   18.287817]
+    [   18.287818]  *** DEADLOCK ***
+    [   18.287818]
+    [   18.287819] 6 locks held by stop/202:
+    [   18.287820] #0: (ptrval) (&tty->ldisc_sem){++++}, at: ldsem_down_read (??:?)
+    [   18.287823] #1: (ptrval) (&tty->atomic_write_lock){+.+.}, at: tty_write_lock (tty_io.c:?)
+    [   18.287826] #2: (ptrval) (&o_tty->termios_rwsem/1){++++}, at: n_tty_write (n_tty.c:?)
+    [   18.287830] #3: (ptrval) (&ldata->output_lock){+.+.}, at: process_output_block (n_tty.c:?)
+    [   18.287834] #4: (ptrval) (&(&port->lock)->rlock){-...}, at: pty_write (pty.c:?)
+    [   18.287838] #5: (ptrval) (console_lock){+.+.}, at: console_trylock_spinning (printk.c:?)
+    [   18.287841]
+    [   18.287842] stack backtrace:
+    [   18.287843] CPU: 0 PID: 202 Comm: stop Not tainted 4.19.248-00165-g3d1f971aa81f #1
+    [   18.287843] Call Trace:
+    [   18.287844] dump_stack (??:?)
+    [   18.287845] print_circular_bug.cold+0x78/0x8b
+    [   18.287846] check_prev_add+0x66a/0xd20
+    [   18.287847] check_prevs_add (lockdep.c:?)
+    [   18.287848] validate_chain+0x84a/0xe00
+    [   18.287848] __lock_acquire (lockdep.c:?)
+    [   18.287849] lock_acquire (??:?)
+    [   18.287850] ? console_unlock (??:?)
+    [   18.287851] console_unlock (??:?)
+    [   18.287851] ? console_unlock (??:?)
+    [   18.287852] ? native_save_fl (??:?)
+    [   18.287853] vprintk_emit (??:?)
+    [   18.287854] vprintk_default (??:?)
+    [   18.287855] vprintk_func (??:?)
+    [   18.287855] printk (??:?)
+    [   18.287856] get_random_u32 (??:?)
+    [   18.287857] ? shuffle_freelist (slub.c:?)
+    [   18.287858] shuffle_freelist (slub.c:?)
+    [   18.287858] ? page_address (??:?)
+    [   18.287859] allocate_slab (slub.c:?)
+    [   18.287860] new_slab (slub.c:?)
+    [   18.287861] ? pvclock_clocksource_read (??:?)
+    [   18.287862] ___slab_alloc+0x6d0/0xb20
+    [   18.287862] ? kvm_sched_clock_read (kvmclock.c:?)
+    [   18.287863] ? __slab_alloc+0xbc/0x2e0
+    [   18.287864] ? native_wbinvd (paravirt.c:?)
+    [   18.287865] __slab_alloc+0xd6/0x2e0
+    [   18.287865] __kmalloc (??:?)
+    [   18.287866] ? __lock_acquire (lockdep.c:?)
+    [   18.287867] ? tty_buffer_alloc (tty_buffer.c:?)
+    [   18.287868] tty_buffer_alloc (tty_buffer.c:?)
+    [   18.287869] __tty_buffer_request_room (tty_buffer.c:?)
+    [   18.287869] tty_insert_flip_string_fixed_flag (??:?)
+    [   18.287870] pty_write (pty.c:?)
+    [   18.287871] process_output_block (n_tty.c:?)
+    [   18.287872] n_tty_write (n_tty.c:?)
+    [   18.287873] ? print_dl_stats (??:?)
+    [   18.287874] ? n_tty_ioctl (n_tty.c:?)
+    [   18.287874] tty_write (tty_io.c:?)
+    [   18.287875] ? n_tty_ioctl (n_tty.c:?)
+    [   18.287876] ? tty_write_unlock (tty_io.c:?)
+    [   18.287877] __vfs_write (??:?)
+    [   18.287877] vfs_write (??:?)
+    [   18.287878] ? __fget_light (file.c:?)
+    [   18.287879] ksys_write (??:?)
+    
+    Cc: Sergey Senozhatsky <sergey.senozhatsky.work@gmail.com>
+    Cc: Qian Cai <cai@lca.pw>
+    Cc: Lech Perczak <l.perczak@camlintechnologies.com>
+    Cc: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+    Cc: Theodore Ts'o <tytso@mit.edu>
+    Cc: Sasha Levin <sashal@kernel.org>
+    Cc: Petr Mladek <pmladek@suse.com>
+    Cc: John Ogness <john.ogness@linutronix.de>
+    Reported-by: kernel test robot <oliver.sang@intel.com>
+    Link: https://lore.kernel.org/lkml/Ytz+lo4zRQYG3JUR@xsang-OptiPlex-9020
+    Signed-off-by: Jason A. Donenfeld <Jason@zx2c4.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit a5a8fc0679a8fd58d47aa2ebcfc5742631f753f9
+Author: Hristo Venev <hristo@venev.name>
+Date:   Sat Jul 16 11:51:34 2022 +0300
+
+    be2net: Fix buffer overflow in be_get_module_eeprom
+    
+    [ Upstream commit d7241f679a59cfe27f92cb5c6272cb429fb1f7ec ]
+    
+    be_cmd_read_port_transceiver_data assumes that it is given a buffer that
+    is at least PAGE_DATA_LEN long, or twice that if the module supports SFF
+    8472. However, this is not always the case.
+    
+    Fix this by passing the desired offset and length to
+    be_cmd_read_port_transceiver_data so that we only copy the bytes once.
+    
+    Fixes: e36edd9d26cf ("be2net: add ethtool "-m" option support")
+    Signed-off-by: Hristo Venev <hristo@venev.name>
+    Link: https://lore.kernel.org/r/20220716085134.6095-1-hristo@venev.name
+    Signed-off-by: Paolo Abeni <pabeni@redhat.com>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 91e21df688f8a75255ca9c459da39ac96300113a
+Author: Kuniyuki Iwashima <kuniyu@amazon.com>
+Date:   Fri Jul 15 10:17:51 2022 -0700
+
+    tcp: Fix a data-race around sysctl_tcp_notsent_lowat.
+    
+    [ Upstream commit 55be873695ed8912eb77ff46d1d1cadf028bd0f3 ]
+    
+    While reading sysctl_tcp_notsent_lowat, it can be changed concurrently.
+    Thus, we need to add READ_ONCE() to its reader.
+    
+    Fixes: c9bee3b7fdec ("tcp: TCP_NOTSENT_LOWAT socket option")
+    Signed-off-by: Kuniyuki Iwashima <kuniyu@amazon.com>
+    Signed-off-by: David S. Miller <davem@davemloft.net>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit be120ad89235376ef533cb4bd4cadcdd4f236cbc
+Author: Kuniyuki Iwashima <kuniyu@amazon.com>
+Date:   Fri Jul 15 10:17:42 2022 -0700
+
+    igmp: Fix a data-race around sysctl_igmp_max_memberships.
+    
+    [ Upstream commit 6305d821e3b9b5379d348528e5b5faf316383bc2 ]
+    
+    While reading sysctl_igmp_max_memberships, it can be changed concurrently.
+    Thus, we need to add READ_ONCE() to its reader.
+    
+    Fixes: 1da177e4c3f4 ("Linux-2.6.12-rc2")
+    Signed-off-by: Kuniyuki Iwashima <kuniyu@amazon.com>
+    Signed-off-by: David S. Miller <davem@davemloft.net>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit a84b4afaca2573ed3aed1f8854aefe3ca5a82e72
+Author: Kuniyuki Iwashima <kuniyu@amazon.com>
+Date:   Fri Jul 15 10:17:41 2022 -0700
+
+    igmp: Fix data-races around sysctl_igmp_llm_reports.
+    
+    [ Upstream commit f6da2267e71106474fbc0943dc24928b9cb79119 ]
+    
+    While reading sysctl_igmp_llm_reports, it can be changed concurrently.
+    Thus, we need to add READ_ONCE() to its readers.
+    
+    This test can be packed into a helper, so such changes will be in the
+    follow-up series after net is merged into net-next.
+    
+      if (ipv4_is_local_multicast(pmc->multiaddr) &&
+          !READ_ONCE(net->ipv4.sysctl_igmp_llm_reports))
+    
+    Fixes: df2cf4a78e48 ("IGMP: Inhibit reports for local multicast groups")
+    Signed-off-by: Kuniyuki Iwashima <kuniyu@amazon.com>
+    Signed-off-by: David S. Miller <davem@davemloft.net>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 09158cb3dc01fc595ac86ed1a0fc62ef4ade348b
+Author: Robert Hancock <robert.hancock@calian.com>
+Date:   Tue Jun 14 17:29:19 2022 -0600
+
+    i2c: cadence: Change large transfer count reset logic to be unconditional
+    
+    [ Upstream commit 4ca8ca873d454635c20d508261bfc0081af75cf8 ]
+    
+    Problems were observed on the Xilinx ZynqMP platform with large I2C reads.
+    When a read of 277 bytes was performed, the controller NAKed the transfer
+    after only 252 bytes were transferred and returned an ENXIO error on the
+    transfer.
+    
+    There is some code in cdns_i2c_master_isr to handle this case by resetting
+    the transfer count in the controller before it reaches 0, to allow larger
+    transfers to work, but it was conditional on the CDNS_I2C_BROKEN_HOLD_BIT
+    quirk being set on the controller, and ZynqMP uses the r1p14 version of
+    the core where this quirk is not being set. The requirement to do this to
+    support larger reads seems like an inherently required workaround due to
+    the core only having an 8-bit transfer size register, so it does not
+    appear that this should be conditional on the broken HOLD bit quirk which
+    is used elsewhere in the driver.
+    
+    Remove the dependency on the CDNS_I2C_BROKEN_HOLD_BIT for this transfer
+    size reset logic to fix this problem.
+    
+    Fixes: 63cab195bf49 ("i2c: removed work arounds in i2c driver for Zynq Ultrascale+ MPSoC")
+    Signed-off-by: Robert Hancock <robert.hancock@calian.com>
+    Reviewed-by: Shubhrajyoti Datta <Shubhrajyoti.datta@amd.com>
+    Acked-by: Michal Simek <michal.simek@amd.com>
+    Signed-off-by: Wolfram Sang <wsa@kernel.org>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 9b5dc7ad6da1373d3c60d4b869d688f996e5d219
+Author: Kuniyuki Iwashima <kuniyu@amazon.com>
+Date:   Wed Jul 13 13:52:04 2022 -0700
+
+    tcp: Fix a data-race around sysctl_tcp_probe_threshold.
+    
+    [ Upstream commit 92c0aa4175474483d6cf373314343d4e624e882a ]
+    
+    While reading sysctl_tcp_probe_threshold, it can be changed concurrently.
+    Thus, we need to add READ_ONCE() to its reader.
+    
+    Fixes: 6b58e0a5f32d ("ipv4: Use binary search to choose tcp PMTU probe_size")
+    Signed-off-by: Kuniyuki Iwashima <kuniyu@amazon.com>
+    Signed-off-by: David S. Miller <davem@davemloft.net>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 13207f9485b5de68decf296ceb0046f5eabb2485
+Author: Kuniyuki Iwashima <kuniyu@amazon.com>
+Date:   Wed Jul 13 13:51:58 2022 -0700
+
+    tcp/dccp: Fix a data-race around sysctl_tcp_fwmark_accept.
+    
+    [ Upstream commit 1a0008f9df59451d0a17806c1ee1a19857032fa8 ]
+    
+    While reading sysctl_tcp_fwmark_accept, it can be changed concurrently.
+    Thus, we need to add READ_ONCE() to its reader.
+    
+    Fixes: 84f39b08d786 ("net: support marking accepting TCP sockets")
+    Signed-off-by: Kuniyuki Iwashima <kuniyu@amazon.com>
+    Signed-off-by: David S. Miller <davem@davemloft.net>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit fc92e3b4bebfdd986ef1d2c5019f236837b0b982
+Author: Kuniyuki Iwashima <kuniyu@amazon.com>
+Date:   Wed Jul 13 13:51:57 2022 -0700
+
+    ip: Fix a data-race around sysctl_fwmark_reflect.
+    
+    [ Upstream commit 85d0b4dbd74b95cc492b1f4e34497d3f894f5d9a ]
+    
+    While reading sysctl_fwmark_reflect, it can be changed concurrently.
+    Thus, we need to add READ_ONCE() to its reader.
+    
+    Fixes: e110861f8609 ("net: add a sysctl to reflect the fwmark on replies")
+    Signed-off-by: Kuniyuki Iwashima <kuniyu@amazon.com>
+    Signed-off-by: David S. Miller <davem@davemloft.net>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 3bbd868099287ff9027db59029b502fcfa2202a0
+Author: Peter Zijlstra <peterz@infradead.org>
+Date:   Tue Jul 5 15:07:26 2022 +0200
+
+    perf/core: Fix data race between perf_event_set_output() and perf_mmap_close()
+    
+    [ Upstream commit 68e3c69803dada336893640110cb87221bb01dcf ]
+    
+    Yang Jihing reported a race between perf_event_set_output() and
+    perf_mmap_close():
+    
+            CPU1                                    CPU2
+    
+            perf_mmap_close(e2)
+              if (atomic_dec_and_test(&e2->rb->mmap_count)) // 1 - > 0
+                detach_rest = true
+    
+                                                    ioctl(e1, IOC_SET_OUTPUT, e2)
+                                                      perf_event_set_output(e1, e2)
+    
+              ...
+              list_for_each_entry_rcu(e, &e2->rb->event_list, rb_entry)
+                ring_buffer_attach(e, NULL);
+                // e1 isn't yet added and
+                // therefore not detached
+    
+                                                        ring_buffer_attach(e1, e2->rb)
+                                                          list_add_rcu(&e1->rb_entry,
+                                                                       &e2->rb->event_list)
+    
+    After this; e1 is attached to an unmapped rb and a subsequent
+    perf_mmap() will loop forever more:
+    
+            again:
+                    mutex_lock(&e->mmap_mutex);
+                    if (event->rb) {
+                            ...
+                            if (!atomic_inc_not_zero(&e->rb->mmap_count)) {
+                                    ...
+                                    mutex_unlock(&e->mmap_mutex);
+                                    goto again;
+                            }
+                    }
+    
+    The loop in perf_mmap_close() holds e2->mmap_mutex, while the attach
+    in perf_event_set_output() holds e1->mmap_mutex. As such there is no
+    serialization to avoid this race.
+    
+    Change perf_event_set_output() to take both e1->mmap_mutex and
+    e2->mmap_mutex to alleviate that problem. Additionally, have the loop
+    in perf_mmap() detach the rb directly, this avoids having to wait for
+    the concurrent perf_mmap_close() to get around to doing it to make
+    progress.
+    
+    Fixes: 9bb5d40cd93c ("perf: Fix mmap() accounting hole")
+    Reported-by: Yang Jihong <yangjihong1@huawei.com>
+    Signed-off-by: Peter Zijlstra (Intel) <peterz@infradead.org>
+    Tested-by: Yang Jihong <yangjihong1@huawei.com>
+    Link: https://lkml.kernel.org/r/YsQ3jm2GR38SW7uD@worktop.programming.kicks-ass.net
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit b4d224eec96a18fa8959512cd9e5b6a50bd16a41
+Author: Miaoqian Lin <linmq006@gmail.com>
+Date:   Mon May 23 18:10:09 2022 +0400
+
+    power/reset: arm-versatile: Fix refcount leak in versatile_reboot_probe
+    
+    [ Upstream commit 80192eff64eee9b3bc0594a47381937b94b9d65a ]
+    
+    of_find_matching_node_and_match() returns a node pointer with refcount
+    incremented, we should use of_node_put() on it when not need anymore.
+    Add missing of_node_put() to avoid refcount leak.
+    
+    Fixes: 0e545f57b708 ("power: reset: driver for the Versatile syscon reboot")
+    Signed-off-by: Miaoqian Lin <linmq006@gmail.com>
+    Reviewed-by: Linus Walleij <linus.walleij@linaro.org>
+    Signed-off-by: Sebastian Reichel <sebastian.reichel@collabora.com>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 5aff12fa09504c6ea88fc17749a39cda2c4d6ef7
+Author: Hangyu Hua <hbh25y@gmail.com>
+Date:   Wed Jun 1 14:46:25 2022 +0800
+
+    xfrm: xfrm_policy: fix a possible double xfrm_pols_put() in xfrm_bundle_lookup()
+    
+    [ Upstream commit f85daf0e725358be78dfd208dea5fd665d8cb901 ]
+    
+    xfrm_policy_lookup() will call xfrm_pol_hold_rcu() to get a refcount of
+    pols[0]. This refcount can be dropped in xfrm_expand_policies() when
+    xfrm_expand_policies() return error. pols[0]'s refcount is balanced in
+    here. But xfrm_bundle_lookup() will also call xfrm_pols_put() with
+    num_pols == 1 to drop this refcount when xfrm_expand_policies() return
+    error.
+    
+    This patch also fix an illegal address access. pols[0] will save a error
+    point when xfrm_policy_lookup fails. This lead to xfrm_pols_put to resolve
+    an illegal address in xfrm_bundle_lookup's error path.
+    
+    Fix these by setting num_pols = 0 in xfrm_expand_policies()'s error path.
+    
+    Fixes: 80c802f3073e ("xfrm: cache bundles instead of policies for outgoing flows")
+    Signed-off-by: Hangyu Hua <hbh25y@gmail.com>
+    Signed-off-by: Steffen Klassert <steffen.klassert@secunet.com>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 2994afca324aa584b8c1ca9a4facd4fae9746cf0
+Author: Shuah Khan <skhan@linuxfoundation.org>
+Date:   Fri Jul 1 10:53:52 2022 -0600
+
+    misc: rtsx_usb: set return value in rsp_buf alloc err path
+    
+    [ Upstream commit 2cd37c2e72449a7add6da1183d20a6247d6db111 ]
+    
+    Set return value in rsp_buf alloc error path before going to
+    error handling.
+    
+    drivers/misc/cardreader/rtsx_usb.c:639:6: warning: variable 'ret' is used uninitialized whenever 'if' condition is true [-Wsometimes-uninitialized]
+               if (!ucr->rsp_buf)
+                   ^~~~~~~~~~~~~
+       drivers/misc/cardreader/rtsx_usb.c:678:9: note: uninitialized use occurs here
+               return ret;
+                      ^~~
+       drivers/misc/cardreader/rtsx_usb.c:639:2: note: remove the 'if' if its condition is always false
+               if (!ucr->rsp_buf)
+               ^~~~~~~~~~~~~~~~~~
+       drivers/misc/cardreader/rtsx_usb.c:622:9: note: initialize the variable 'ret' to silence this warning
+               int ret;
+                      ^
+                       = 0
+    
+    Fixes: 3776c7855985 ("misc: rtsx_usb: use separate command and response buffers")
+    Reported-by: kernel test robot <lkp@intel.com>
+    Cc: stable <stable@kernel.org>
+    Signed-off-by: Shuah Khan <skhan@linuxfoundation.org>
+    Link: https://lore.kernel.org/r/20220701165352.15687-1-skhan@linuxfoundation.org
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 242335b4667845e9581a322cb8a7ee66a06251e1
+Author: Shuah Khan <skhan@linuxfoundation.org>
+Date:   Thu Jun 30 20:32:56 2022 -0600
+
+    misc: rtsx_usb: use separate command and response buffers
+    
+    [ Upstream commit 3776c78559853fd151be7c41e369fd076fb679d5 ]
+    
+    rtsx_usb uses same buffer for command and response. There could
+    be a potential conflict using the same buffer for both especially
+    if retries and timeouts are involved.
+    
+    Use separate command and response buffers to avoid conflicts.
+    
+    Signed-off-by: Shuah Khan <skhan@linuxfoundation.org>
+    Cc: stable <stable@kernel.org>
+    Link: https://lore.kernel.org/r/07e3721804ff07aaab9ef5b39a5691d0718b9ade.1656642167.git.skhan@linuxfoundation.org
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 1a6af9d85019cc0969a9cf34af7d1181426ed22d
+Author: Shuah Khan <skhan@linuxfoundation.org>
+Date:   Thu Jun 30 20:32:55 2022 -0600
+
+    misc: rtsx_usb: fix use of dma mapped buffer for usb bulk transfer
+    
+    [ Upstream commit eb7f8e28420372787933eec079735c35034bda7d ]
+    
+    rtsx_usb driver allocates coherent dma buffer for urb transfers.
+    This buffer is passed to usb_bulk_msg() and usb core tries to
+    map already mapped buffer running into a dma mapping error.
+    
+    xhci_hcd 0000:01:00.0: rejecting DMA map of vmalloc memory
+    WARNING: CPU: 1 PID: 279 at include/linux/dma-mapping.h:326 usb_ hcd_map_urb_for_dma+0x7d6/0x820
+    
+    ...
+    
+    xhci_map_urb_for_dma+0x291/0x4e0
+    usb_hcd_submit_urb+0x199/0x12b0
+    ...
+    usb_submit_urb+0x3b8/0x9e0
+    usb_start_wait_urb+0xe3/0x2d0
+    usb_bulk_msg+0x115/0x240
+    rtsx_usb_transfer_data+0x185/0x1a8 [rtsx_usb]
+    rtsx_usb_send_cmd+0xbb/0x123 [rtsx_usb]
+    rtsx_usb_write_register+0x12c/0x143 [rtsx_usb]
+    rtsx_usb_probe+0x226/0x4b2 [rtsx_usb]
+    
+    Fix it to use kmalloc() to get DMA-able memory region instead.
+    
+    Signed-off-by: Shuah Khan <skhan@linuxfoundation.org>
+    Cc: stable <stable@kernel.org>
+    Link: https://lore.kernel.org/r/667d627d502e1ba9ff4f9b94966df3299d2d3c0d.1656642167.git.skhan@linuxfoundation.org
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 45ce2e46f2cf1b40e6ba6dc31c3905d8d4806b28
+Author: Demi Marie Obenour <demi@invisiblethingslab.com>
+Date:   Sun Jul 10 19:05:22 2022 -0400
+
+    xen/gntdev: Ignore failure to unmap INVALID_GRANT_HANDLE
+    
+    commit 166d3863231667c4f64dee72b77d1102cdfad11f upstream.
+    
+    The error paths of gntdev_mmap() can call unmap_grant_pages() even
+    though not all of the pages have been successfully mapped.  This will
+    trigger the WARN_ON()s in __unmap_grant_pages_done().  The number of
+    warnings can be very large; I have observed thousands of lines of
+    warnings in the systemd journal.
+    
+    Avoid this problem by only warning on unmapping failure if the handle
+    being unmapped is not INVALID_GRANT_HANDLE.  The handle field of any
+    page that was not successfully mapped will be INVALID_GRANT_HANDLE, so
+    this catches all cases where unmapping can legitimately fail.
+    
+    Fixes: dbe97cff7dd9 ("xen/gntdev: Avoid blocking in unmap_grant_pages()")
+    Cc: stable@vger.kernel.org
+    Suggested-by: Juergen Gross <jgross@suse.com>
+    Signed-off-by: Demi Marie Obenour <demi@invisiblethingslab.com>
+    Reviewed-by: Oleksandr Tyshchenko <oleksandr_tyshchenko@epam.com>
+    Reviewed-by: Juergen Gross <jgross@suse.com>
+    Link: https://lore.kernel.org/r/20220710230522.1563-1-demi@invisiblethingslab.com
+    Signed-off-by: Juergen Gross <jgross@suse.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit ab83798bd5a38f3c6781a170e0f8cef05df65fd7
+Author: Stephen Smalley <sds@tycho.nsa.gov>
+Date:   Tue Jan 10 12:28:32 2017 -0500
+
+    security,selinux,smack: kill security_task_wait hook
+    
+    commit 3a2f5a59a695a73e0cde9a61e0feae5fa730e936 upstream.
+    
+    As reported by yangshukui, a permission denial from security_task_wait()
+    can lead to a soft lockup in zap_pid_ns_processes() since it only expects
+    sys_wait4() to return 0 or -ECHILD. Further, security_task_wait() can
+    in general lead to zombies; in the absence of some way to automatically
+    reparent a child process upon a denial, the hook is not useful.  Remove
+    the security hook and its implementations in SELinux and Smack.  Smack
+    already removed its check from its hook.
+    
+    Reported-by: yangshukui <yangshukui@huawei.com>
+    Signed-off-by: Stephen Smalley <sds@tycho.nsa.gov>
+    Acked-by: Casey Schaufler <casey@schaufler-ca.com>
+    Acked-by: Oleg Nesterov <oleg@redhat.com>
+    Signed-off-by: Paul Moore <paul@paul-moore.com>
+    Signed-off-by: Alexander Grund <theflamefire89@gmail.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>

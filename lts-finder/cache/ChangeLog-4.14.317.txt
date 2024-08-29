@@ -1,0 +1,1847 @@
+commit 1914956342c8cf52a377aecc4944e63f9229cb9b
+Author: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+Date:   Fri Jun 9 10:22:55 2023 +0200
+
+    Linux 4.14.317
+    
+    Link: https://lore.kernel.org/r/20230607200835.310274198@linuxfoundation.org
+    Tested-by: Chris Paterson (CIP) <chris.paterson2@renesas.com>
+    Tested-by: Harshit Mogalapalli <harshit.m.mogalapalli@oracle.com>
+    Tested-by: Linux Kernel Functional Testing <lkft@linaro.org>
+    Tested-by: Guenter Roeck <linux@roeck-us.net>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit b1c9df46d2a7c2cfb45421427a7a719002b7c675
+Author: Ping-Ke Shih <pkshih@realtek.com>
+Date:   Mon Aug 1 19:33:45 2022 +0800
+
+    wifi: rtlwifi: 8192de: correct checking of IQK reload
+    
+    commit 93fbc1ebd978cf408ef5765e9c1630fce9a8621b upstream.
+    
+    Since IQK could spend time, we make a cache of IQK result matrix that looks
+    like iqk_matrix[channel_idx].val[x][y], and we can reload the matrix if we
+    have made a cache. To determine a cache is made, we check
+    iqk_matrix[channel_idx].val[0][0].
+    
+    The initial commit 7274a8c22980 ("rtlwifi: rtl8192de: Merge phy routines")
+    make a mistake that checks incorrect iqk_matrix[channel_idx].val[0] that
+    is always true, and this mistake is found by commit ee3db469dd31
+    ("wifi: rtlwifi: remove always-true condition pointed out by GCC 12"), so
+    I recall the vendor driver to find fix and apply the correctness.
+    
+    Fixes: 7274a8c22980 ("rtlwifi: rtl8192de: Merge phy routines")
+    Signed-off-by: Ping-Ke Shih <pkshih@realtek.com>
+    Signed-off-by: Kalle Valo <kvalo@kernel.org>
+    Link: https://lore.kernel.org/r/20220801113345.42016-1-pkshih@realtek.com
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit d1bcb0ab20980c6da663708c9a47c322703f9fc3
+Author: Al Viro <viro@zeniv.linux.org.uk>
+Date:   Mon May 16 16:42:13 2022 +0800
+
+    Fix double fget() in vhost_net_set_backend()
+    
+    commit fb4554c2232e44d595920f4d5c66cf8f7d13f9bc upstream.
+    
+    Descriptor table is a shared resource; two fget() on the same descriptor
+    may return different struct file references.  get_tap_ptr_ring() is
+    called after we'd found (and pinned) the socket we'll be using and it
+    tries to find the private tun/tap data structures associated with it.
+    Redoing the lookup by the same file descriptor we'd used to get the
+    socket is racy - we need to same struct file.
+    
+    Thanks to Jason for spotting a braino in the original variant of patch -
+    I'd missed the use of fd == -1 for disabling backend, and in that case
+    we can end up with sock == NULL and sock != oldsock.
+    
+    Cc: stable@kernel.org
+    Acked-by: Michael S. Tsirkin <mst@redhat.com>
+    Signed-off-by: Jason Wang <jasowang@redhat.com>
+    Signed-off-by: Al Viro <viro@zeniv.linux.org.uk>
+    [4.14: Account for get_tap_skb_array() instead of get_tap_ptr_ring()]
+    Signed-off-by: Samuel Mendoza-Jonas <samjonas@amazon.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 2334ff0b343ba6ba7a6c0586fcc83992bbbc1776
+Author: Tudor Ambarus <tudor.ambarus@linaro.org>
+Date:   Wed May 17 13:38:08 2023 +0000
+
+    net: cdc_ncm: Deal with too low values of dwNtbOutMaxSize
+    
+    commit 7e01c7f7046efc2c7c192c3619db43292b98e997 upstream.
+    
+    Currently in cdc_ncm_check_tx_max(), if dwNtbOutMaxSize is lower than
+    the calculated "min" value, but greater than zero, the logic sets
+    tx_max to dwNtbOutMaxSize. This is then used to allocate a new SKB in
+    cdc_ncm_fill_tx_frame() where all the data is handled.
+    
+    For small values of dwNtbOutMaxSize the memory allocated during
+    alloc_skb(dwNtbOutMaxSize, GFP_ATOMIC) will have the same size, due to
+    how size is aligned at alloc time:
+            size = SKB_DATA_ALIGN(size);
+            size += SKB_DATA_ALIGN(sizeof(struct skb_shared_info));
+    Thus we hit the same bug that we tried to squash with
+    commit 2be6d4d16a084 ("net: cdc_ncm: Allow for dwNtbOutMaxSize to be unset or zero")
+    
+    Low values of dwNtbOutMaxSize do not cause an issue presently because at
+    alloc_skb() time more memory (512b) is allocated than required for the
+    SKB headers alone (320b), leaving some space (512b - 320b = 192b)
+    for CDC data (172b).
+    
+    However, if more elements (for example 3 x u64 = [24b]) were added to
+    one of the SKB header structs, say 'struct skb_shared_info',
+    increasing its original size (320b [320b aligned]) to something larger
+    (344b [384b aligned]), then suddenly the CDC data (172b) no longer
+    fits in the spare SKB data area (512b - 384b = 128b).
+    
+    Consequently the SKB bounds checking semantics fails and panics:
+    
+    skbuff: skb_over_panic: text:ffffffff831f755b len:184 put:172 head:ffff88811f1c6c00 data:ffff88811f1c6c00 tail:0xb8 end:0x80 dev:<NULL>
+    ------------[ cut here ]------------
+    kernel BUG at net/core/skbuff.c:113!
+    invalid opcode: 0000 [#1] PREEMPT SMP KASAN
+    CPU: 0 PID: 57 Comm: kworker/0:2 Not tainted 5.15.106-syzkaller-00249-g19c0ed55a470 #0
+    Hardware name: Google Google Compute Engine/Google Compute Engine, BIOS Google 04/14/2023
+    Workqueue: mld mld_ifc_work
+    RIP: 0010:skb_panic net/core/skbuff.c:113 [inline]
+    RIP: 0010:skb_over_panic+0x14c/0x150 net/core/skbuff.c:118
+    [snip]
+    Call Trace:
+     <TASK>
+     skb_put+0x151/0x210 net/core/skbuff.c:2047
+     skb_put_zero include/linux/skbuff.h:2422 [inline]
+     cdc_ncm_ndp16 drivers/net/usb/cdc_ncm.c:1131 [inline]
+     cdc_ncm_fill_tx_frame+0x11ab/0x3da0 drivers/net/usb/cdc_ncm.c:1308
+     cdc_ncm_tx_fixup+0xa3/0x100
+    
+    Deal with too low values of dwNtbOutMaxSize, clamp it in the range
+    [USB_CDC_NCM_NTB_MIN_OUT_SIZE, CDC_NCM_NTB_MAX_SIZE_TX]. We ensure
+    enough data space is allocated to handle CDC data by making sure
+    dwNtbOutMaxSize is not smaller than USB_CDC_NCM_NTB_MIN_OUT_SIZE.
+    
+    Fixes: 289507d3364f ("net: cdc_ncm: use sysfs for rx/tx aggregation tuning")
+    Cc: stable@vger.kernel.org
+    Reported-by: syzbot+9f575a1f15fc0c01ed69@syzkaller.appspotmail.com
+    Link: https://syzkaller.appspot.com/bug?extid=b982f1059506db48409d
+    Link: https://lore.kernel.org/all/20211202143437.1411410-1-lee.jones@linaro.org/
+    Signed-off-by: Tudor Ambarus <tudor.ambarus@linaro.org>
+    Reviewed-by: Simon Horman <simon.horman@corigine.com>
+    Link: https://lore.kernel.org/r/20230517133808.1873695-2-tudor.ambarus@linaro.org
+    Signed-off-by: Jakub Kicinski <kuba@kernel.org>
+    Signed-off-by: Tudor Ambarus <tudor.ambarus@linaro.org>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 47473722d2754621cf8588db0cd3d4720e66d206
+Author: Alexander Bersenev <bay@hackerdom.ru>
+Date:   Sat Mar 14 10:33:24 2020 +0500
+
+    cdc_ncm: Fix the build warning
+    
+    commit 5d0ab06b63fc9c727a7bb72c81321c0114be540b upstream.
+    
+    The ndp32->wLength is two bytes long, so replace cpu_to_le32 with cpu_to_le16.
+    
+    Fixes: 0fa81b304a79 ("cdc_ncm: Implement the 32-bit version of NCM Transfer Block")
+    Signed-off-by: Alexander Bersenev <bay@hackerdom.ru>
+    Signed-off-by: David S. Miller <davem@davemloft.net>
+    Signed-off-by: Tudor Ambarus <tudor.ambarus@linaro.org>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 8cf7db86a8984ffa3a3388a8df12bc0aa4c79bd7
+Author: Alexander Bersenev <bay@hackerdom.ru>
+Date:   Fri Mar 6 01:33:16 2020 +0500
+
+    cdc_ncm: Implement the 32-bit version of NCM Transfer Block
+    
+    commit 0fa81b304a7973a499f844176ca031109487dd31 upstream.
+    
+    The NCM specification defines two formats of transfer blocks: with 16-bit
+    fields (NTB-16) and with 32-bit fields (NTB-32). Currently only NTB-16 is
+    implemented.
+    
+    This patch adds the support of NTB-32. The motivation behind this is that
+    some devices such as E5785 or E5885 from the current generation of Huawei
+    LTE routers do not support NTB-16. The previous generations of Huawei
+    devices are also use NTB-32 by default.
+    
+    Also this patch enables NTB-32 by default for Huawei devices.
+    
+    During the 2019 ValdikSS made five attempts to contact Huawei to add the
+    NTB-16 support to their router firmware, but they were unsuccessful.
+    
+    Signed-off-by: Alexander Bersenev <bay@hackerdom.ru>
+    Signed-off-by: David S. Miller <davem@davemloft.net>
+    Stable-dep-of: 7e01c7f7046e ("net: cdc_ncm: Deal with too low values of dwNtbOutMaxSize")
+    Signed-off-by: Tudor Ambarus <tudor.ambarus@linaro.org>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit ad919acbf056c05770a339eb90e65f1fbbe30ae2
+Author: Ben Hutchings <benh@debian.org>
+Date:   Sat May 27 15:52:48 2023 +0200
+
+    scsi: dpt_i2o: Do not process completions with invalid addresses
+    
+    adpt_isr() reads reply addresses from a hardware register, which
+    should always be within the DMA address range of the device's pool of
+    reply address buffers.  In case the address is out of range, it tries
+    to muddle on, converting to a virtual address using bus_to_virt().
+    
+    bus_to_virt() does not take DMA addresses, and it doesn't make sense
+    to try to handle the completion in this case.  Ignore it and continue
+    looping to service the interrupt.  If a completion has been lost then
+    the SCSI core should eventually time-out and trigger a reset.
+    
+    There is no corresponding upstream commit, because this driver was
+    removed upstream.
+    
+    Fixes: 67af2b060e02 ("[SCSI] dpt_i2o: move from virt_to_bus/bus_to_virt ...")
+    Signed-off-by: Ben Hutchings <benh@debian.org>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 4e0ef325bc005b5c9af3d1b78dea9e4d45d5d8ba
+Author: Ben Hutchings <benh@debian.org>
+Date:   Sat May 27 15:34:30 2023 +0200
+
+    scsi: dpt_i2o: Remove broken pass-through ioctl (I2OUSERCMD)
+    
+    adpt_i2o_passthru() takes a user-provided message and passes it
+    through to the hardware with appropriate translation of addresses
+    and message IDs.  It has a number of bugs:
+    
+    - When a message requires scatter/gather, it doesn't verify that the
+      offset to the scatter/gather list is less than the message size.
+    - When a message requires scatter/gather, it overwrites the DMA
+      addresses with the user-space virtual addresses before unmapping the
+      DMA buffers.
+    - It reads the message from user memory multiple times.  This allows
+      user-space to change the message and bypass validation.
+    - It assumes that the message is at least 4 words long, but doesn't
+      check that.
+    
+    I tried fixing these, but even the maintainer of the corresponding
+    user-space in Debian doesn't have the hardware any more.
+    
+    Instead, remove the pass-through ioctl (I2OUSRCMD) and supporting
+    code.
+    
+    There is no corresponding upstream commit, because this driver was
+    removed upstream.
+    
+    Fixes: 1da177e4c3f4 ("Linux-2.6.12-rc2")
+    Fixes: 67af2b060e02 ("[SCSI] dpt_i2o: move from virt_to_bus/bus_to_virt ...")
+    Signed-off-by: Ben Hutchings <benh@debian.org>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 7ecfde036ab3f4f23cb888955643a35ae504e25f
+Author: Helge Deller <deller@gmx.de>
+Date:   Sat May 27 08:41:09 2023 +0200
+
+    fbcon: Fix null-ptr-deref in soft_cursor
+    
+    commit d78bd6cc68276bd57f766f7cb98bfe32c23ab327 upstream.
+    
+    syzbot repored this bug in the softcursor code:
+    
+    BUG: KASAN: null-ptr-deref in soft_cursor+0x384/0x6b4 drivers/video/fbdev/core/softcursor.c:70
+    Read of size 16 at addr 0000000000000200 by task kworker/u4:1/12
+    
+    CPU: 0 PID: 12 Comm: kworker/u4:1 Not tainted 6.4.0-rc3-syzkaller-geb0f1697d729 #0
+    Hardware name: Google Google Compute Engine/Google Compute Engine, BIOS Google 04/28/2023
+    Workqueue: events_power_efficient fb_flashcursor
+    Call trace:
+     dump_backtrace+0x1b8/0x1e4 arch/arm64/kernel/stacktrace.c:233
+     show_stack+0x2c/0x44 arch/arm64/kernel/stacktrace.c:240
+     __dump_stack lib/dump_stack.c:88 [inline]
+     dump_stack_lvl+0xd0/0x124 lib/dump_stack.c:106
+     print_report+0xe4/0x514 mm/kasan/report.c:465
+     kasan_report+0xd4/0x130 mm/kasan/report.c:572
+     kasan_check_range+0x264/0x2a4 mm/kasan/generic.c:187
+     __asan_memcpy+0x3c/0x84 mm/kasan/shadow.c:105
+     soft_cursor+0x384/0x6b4 drivers/video/fbdev/core/softcursor.c:70
+     bit_cursor+0x113c/0x1a64 drivers/video/fbdev/core/bitblit.c:377
+     fb_flashcursor+0x35c/0x54c drivers/video/fbdev/core/fbcon.c:380
+     process_one_work+0x788/0x12d4 kernel/workqueue.c:2405
+     worker_thread+0x8e0/0xfe8 kernel/workqueue.c:2552
+     kthread+0x288/0x310 kernel/kthread.c:379
+     ret_from_fork+0x10/0x20 arch/arm64/kernel/entry.S:853
+    
+    This fix let bit_cursor() bail out early when a font bitmap
+    isn't available yet.
+    
+    Signed-off-by: Helge Deller <deller@gmx.de>
+    Reported-by: syzbot+d910bd780e6efac35869@syzkaller.appspotmail.com
+    Acked-by: Sam Ravnborg <sam@ravnborg.org>
+    Cc: stable@kernel.org
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit d4a55cfcdf403ef53663925caa6d9a82def5b6c9
+Author: Theodore Ts'o <tytso@mit.edu>
+Date:   Tue May 23 23:49:51 2023 -0400
+
+    ext4: add lockdep annotations for i_data_sem for ea_inode's
+    
+    commit aff3bea95388299eec63440389b4545c8041b357 upstream.
+    
+    Treat i_data_sem for ea_inodes as being in their own lockdep class to
+    avoid lockdep complaints about ext4_setattr's use of inode_lock() on
+    normal inodes potentially causing lock ordering with i_data_sem on
+    ea_inodes in ext4_xattr_inode_write().  However, ea_inodes will be
+    operated on by ext4_setattr(), so this isn't a problem.
+    
+    Cc: stable@kernel.org
+    Link: https://syzkaller.appspot.com/bug?extid=298c5d8fb4a128bc27b0
+    Reported-by: syzbot+298c5d8fb4a128bc27b0@syzkaller.appspotmail.com
+    Signed-off-by: Theodore Ts'o <tytso@mit.edu>
+    Link: https://lore.kernel.org/r/20230524034951.779531-5-tytso@mit.edu
+    Signed-off-by: Theodore Ts'o <tytso@mit.edu>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit a03dc3d59abe1e02ed64f6fc25882ff04d1829b6
+Author: Paul Moore <paul@paul-moore.com>
+Date:   Thu Jun 1 10:21:21 2023 -0400
+
+    selinux: don't use make's grouped targets feature yet
+    
+    commit 42c4e97e06a839b07d834f640a10911ad84ec8b3 upstream.
+    
+    The Linux Kernel currently only requires make v3.82 while the grouped
+    target functionality requires make v4.3.  Removed the grouped target
+    introduced in 4ce1f694eb5d ("selinux: ensure av_permissions.h is
+    built when needed") as well as the multiple header file targets in
+    the make rule.  This effectively reverts the problem commit.
+    
+    We will revisit this change when make >= 4.3 is required by the rest
+    of the kernel.
+    
+    Cc: stable@vger.kernel.org
+    Fixes: 4ce1f694eb5d ("selinux: ensure av_permissions.h is built when needed")
+    Reported-by: Erwan Velu <e.velu@criteo.com>
+    Reported-by: Luiz Capitulino <luizcap@amazon.com>
+    Tested-by: Luiz Capitulino <luizcap@amazon.com>
+    Signed-off-by: Paul Moore <paul@paul-moore.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 22fb46cc1cd902363e38739c1fd25b436490ce43
+Author: Sherry Sun <sherry.sun@nxp.com>
+Date:   Fri May 19 17:47:51 2023 +0800
+
+    tty: serial: fsl_lpuart: use UARTCTRL_TXINV to send break instead of UARTCTRL_SBK
+    
+    commit 2474e05467c00f7d51af3039b664de6886325257 upstream.
+    
+    LPUART IP now has two known bugs, one is that CTS has higher priority
+    than the break signal, which causes the break signal sending through
+    UARTCTRL_SBK may impacted by the CTS input if the HW flow control is
+    enabled. It exists on all platforms we support in this driver.
+    So we add a workaround patch for this issue: commit c4c81db5cf8b
+    ("tty: serial: fsl_lpuart: disable the CTS when send break signal").
+    
+    Another IP bug is i.MX8QM LPUART may have an additional break character
+    being sent after SBK was cleared. It may need to add some delay between
+    clearing SBK and re-enabling CTS to ensure that the SBK latch are
+    completely cleared.
+    
+    But we found that during the delay period before CTS is enabled, there
+    is still a risk that Bluetooth data in TX FIFO may be sent out during
+    this period because of break off and CTS disabled(even if BT sets CTS
+    line deasserted, data is still sent to BT).
+    
+    Due to this risk, we have to drop the CTS-disabling workaround for SBK
+    bugs, use TXINV seems to be a better way to replace SBK feature and
+    avoid above risk. Also need to disable the transmitter to prevent any
+    data from being sent out during break, then invert the TX line to send
+    break. Then disable the TXINV when turn off break and re-enable
+    transmitter.
+    
+    Fixes: c4c81db5cf8b ("tty: serial: fsl_lpuart: disable the CTS when send break signal")
+    Cc: stable <stable@kernel.org>
+    Signed-off-by: Sherry Sun <sherry.sun@nxp.com>
+    Link: https://lore.kernel.org/r/20230519094751.28948-1-sherry.sun@nxp.com
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit cd8080358b53c7bb16f02dd208b85bebc682289f
+Author: Deren Wu <deren.wu@mediatek.com>
+Date:   Sat May 13 22:48:15 2023 +0800
+
+    mmc: vub300: fix invalid response handling
+    
+    commit a99d21cefd351c8aaa20b83a3c942340e5789d45 upstream.
+    
+    We may get an empty response with zero length at the beginning of
+    the driver start and get following UBSAN error. Since there is no
+    content(SDRT_NONE) for the response, just return and skip the response
+    handling to avoid this problem.
+    
+    Test pass : SDIO wifi throughput test with this patch
+    
+    [  126.980684] UBSAN: array-index-out-of-bounds in drivers/mmc/host/vub300.c:1719:12
+    [  126.980709] index -1 is out of range for type 'u32 [4]'
+    [  126.980729] CPU: 4 PID: 9 Comm: kworker/u16:0 Tainted: G            E      6.3.0-rc4-mtk-local-202304272142 #1
+    [  126.980754] Hardware name: Intel(R) Client Systems NUC8i7BEH/NUC8BEB, BIOS BECFL357.86A.0081.2020.0504.1834 05/04/2020
+    [  126.980770] Workqueue: kvub300c vub300_cmndwork_thread [vub300]
+    [  126.980833] Call Trace:
+    [  126.980845]  <TASK>
+    [  126.980860]  dump_stack_lvl+0x48/0x70
+    [  126.980895]  dump_stack+0x10/0x20
+    [  126.980916]  ubsan_epilogue+0x9/0x40
+    [  126.980944]  __ubsan_handle_out_of_bounds+0x70/0x90
+    [  126.980979]  vub300_cmndwork_thread+0x58e7/0x5e10 [vub300]
+    [  126.981018]  ? _raw_spin_unlock+0x18/0x40
+    [  126.981042]  ? finish_task_switch+0x175/0x6f0
+    [  126.981070]  ? __switch_to+0x42e/0xda0
+    [  126.981089]  ? __switch_to_asm+0x3a/0x80
+    [  126.981129]  ? __pfx_vub300_cmndwork_thread+0x10/0x10 [vub300]
+    [  126.981174]  ? __kasan_check_read+0x11/0x20
+    [  126.981204]  process_one_work+0x7ee/0x13d0
+    [  126.981246]  worker_thread+0x53c/0x1240
+    [  126.981291]  kthread+0x2b8/0x370
+    [  126.981312]  ? __pfx_worker_thread+0x10/0x10
+    [  126.981336]  ? __pfx_kthread+0x10/0x10
+    [  126.981359]  ret_from_fork+0x29/0x50
+    [  126.981400]  </TASK>
+    
+    Fixes: 88095e7b473a ("mmc: Add new VUB300 USB-to-SD/SDIO/MMC driver")
+    Signed-off-by: Deren Wu <deren.wu@mediatek.com>
+    Cc: stable@vger.kernel.org
+    Link: https://lore.kernel.org/r/048cd6972c50c33c2e8f81d5228fed928519918b.1683987673.git.deren.wu@mediatek.com
+    Signed-off-by: Ulf Hansson <ulf.hansson@linaro.org>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit c5158fb609395bd1cb0f4f06d98e3739426d441d
+Author: Nathan Chancellor <nathan@kernel.org>
+Date:   Thu Sep 20 17:04:20 2018 -0700
+
+    regulator: da905{2,5}: Remove unnecessary array check
+    
+    commit 5a7d7d0f9f791b1e13f26dbbb07c86482912ad62 upstream.
+    
+    Clang warns that the address of a pointer will always evaluated as true
+    in a boolean context:
+    
+    drivers/regulator/da9052-regulator.c:423:22: warning: address of array
+    'pdata->regulators' will always evaluate to 'true'
+    [-Wpointer-bool-conversion]
+            if (pdata && pdata->regulators) {
+                      ~~ ~~~~~~~^~~~~~~~~~
+    drivers/regulator/da9055-regulator.c:615:22: warning: address of array
+    'pdata->regulators' will always evaluate to 'true'
+    [-Wpointer-bool-conversion]
+            if (pdata && pdata->regulators) {
+                      ~~ ~~~~~~~^~~~~~~~~~
+    
+    Link: https://github.com/ClangBuiltLinux/linux/issues/142
+    Signed-off-by: Nathan Chancellor <natechancellor@gmail.com>
+    Signed-off-by: Mark Brown <broonie@kernel.org>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 46406aef7cd5fb410115619db8323ad05d2315c5
+Author: Jakub Kicinski <kuba@kernel.org>
+Date:   Fri May 20 12:43:15 2022 -0700
+
+    wifi: rtlwifi: remove always-true condition pointed out by GCC 12
+    
+    commit ee3db469dd317e82f57b13aa3bc61be5cb60c2b4 upstream.
+    
+    The .value is a two-dim array, not a pointer.
+    
+    struct iqk_matrix_regs {
+            bool iqk_done;
+            long value[1][IQK_MATRIX_REG_NUM];
+    };
+    
+    Acked-by: Kalle Valo <kvalo@kernel.org>
+    Signed-off-by: Jakub Kicinski <kuba@kernel.org>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 681eb3c36dd80c44a12c23598669bfebbace5d0c
+Author: Nathan Chancellor <nathan@kernel.org>
+Date:   Mon Apr 6 20:10:45 2020 -0700
+
+    lib/dynamic_debug.c: use address-of operator on section symbols
+    
+    commit 8306b057a85ec07482da5d4b99d5c0b47af69be1 upstream.
+    
+    Clang warns:
+    
+    ../lib/dynamic_debug.c:1034:24: warning: array comparison always
+    evaluates to false [-Wtautological-compare]
+            if (__start___verbose == __stop___verbose) {
+                                  ^
+    1 warning generated.
+    
+    These are not true arrays, they are linker defined symbols, which are just
+    addresses.  Using the address of operator silences the warning and does
+    not change the resulting assembly with either clang/ld.lld or gcc/ld
+    (tested with diff + objdump -Dr).
+    
+    Suggested-by: Nick Desaulniers <ndesaulniers@google.com>
+    Signed-off-by: Nathan Chancellor <natechancellor@gmail.com>
+    Signed-off-by: Andrew Morton <akpm@linux-foundation.org>
+    Acked-by: Jason Baron <jbaron@akamai.com>
+    Link: https://github.com/ClangBuiltLinux/linux/issues/894
+    Link: http://lkml.kernel.org/r/20200220051320.10739-1-natechancellor@gmail.com
+    Signed-off-by: Linus Torvalds <torvalds@linux-foundation.org>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 1a218c4cda552faeda3c55fcee2dd85569cc8b9c
+Author: Nathan Chancellor <nathan@kernel.org>
+Date:   Mon Apr 6 20:09:27 2020 -0700
+
+    kernel/extable.c: use address-of operator on section symbols
+    
+    commit 63174f61dfaef58dc0e813eaf6602636794f8942 upstream.
+    
+    Clang warns:
+    
+    ../kernel/extable.c:37:52: warning: array comparison always evaluates to
+    a constant [-Wtautological-compare]
+            if (main_extable_sort_needed && __stop___ex_table > __start___ex_table) {
+                                                              ^
+    1 warning generated.
+    
+    These are not true arrays, they are linker defined symbols, which are just
+    addresses.  Using the address of operator silences the warning and does
+    not change the resulting assembly with either clang/ld.lld or gcc/ld
+    (tested with diff + objdump -Dr).
+    
+    Suggested-by: Nick Desaulniers <ndesaulniers@google.com>
+    Signed-off-by: Nathan Chancellor <natechancellor@gmail.com>
+    Signed-off-by: Andrew Morton <akpm@linux-foundation.org>
+    Reviewed-by: Andrew Morton <akpm@linux-foundation.org>
+    Link: https://github.com/ClangBuiltLinux/linux/issues/892
+    Link: http://lkml.kernel.org/r/20200219202036.45702-1-natechancellor@gmail.com
+    Signed-off-by: Linus Torvalds <torvalds@linux-foundation.org>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit b1bea83acc3dd22f7d4d9c324f8d6c2617bea8be
+Author: Martin Liška <mliska@suse.cz>
+Date:   Wed May 18 09:18:53 2022 +0200
+
+    eth: sun: cassini: remove dead code
+    
+    commit 32329216ca1d6ee29c41215f18b3053bb6158541 upstream.
+    
+    Fixes the following GCC warning:
+    
+    drivers/net/ethernet/sun/cassini.c:1316:29: error: comparison between two arrays [-Werror=array-compare]
+    drivers/net/ethernet/sun/cassini.c:3783:34: error: comparison between two arrays [-Werror=array-compare]
+    
+    Note that 2 arrays should be compared by comparing of their addresses:
+    note: use ‘&cas_prog_workaroundtab[0] == &cas_prog_null[0]’ to compare the addresses
+    
+    Signed-off-by: Martin Liska <mliska@suse.cz>
+    Signed-off-by: David S. Miller <davem@davemloft.net>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit b03ff104cdc7916a4a8ea8300fd4c506cac2dce5
+Author: Linus Torvalds <torvalds@linux-foundation.org>
+Date:   Thu Jun 9 09:41:42 2022 -0700
+
+    gcc-12: disable '-Wdangling-pointer' warning for now
+    
+    commit f7d63b50898172b9eb061b9e2daad61b428792d0 upstream.
+    
+    [ Upstream commit 49beadbd47c270a00754c107a837b4f29df4c822 ]
+    
+    While the concept of checking for dangling pointers to local variables
+    at function exit is really interesting, the gcc-12 implementation is not
+    compatible with reality, and results in false positives.
+    
+    For example, gcc sees us putting things on a local list head allocated
+    on the stack, which involves exactly those kinds of pointers to the
+    local stack entry:
+    
+      In function ‘__list_add’,
+          inlined from ‘list_add_tail’ at include/linux/list.h:102:2,
+          inlined from ‘rebuild_snap_realms’ at fs/ceph/snap.c:434:2:
+      include/linux/list.h:74:19: warning: storing the address of local variable ‘realm_queue’ in ‘*&realm_27(D)->rebuild_item.prev’ [-Wdangling-pointer=]
+         74 |         new->prev = prev;
+            |         ~~~~~~~~~~^~~~~~
+    
+    But then gcc - understandably - doesn't really understand the big
+    picture how the doubly linked list works, so doesn't see how we then end
+    up emptying said list head in a loop and the pointer we added has been
+    removed.
+    
+    Gcc also complains about us (intentionally) using this as a way to store
+    a kind of fake stack trace, eg
+    
+      drivers/acpi/acpica/utdebug.c:40:38: warning: storing the address of local variable ‘current_sp’ in ‘acpi_gbl_entry_stack_pointer’ [-Wdangling-pointer=]
+         40 |         acpi_gbl_entry_stack_pointer = &current_sp;
+            |         ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^~~~~~~~~~~~~
+    
+    which is entirely reasonable from a compiler standpoint, and we may want
+    to change those kinds of patterns, but not not.
+    
+    So this is one of those "it would be lovely if the compiler were to
+    complain about us leaving dangling pointers to the stack", but not this
+    way.
+    
+    Signed-off-by: Linus Torvalds <torvalds@linux-foundation.org>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit a4eaf3475ab11930929d8f71eae1324a41902aee
+Author: Adam Borowski <kilobyte@angband.pl>
+Date:   Mon Nov 15 18:32:08 2021 +0100
+
+    ACPI: thermal: drop an always true check
+    
+    commit e5b5d25444e9ee3ae439720e62769517d331fa39 upstream.
+    
+    Address of a field inside a struct can't possibly be null; gcc-12 warns
+    about this.
+    
+    Signed-off-by: Adam Borowski <kilobyte@angband.pl>
+    Signed-off-by: Rafael J. Wysocki <rafael.j.wysocki@intel.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 40ea89a47136e6163150a13d2ac2f3674865e739
+Author: Kees Cook <keescook@chromium.org>
+Date:   Sun Feb 27 11:59:18 2022 -0800
+
+    x86/boot: Wrap literal addresses in absolute_pointer()
+    
+    commit aeb84412037b89e06f45e382f044da6f200e12f8 upstream.
+    
+    GCC 11 (incorrectly[1]) assumes that literal values cast to (void *)
+    should be treated like a NULL pointer with an offset, and raises
+    diagnostics when doing bounds checking under -Warray-bounds. GCC 12
+    got "smarter" about finding these:
+    
+      In function 'rdfs8',
+          inlined from 'vga_recalc_vertical' at /srv/code/arch/x86/boot/video-mode.c:124:29,
+          inlined from 'set_mode' at /srv/code/arch/x86/boot/video-mode.c:163:3:
+      /srv/code/arch/x86/boot/boot.h:114:9: warning: array subscript 0 is outside array bounds of 'u8[0]' {aka 'unsigned char[]'} [-Warray-bounds]
+        114 |         asm volatile("movb %%fs:%1,%0" : "=q" (v) : "m" (*(u8 *)addr));
+            |         ^~~
+    
+    This has been solved in other places[2] already by using the recently
+    added absolute_pointer() macro. Do the same here.
+    
+      [1] https://gcc.gnu.org/bugzilla/show_bug.cgi?id=99578
+      [2] https://lore.kernel.org/all/20210912160149.2227137-1-linux@roeck-us.net/
+    
+    Signed-off-by: Kees Cook <keescook@chromium.org>
+    Signed-off-by: Borislav Petkov <bp@suse.de>
+    Reviewed-by: Guenter Roeck <linux@roeck-us.net>
+    Link: https://lore.kernel.org/r/20220227195918.705219-1-keescook@chromium.org
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit da161d69e8c4dbd4babeb08c002f74f6b0f5e99e
+Author: Damien Le Moal <dlemoal@kernel.org>
+Date:   Mon May 22 20:09:57 2023 +0900
+
+    ata: libata-scsi: Use correct device no in ata_find_dev()
+    
+    commit 7f875850f20a42f488840c9df7af91ef7db2d576 upstream.
+    
+    For devices not attached to a port multiplier and managed directly by
+    libata, the device number passed to ata_find_dev() must always be lower
+    than the maximum number of devices returned by ata_link_max_devices().
+    That is 1 for SATA devices or 2 for an IDE link with master+slave
+    devices. This device number is the SCSI device ID which matches these
+    constraints as the IDs are generated per port and so never exceed the
+    maximum number of devices for the link being used.
+    
+    However, for libsas managed devices, SCSI device IDs are assigned per
+    struct scsi_host, leading to device IDs for SATA devices that can be
+    well in excess of libata per-link maximum number of devices. This
+    results in ata_find_dev() to always return NULL for libsas managed
+    devices except for the first device of the target scsi_host with ID
+    (device number) equal to 0. This issue is visible by executing the
+    hdparm utility, which fails. E.g.:
+    
+    hdparm -i /dev/sdX
+    /dev/sdX:
+      HDIO_GET_IDENTITY failed: No message of desired type
+    
+    Fix this by rewriting ata_find_dev() to ignore the device number for
+    non-PMP attached devices with a link with at most 1 device, that is SATA
+    devices. For these, the device number 0 is always used to
+    return the correct pointer to the struct ata_device of the port link.
+    This change excludes IDE master/slave setups (maximum number of devices
+    per link is 2) and port-multiplier attached devices. Also, to be
+    consistant with the fact that SCSI device IDs and channel numbers used
+    as device numbers are both unsigned int, change the devno argument of
+    ata_find_dev() to unsigned int.
+    
+    Reported-by: Xingui Yang <yangxingui@huawei.com>
+    Fixes: 41bda9c98035 ("libata-link: update hotplug to handle PMP links")
+    Cc: stable@vger.kernel.org
+    Signed-off-by: Damien Le Moal <dlemoal@kernel.org>
+    Reviewed-by: Jason Yan <yanaijie@huawei.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 7f5d014e6feb5cffd002260e24d0f1fa8b94699c
+Author: Bart Van Assche <bvanassche@acm.org>
+Date:   Mon May 29 12:50:34 2023 -0700
+
+    scsi: stex: Fix gcc 13 warnings
+    
+    commit 6d074ce231772c66e648a61f6bd2245e7129d1f5 upstream.
+    
+    gcc 13 may assign another type to enumeration constants than gcc 12. Split
+    the large enum at the top of source file stex.c such that the type of the
+    constants used in time expressions is changed back to the same type chosen
+    by gcc 12. This patch suppresses compiler warnings like this one:
+    
+    In file included from ./include/linux/bitops.h:7,
+                     from ./include/linux/kernel.h:22,
+                     from drivers/scsi/stex.c:13:
+    drivers/scsi/stex.c: In function ‘stex_common_handshake’:
+    ./include/linux/typecheck.h:12:25: error: comparison of distinct pointer types lacks a cast [-Werror]
+       12 |         (void)(&__dummy == &__dummy2); \
+          |                         ^~
+    ./include/linux/jiffies.h:106:10: note: in expansion of macro ‘typecheck’
+      106 |          typecheck(unsigned long, b) && \
+          |          ^~~~~~~~~
+    drivers/scsi/stex.c:1035:29: note: in expansion of macro ‘time_after’
+     1035 |                         if (time_after(jiffies, before + MU_MAX_DELAY * HZ)) {
+          |                             ^~~~~~~~~~
+    
+    See also https://gcc.gnu.org/bugzilla/show_bug.cgi?id=107405.
+    
+    Cc: stable@vger.kernel.org
+    Acked-by: Randy Dunlap <rdunlap@infradead.org>
+    Tested-by: Randy Dunlap <rdunlap@infradead.org> # build-tested
+    Signed-off-by: Bart Van Assche <bvanassche@acm.org>
+    Link: https://lore.kernel.org/r/20230529195034.3077-1-bvanassche@acm.org
+    Signed-off-by: Martin K. Petersen <martin.petersen@oracle.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 3bd7816c9aad1281681c34e7cf9ab3cfdddcaeff
+Author: Uttkarsh Aggarwal <quic_uaggarwa@quicinc.com>
+Date:   Thu May 25 14:58:54 2023 +0530
+
+    usb: gadget: f_fs: Add unbind event before functionfs_unbind
+    
+    commit efb6b535207395a5c7317993602e2503ca8cb4b3 upstream.
+    
+    While exercising the unbind path, with the current implementation
+    the functionfs_unbind would be calling which waits for the ffs->mutex
+    to be available, however within the same time ffs_ep0_read is invoked
+    & if no setup packets are pending, it will invoke function
+    wait_event_interruptible_exclusive_locked_irq which by definition waits
+    for the ev.count to be increased inside the same mutex for which
+    functionfs_unbind is waiting.
+    This creates deadlock situation because the functionfs_unbind won't
+    get the lock until ev.count is increased which can only happen if
+    the caller ffs_func_unbind can proceed further.
+    
+    Following is the illustration:
+    
+            CPU1                            CPU2
+    
+    ffs_func_unbind()               ffs_ep0_read()
+                                    mutex_lock(ffs->mutex)
+                                    wait_event(ffs->ev.count)
+    functionfs_unbind()
+      mutex_lock(ffs->mutex)
+      mutex_unlock(ffs->mutex)
+    
+    ffs_event_add()
+    
+    <deadlock>
+    
+    Fix this by moving the event unbind before functionfs_unbind
+    to ensure the ev.count is incrased properly.
+    
+    Fixes: 6a19da111057 ("usb: gadget: f_fs: Prevent race during ffs_ep0_queue_wait")
+    Cc: stable <stable@kernel.org>
+    Signed-off-by: Uttkarsh Aggarwal <quic_uaggarwa@quicinc.com>
+    Link: https://lore.kernel.org/r/20230525092854.7992-1-quic_uaggarwa@quicinc.com
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit a353d0be2bd9d8eda65fd161775ec2c4d541da03
+Author: Sebastian Krzyszkowiak <sebastian.krzyszkowiak@puri.sm>
+Date:   Fri May 26 16:38:11 2023 +0200
+
+    net: usb: qmi_wwan: Set DTR quirk for BroadMobi BM818
+    
+    commit 36936a56e1814f6c526fe71fbf980beab4f5577a upstream.
+    
+    BM818 is based on Qualcomm MDM9607 chipset.
+    
+    Fixes: 9a07406b00cd ("net: usb: qmi_wwan: Add the BroadMobi BM818 card")
+    Cc: stable@vger.kernel.org
+    Signed-off-by: Sebastian Krzyszkowiak <sebastian.krzyszkowiak@puri.sm>
+    Acked-by: Bjørn Mork <bjorn@mork.no>
+    Link: https://lore.kernel.org/r/20230526-bm818-dtr-v1-1-64bbfa6ba8af@puri.sm
+    Signed-off-by: Jakub Kicinski <kuba@kernel.org>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit ced9c4844091cb3b54e739cef1b6560053f66a25
+Author: Marek Vasut <marex@denx.de>
+Date:   Thu May 11 02:43:30 2023 +0200
+
+    iio: dac: mcp4725: Fix i2c_master_send() return value handling
+    
+    commit 09d3bec7009186bdba77039df01e5834788b3f95 upstream.
+    
+    The i2c_master_send() returns number of sent bytes on success,
+    or negative on error. The suspend/resume callbacks expect zero
+    on success and non-zero on error. Adapt the return value of the
+    i2c_master_send() to the expectation of the suspend and resume
+    callbacks, including proper validation of the return value.
+    
+    Fixes: cf35ad61aca2 ("iio: add mcp4725 I2C DAC driver")
+    Signed-off-by: Marek Vasut <marex@denx.de>
+    Reviewed-by: Uwe Kleine-König <u.kleine-koenig@pengutronix.de>
+    Link: https://lore.kernel.org/r/20230511004330.206942-1-marex@denx.de
+    Cc: <Stable@vger.kernel.org>
+    Signed-off-by: Jonathan Cameron <Jonathan.Cameron@huawei.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit b1ac87af3c94dc9f5a07fd6d3dd41f3680b619e8
+Author: Nikita Zhandarovich <n.zhandarovich@fintech.ru>
+Date:   Mon Apr 17 09:01:48 2023 -0700
+
+    HID: wacom: avoid integer overflow in wacom_intuos_inout()
+    
+    commit bd249b91977b768ea02bf84d04625d2690ad2b98 upstream.
+    
+    If high bit is set to 1 in ((data[3] & 0x0f << 28), after all arithmetic
+    operations and integer promotions are done, high bits in
+    wacom->serial[idx] will be filled with 1s as well.
+    Avoid this, albeit unlikely, issue by specifying left operand's __u64
+    type for the right operand.
+    
+    Found by Linux Verification Center (linuxtesting.org) with static
+    analysis tool SVACE.
+    
+    Fixes: 3bea733ab212 ("USB: wacom tablet driver reorganization")
+    Signed-off-by: Nikita Zhandarovich <n.zhandarovich@fintech.ru>
+    Reviewed-by: Ping Cheng <ping.cheng@wacom.com>
+    Cc: stable@vger.kernel.org
+    Signed-off-by: Jiri Kosina <jkosina@suse.cz>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit ebe2854e2c8341d08f490d8496a406e9dc718be2
+Author: Jiakai Luo <jkluo@hust.edu.cn>
+Date:   Sat Apr 22 06:34:06 2023 -0700
+
+    iio: adc: mxs-lradc: fix the order of two cleanup operations
+    
+    commit 27b2ed5b6d53cd62fc61c3f259ae52f5cac23b66 upstream.
+    
+    Smatch reports:
+    drivers/iio/adc/mxs-lradc-adc.c:766 mxs_lradc_adc_probe() warn:
+    missing unwind goto?
+    
+    the order of three init operation:
+    1.mxs_lradc_adc_trigger_init
+    2.iio_triggered_buffer_setup
+    3.mxs_lradc_adc_hw_init
+    
+    thus, the order of three cleanup operation should be:
+    1.mxs_lradc_adc_hw_stop
+    2.iio_triggered_buffer_cleanup
+    3.mxs_lradc_adc_trigger_remove
+    
+    we exchange the order of two cleanup operations,
+    introducing the following differences:
+    1.if mxs_lradc_adc_trigger_init fails, returns directly;
+    2.if trigger_init succeeds but iio_triggered_buffer_setup fails,
+    goto err_trig and remove the trigger.
+    
+    In addition, we also reorder the unwind that goes on in the
+    remove() callback to match the new ordering.
+    
+    Fixes: 6dd112b9f85e ("iio: adc: mxs-lradc: Add support for ADC driver")
+    Signed-off-by: Jiakai Luo <jkluo@hust.edu.cn>
+    Reviewed-by: Dongliang Mu <dzm91@hust.edu.cn>
+    Link: https://lore.kernel.org/r/20230422133407.72908-1-jkluo@hust.edu.cn
+    Cc: <Stable@vger.kernel.org>
+    Signed-off-by: Jonathan Cameron <Jonathan.Cameron@huawei.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit f4eb30eae522c34de4545e72e79ecf584fbf566d
+Author: Dan Carpenter <dan.carpenter@linaro.org>
+Date:   Fri May 5 12:22:09 2023 +0300
+
+    mailbox: mailbox-test: fix a locking issue in mbox_test_message_write()
+    
+    [ Upstream commit 8fe72b76db79d694858e872370df49676bc3be8c ]
+    
+    There was a bug where this code forgot to unlock the tdev->mutex if the
+    kzalloc() failed.  Fix this issue, by moving the allocation outside the
+    lock.
+    
+    Fixes: 2d1e952a2b8e ("mailbox: mailbox-test: Fix potential double-free in mbox_test_message_write()")
+    Signed-off-by: Dan Carpenter <dan.carpenter@linaro.org>
+    Reviewed-by: Lee Jones <lee@kernel.org>
+    Signed-off-by: Jassi Brar <jaswinder.singh@linaro.org>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit feb61398ff25a0ed08644ff852bed301c52ee484
+Author: Arnd Bergmann <arnd@arndb.de>
+Date:   Tue May 16 21:45:34 2023 +0200
+
+    atm: hide unused procfs functions
+    
+    [ Upstream commit fb1b7be9b16c1f4626969ba4e95a97da2a452b41 ]
+    
+    When CONFIG_PROC_FS is disabled, the function declarations for some
+    procfs functions are hidden, but the definitions are still build,
+    as shown by this compiler warning:
+    
+    net/atm/resources.c:403:7: error: no previous prototype for 'atm_dev_seq_start' [-Werror=missing-prototypes]
+    net/atm/resources.c:409:6: error: no previous prototype for 'atm_dev_seq_stop' [-Werror=missing-prototypes]
+    net/atm/resources.c:414:7: error: no previous prototype for 'atm_dev_seq_next' [-Werror=missing-prototypes]
+    
+    Add another #ifdef to leave these out of the build.
+    
+    Signed-off-by: Arnd Bergmann <arnd@arndb.de>
+    Link: https://lore.kernel.org/r/20230516194625.549249-2-arnd@kernel.org
+    Signed-off-by: Jakub Kicinski <kuba@kernel.org>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 7870a78a35793cdbdc1b62e5273eea3741e62568
+Author: Arnd Bergmann <arnd@arndb.de>
+Date:   Tue May 16 21:50:42 2023 +0200
+
+    ALSA: oss: avoid missing-prototype warnings
+    
+    [ Upstream commit 040b5a046a9e18098580d3ccd029e2318fca7859 ]
+    
+    Two functions are defined and used in pcm_oss.c but also optionally
+    used from io.c, with an optional prototype. If CONFIG_SND_PCM_OSS_PLUGINS
+    is disabled, this causes a warning as the functions are not static
+    and have no prototype:
+    
+    sound/core/oss/pcm_oss.c:1235:19: error: no previous prototype for 'snd_pcm_oss_write3' [-Werror=missing-prototypes]
+    sound/core/oss/pcm_oss.c:1266:19: error: no previous prototype for 'snd_pcm_oss_read3' [-Werror=missing-prototypes]
+    
+    Avoid this by making the prototypes unconditional.
+    
+    Signed-off-by: Arnd Bergmann <arnd@arndb.de>
+    Link: https://lore.kernel.org/r/20230516195046.550584-2-arnd@kernel.org
+    Signed-off-by: Takashi Iwai <tiwai@suse.de>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 24b5b2faacdb5754da40b02477305d79146dbdc3
+Author: Tom Rix <trix@redhat.com>
+Date:   Sun May 14 10:00:10 2023 -0400
+
+    netfilter: conntrack: define variables exp_nat_nla_policy and any_addr with CONFIG_NF_NAT
+    
+    [ Upstream commit 224a876e37543eee111bf9b6aa4935080e619335 ]
+    
+    gcc with W=1 and ! CONFIG_NF_NAT
+    net/netfilter/nf_conntrack_netlink.c:3463:32: error:
+      ‘exp_nat_nla_policy’ defined but not used [-Werror=unused-const-variable=]
+     3463 | static const struct nla_policy exp_nat_nla_policy[CTA_EXPECT_NAT_MAX+1] = {
+          |                                ^~~~~~~~~~~~~~~~~~
+    net/netfilter/nf_conntrack_netlink.c:2979:33: error:
+      ‘any_addr’ defined but not used [-Werror=unused-const-variable=]
+     2979 | static const union nf_inet_addr any_addr;
+          |                                 ^~~~~~~~
+    
+    These variables use is controlled by CONFIG_NF_NAT, so should their definitions.
+    
+    Signed-off-by: Tom Rix <trix@redhat.com>
+    Reviewed-by: Simon Horman <simon.horman@corigine.com>
+    Signed-off-by: Florian Westphal <fw@strlen.de>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 17444fc1204436187ee653c56f6246e9e795a079
+Author: Arnd Bergmann <arnd@arndb.de>
+Date:   Tue May 16 20:34:22 2023 +0200
+
+    wifi: b43: fix incorrect __packed annotation
+    
+    [ Upstream commit 212457ccbd60dba34f965e4ffbe62f0e4f970538 ]
+    
+    clang warns about an unpacked structure inside of a packed one:
+    
+    drivers/net/wireless/broadcom/b43/b43.h:654:4: error: field data within 'struct b43_iv' is less aligned than 'union (unnamed union at /home/arnd/arm-soc/drivers/net/wireless/broadcom/b43/b43.h:651:2)' and is usually due to 'struct b43_iv' being packed, which can lead to unaligned accesses [-Werror,-Wunaligned-access]
+    
+    The problem here is that the anonymous union has the default alignment
+    from its members, apparently because the original author mixed up the
+    placement of the __packed attribute by placing it next to the struct
+    member rather than the union definition. As the struct itself is
+    also marked as __packed, there is no need to mark its members, so just
+    move the annotation to the inner type instead.
+    
+    As Michael noted, the same problem is present in b43legacy, so
+    change both at the same time.
+    
+    Acked-by: Michael Büsch <m@bues.ch>
+    Reported-by: kernel test robot <lkp@intel.com>
+    Reviewed-by: Simon Horman <simon.horman@corigine.com>
+    Tested-by: Larry Finger <Larry.Finger@lwfinger.net>
+    Link: https://lore.kernel.org/oe-kbuild-all/202305160749.ay1HAoyP-lkp@intel.com/
+    Signed-off-by: Arnd Bergmann <arnd@arndb.de>
+    Signed-off-by: Kalle Valo <kvalo@kernel.org>
+    Link: https://lore.kernel.org/r/20230516183442.536589-1-arnd@kernel.org
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 44a55866f209554182edc20330d07e8788c9c435
+Author: Wenchao Hao <haowenchao2@huawei.com>
+Date:   Mon May 15 15:01:56 2023 +0800
+
+    scsi: core: Decrease scsi_device's iorequest_cnt if dispatch failed
+    
+    [ Upstream commit 09e797c8641f6ad435c33ae24c223351197ea29a ]
+    
+    If scsi_dispatch_cmd() failed, the SCSI command was not sent to the target,
+    scsi_queue_rq() would return BLK_STS_RESOURCE and the related request would
+    be requeued. The timeout of this request would not fire, no one would
+    increase iodone_cnt.
+    
+    The above flow would result the iodone_cnt smaller than iorequest_cnt.  So
+    decrease the iorequest_cnt if dispatch failed to workaround the issue.
+    
+    Signed-off-by: Wenchao Hao <haowenchao2@huawei.com>
+    Reported-by: Ming Lei <ming.lei@redhat.com>
+    Closes: https://lore.kernel.org/r/ZF+zB+bB7iqe0wGd@ovpn-8-17.pek2.redhat.com
+    Link: https://lore.kernel.org/r/20230515070156.1790181-3-haowenchao2@huawei.com
+    Reviewed-by: Ming Lei <ming.lei@redhat.com>
+    Signed-off-by: Martin K. Petersen <martin.petersen@oracle.com>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit cdf7300c0f97d17de809be118e6032c38b4364bf
+Author: Yun Lu <luyun@kylinos.cn>
+Date:   Fri May 12 09:20:55 2023 +0800
+
+    wifi: rtl8xxxu: fix authentication timeout due to incorrect RCR value
+    
+    [ Upstream commit 20429444e653ee8242dfbf815c0c37866beb371b ]
+    
+    When using rtl8192cu with rtl8xxxu driver to connect wifi, there is a
+    probability of failure, which shows "authentication with ... timed out".
+    Through debugging, it was found that the RCR register has been inexplicably
+    modified to an incorrect value, resulting in the nic not being able to
+    receive authenticated frames.
+    
+    To fix this problem, add regrcr in rtl8xxxu_priv struct, and store
+    the RCR value every time the register is written, and use it the next
+    time the register need to be modified.
+    
+    Signed-off-by: Yun Lu <luyun@kylinos.cn>
+    Link: https://lore.kernel.org/all/20230427020512.1221062-1-luyun_611@163.com
+    Signed-off-by: Kalle Valo <kvalo@kernel.org>
+    Link: https://lore.kernel.org/r/20230512012055.2990472-1-luyun_611@163.com
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 66e262ad9b35615b2a1b1cad4751e93e1de90634
+Author: Hyunwoo Kim <v4bel@theori.io>
+Date:   Mon Nov 21 06:33:08 2022 +0000
+
+    media: dvb-core: Fix use-after-free due to race condition at dvb_ca_en50221
+    
+    [ Upstream commit 280a8ab81733da8bc442253c700a52c4c0886ffd ]
+    
+    If the device node of dvb_ca_en50221 is open() and the
+    device is disconnected, a UAF may occur when calling
+    close() on the device node.
+    
+    The root cause is that wake_up() and wait_event() for
+    dvbdev->wait_queue are not implemented.
+    
+    So implement wait_event() function in dvb_ca_en50221_release()
+    and add 'remove_mutex' which prevents race condition
+    for 'ca->exit'.
+    
+    [mchehab: fix a checkpatch warning]
+    
+    Link: https://lore.kernel.org/linux-media/20221121063308.GA33821@ubuntu
+    Signed-off-by: Hyunwoo Kim <v4bel@theori.io>
+    Signed-off-by: Mauro Carvalho Chehab <mchehab@kernel.org>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 72197f21d9a6c47286a57d323f6858fbed1d0f77
+Author: Takashi Iwai <tiwai@suse.de>
+Date:   Fri May 12 16:18:00 2023 +0100
+
+    media: dvb-core: Fix kernel WARNING for blocking operation in wait_event*()
+    
+    [ Upstream commit b8c75e4a1b325ea0a9433fa8834be97b5836b946 ]
+    
+    Using a semaphore in the wait_event*() condition is no good idea.
+    It hits a kernel WARN_ON() at prepare_to_wait_event() like:
+      do not call blocking ops when !TASK_RUNNING; state=1 set at
+      prepare_to_wait_event+0x6d/0x690
+    
+    For avoiding the potential deadlock, rewrite to an open-coded loop
+    instead.  Unlike the loop in wait_event*(), this uses wait_woken()
+    after the condition check, hence the task state stays consistent.
+    
+    CVE-2023-31084 was assigned to this bug.
+    
+    Link: https://lore.kernel.org/r/CA+UBctCu7fXn4q41O_3=id1+OdyQ85tZY1x+TkT-6OVBL6KAUw@mail.gmail.com/
+    
+    Link: https://lore.kernel.org/linux-media/20230512151800.1874-1-tiwai@suse.de
+    Reported-by: Yu Hao <yhao016@ucr.edu>
+    Closes: https://nvd.nist.gov/vuln/detail/CVE-2023-31084
+    Signed-off-by: Takashi Iwai <tiwai@suse.de>
+    Signed-off-by: Mauro Carvalho Chehab <mchehab@kernel.org>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit cf412b0543b77d01f74ae2303d7f8a97e6bff686
+Author: Hyunwoo Kim <imv4bel@gmail.com>
+Date:   Thu Nov 17 04:59:25 2022 +0000
+
+    media: ttusb-dec: fix memory leak in ttusb_dec_exit_dvb()
+    
+    [ Upstream commit 517a281338322ff8293f988771c98aaa7205e457 ]
+    
+    Since dvb_frontend_detach() is not called in ttusb_dec_exit_dvb(),
+    which is called when the device is disconnected, dvb_frontend_free()
+    is not finally called.
+    
+    This causes a memory leak just by repeatedly plugging and
+    unplugging the device.
+    
+    Fix this issue by adding dvb_frontend_detach() to ttusb_dec_exit_dvb().
+    
+    Link: https://lore.kernel.org/linux-media/20221117045925.14297-5-imv4bel@gmail.com
+    Signed-off-by: Hyunwoo Kim <imv4bel@gmail.com>
+    Signed-off-by: Mauro Carvalho Chehab <mchehab@kernel.org>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 5790ceda6c329f8510f15d3b493273e2ecaa32d6
+Author: Wei Chen <harperchen1110@gmail.com>
+Date:   Wed Mar 15 13:45:18 2023 +0000
+
+    media: netup_unidvb: fix irq init by register it at the end of probe
+    
+    [ Upstream commit e6ad6233592593079db5c8fa592c298e51bc1356 ]
+    
+    IRQ handler netup_spi_interrupt() takes spinlock spi->lock. The lock
+    is initialized in netup_spi_init(). However, irq handler is registered
+    before initializing the lock.
+    
+    Spinlock dma->lock and i2c->lock suffer from the same problem.
+    
+    Fix this by registering the irq at the end of probe.
+    
+    Link: https://lore.kernel.org/linux-media/20230315134518.1074497-1-harperchen1110@gmail.com
+    Signed-off-by: Wei Chen <harperchen1110@gmail.com>
+    Signed-off-by: Mauro Carvalho Chehab <mchehab@kernel.org>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 4fce0f3b8c84c0aea86a994e4455c1e9919aa376
+Author: Wei Chen <harperchen1110@gmail.com>
+Date:   Tue Mar 28 13:44:16 2023 +0100
+
+    media: dvb-usb: dw2102: fix uninit-value in su3000_read_mac_address
+    
+    [ Upstream commit a3fd1ef27aa686d871cefe207bd6168c4b0cd29e ]
+    
+    In su3000_read_mac_address, if i2c_transfer fails to execute two
+    messages, array mac address will not be initialized. Without handling
+    such error, later in function dvb_usb_adapter_dvb_init, proposed_mac
+    is accessed before initialization.
+    
+    Fix this error by returning a negative value if message execution fails.
+    
+    Link: https://lore.kernel.org/linux-media/20230328124416.560889-1-harperchen1110@gmail.com
+    Signed-off-by: Wei Chen <harperchen1110@gmail.com>
+    Signed-off-by: Mauro Carvalho Chehab <mchehab@kernel.org>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 34fa05ea2d2e2a68f370803ba1284329dc01d858
+Author: Wei Chen <harperchen1110@gmail.com>
+Date:   Mon Mar 13 09:50:08 2023 +0000
+
+    media: dvb-usb: digitv: fix null-ptr-deref in digitv_i2c_xfer()
+    
+    [ Upstream commit 9ded5bd2a49ce3015b7c936743eec0a0e6e11f0c ]
+    
+    In digitv_i2c_xfer, msg is controlled by user. When msg[i].buf
+    is null and msg[i].len is zero, former checks on msg[i].buf would be
+    passed. Malicious data finally reach digitv_i2c_xfer. If accessing
+    msg[i].buf[0] without sanity check, null ptr deref would happen. We add
+    check on msg[i].len to prevent crash.
+    
+    Similar commit:
+    commit 0ed554fd769a ("media: dvb-usb: az6027: fix null-ptr-deref in az6027_i2c_xfer()")
+    
+    Link: https://lore.kernel.org/linux-media/20230313095008.1039689-1-harperchen1110@gmail.com
+    Signed-off-by: Wei Chen <harperchen1110@gmail.com>
+    Signed-off-by: Mauro Carvalho Chehab <mchehab@kernel.org>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 52cfc5c29b2073d51e19f718af19580e3f595a66
+Author: Zhang Shurong <zhang_shurong@foxmail.com>
+Date:   Sun May 7 15:52:47 2023 +0100
+
+    media: dvb-usb-v2: rtl28xxu: fix null-ptr-deref in rtl28xxu_i2c_xfer
+    
+    [ Upstream commit aa4a447b81b84f69c1a89ad899df157f386d7636 ]
+    
+    In rtl28xxu_i2c_xfer, msg is controlled by user. When msg[i].buf
+    is null and msg[i].len is zero, former checks on msg[i].buf would be
+    passed. Malicious data finally reach rtl28xxu_i2c_xfer. If accessing
+    msg[i].buf[0] without sanity check, null ptr deref would happen.
+    We add check on msg[i].len to prevent crash.
+    
+    Similar commit:
+    commit 0ed554fd769a
+    ("media: dvb-usb: az6027: fix null-ptr-deref in az6027_i2c_xfer()")
+    
+    Link: https://lore.kernel.org/linux-media/tencent_3623572106754AC2F266B316798B0F6CCA05@qq.com
+    Signed-off-by: Zhang Shurong <zhang_shurong@foxmail.com>
+    Signed-off-by: Mauro Carvalho Chehab <mchehab@kernel.org>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit d81cd59981e86bab58b2b310e2cc4fa73ee9fea0
+Author: Wei Chen <harperchen1110@gmail.com>
+Date:   Mon Mar 13 09:27:51 2023 +0000
+
+    media: dvb-usb-v2: ce6230: fix null-ptr-deref in ce6230_i2c_master_xfer()
+    
+    [ Upstream commit dff919090155fb22679869e8469168f270dcd97f ]
+    
+    In ce6230_i2c_master_xfer, msg is controlled by user. When msg[i].buf
+    is null and msg[i].len is zero, former checks on msg[i].buf would be
+    passed. Malicious data finally reach ce6230_i2c_master_xfer. If accessing
+    msg[i].buf[0] without sanity check, null ptr deref would happen. We add
+    check on msg[i].len to prevent crash.
+    
+    Similar commit:
+    commit 0ed554fd769a ("media: dvb-usb: az6027: fix null-ptr-deref in az6027_i2c_xfer()")
+    
+    Link: https://lore.kernel.org/linux-media/20230313092751.209496-1-harperchen1110@gmail.com
+    Signed-off-by: Wei Chen <harperchen1110@gmail.com>
+    Signed-off-by: Mauro Carvalho Chehab <mchehab@kernel.org>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 58ad4aa9972c4ef006fa09203d22c13eac98f1a4
+Author: Wei Chen <harperchen1110@gmail.com>
+Date:   Mon Mar 13 08:58:53 2023 +0000
+
+    media: dvb-usb-v2: ec168: fix null-ptr-deref in ec168_i2c_xfer()
+    
+    [ Upstream commit a6dcefcc08eca1bf4e3d213c97c3cfb75f377935 ]
+    
+    In ec168_i2c_xfer, msg is controlled by user. When msg[i].buf is null
+    and msg[i].len is zero, former checks on msg[i].buf would be passed.
+    If accessing msg[i].buf[0] without sanity check, null pointer deref
+    would happen. We add check on msg[i].len to prevent crash.
+    
+    Similar commit:
+    commit 0ed554fd769a ("media: dvb-usb: az6027: fix null-ptr-deref in az6027_i2c_xfer()")
+    
+    Link: https://lore.kernel.org/linux-media/20230313085853.3252349-1-harperchen1110@gmail.com
+    Signed-off-by: Wei Chen <harperchen1110@gmail.com>
+    Signed-off-by: Mauro Carvalho Chehab <mchehab@kernel.org>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit db7ae19f4524ced86cd051cd123fba74ef8362c0
+Author: Wei Chen <harperchen1110@gmail.com>
+Date:   Fri Mar 10 16:56:04 2023 +0000
+
+    media: dvb-usb: az6027: fix three null-ptr-deref in az6027_i2c_xfer()
+    
+    [ Upstream commit 858e97d7956d17a2cb56a9413468704a4d5abfe1 ]
+    
+    In az6027_i2c_xfer, msg is controlled by user. When msg[i].buf is null,
+    commit 0ed554fd769a ("media: dvb-usb: az6027: fix null-ptr-deref in
+    az6027_i2c_xfer()") fix the null-ptr-deref bug when msg[i].addr is 0x99.
+    However, null-ptr-deref also happens when msg[i].addr is 0xd0 and 0xc0.
+    We add check on msg[i].len to prevent null-ptr-deref.
+    
+    Link: https://lore.kernel.org/linux-media/20230310165604.3093483-1-harperchen1110@gmail.com
+    Signed-off-by: Wei Chen <harperchen1110@gmail.com>
+    Signed-off-by: Mauro Carvalho Chehab <mchehab@kernel.org>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 6d1ecded01dece2e40d65f94860c47c55a12ce62
+Author: Paweł Anikiel <pan@semihalf.com>
+Date:   Mon May 8 13:30:37 2023 +0200
+
+    ASoC: ssm2602: Add workaround for playback distortions
+    
+    [ Upstream commit f63550e2b165208a2f382afcaf5551df9569e1d4 ]
+    
+    Apply a workaround for what appears to be a hardware quirk.
+    
+    The problem seems to happen when enabling "whole chip power" (bit D7
+    register R6) for the very first time after the chip receives power. If
+    either "output" (D4) or "DAC" (D3) aren't powered on at that time,
+    playback becomes very distorted later on.
+    
+    This happens on the Google Chameleon v3, as well as on a ZYBO Z7-10:
+    https://ez.analog.com/audio/f/q-a/543726/solved-ssm2603-right-output-offset-issue/480229
+    I suspect this happens only when using an external MCLK signal (which
+    is the case for both of these boards).
+    
+    Here are some experiments run on a Google Chameleon v3. These were run
+    in userspace using a wrapper around the i2cset utility:
+    ssmset() {
+            i2cset -y 0 0x1a $(($1*2)) $2
+    }
+    
+    For each of the following sequences, we apply power to the ssm2603
+    chip, set the configuration registers R0-R5 and R7-R8, run the selected
+    sequence, and check for distortions on playback.
+    
+      ssmset 0x09 0x01 # core
+      ssmset 0x06 0x07 # chip, out, dac
+      OK
+    
+      ssmset 0x09 0x01 # core
+      ssmset 0x06 0x87 # out, dac
+      ssmset 0x06 0x07 # chip
+      OK
+    
+      (disable MCLK)
+      ssmset 0x09 0x01 # core
+      ssmset 0x06 0x1f # chip
+      ssmset 0x06 0x07 # out, dac
+      (enable MCLK)
+      OK
+    
+      ssmset 0x09 0x01 # core
+      ssmset 0x06 0x1f # chip
+      ssmset 0x06 0x07 # out, dac
+      NOT OK
+    
+      ssmset 0x06 0x1f # chip
+      ssmset 0x09 0x01 # core
+      ssmset 0x06 0x07 # out, dac
+      NOT OK
+    
+      ssmset 0x09 0x01 # core
+      ssmset 0x06 0x0f # chip, out
+      ssmset 0x06 0x07 # dac
+      NOT OK
+    
+      ssmset 0x09 0x01 # core
+      ssmset 0x06 0x17 # chip, dac
+      ssmset 0x06 0x07 # out
+      NOT OK
+    
+    For each of the following sequences, we apply power to the ssm2603
+    chip, run the selected sequence, issue a reset with R15, configure
+    R0-R5 and R7-R8, run one of the NOT OK sequences from above, and check
+    for distortions.
+    
+      ssmset 0x09 0x01 # core
+      ssmset 0x06 0x07 # chip, out, dac
+      OK
+    
+      (disable MCLK)
+      ssmset 0x09 0x01 # core
+      ssmset 0x06 0x07 # chip, out, dac
+      (enable MCLK after reset)
+      NOT OK
+    
+      ssmset 0x09 0x01 # core
+      ssmset 0x06 0x17 # chip, dac
+      NOT OK
+    
+      ssmset 0x09 0x01 # core
+      ssmset 0x06 0x0f # chip, out
+      NOT OK
+    
+      ssmset 0x06 0x07 # chip, out, dac
+      NOT OK
+    
+    Signed-off-by: Paweł Anikiel <pan@semihalf.com
+    Link: https://lore.kernel.org/r/20230508113037.137627-8-pan@semihalf.com
+    Signed-off-by: Mark Brown <broonie@kernel.org
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 7ebdb487886f49ad5eab83b886226d6b7ef647bc
+Author: Maxim Kochetkov <fido_max@inbox.ru>
+Date:   Fri May 5 09:28:20 2023 +0300
+
+    ASoC: dwc: limit the number of overrun messages
+    
+    [ Upstream commit ab6ecfbf40fccf74b6ec2ba7ed6dd2fc024c3af2 ]
+    
+    On slow CPU (FPGA/QEMU emulated) printing overrun messages from
+    interrupt handler to uart console may leads to more overrun errors.
+    So use dev_err_ratelimited to limit the number of error messages.
+    
+    Signed-off-by: Maxim Kochetkov <fido_max@inbox.ru
+    Link: https://lore.kernel.org/r/20230505062820.21840-1-fido_max@inbox.ru
+    Signed-off-by: Mark Brown <broonie@kernel.org
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit a542d6b68c75098bb9782a006e5c6607e43eda1d
+Author: Ivan Orlov <ivan.orlov0322@gmail.com>
+Date:   Fri May 12 17:05:32 2023 +0400
+
+    nbd: Fix debugfs_create_dir error checking
+    
+    [ Upstream commit 4913cfcf014c95f0437db2df1734472fd3e15098 ]
+    
+    The debugfs_create_dir function returns ERR_PTR in case of error, and the
+    only correct way to check if an error occurred is 'IS_ERR' inline function.
+    This patch will replace the null-comparison with IS_ERR.
+    
+    Signed-off-by: Ivan Orlov <ivan.orlov0322@gmail.com>
+    Link: https://lore.kernel.org/r/20230512130533.98709-1-ivan.orlov0322@gmail.com
+    Signed-off-by: Jens Axboe <axboe@kernel.dk>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 31d6619114124829b75973ecce1ea0cef9b1ec34
+Author: Helge Deller <deller@gmx.de>
+Date:   Fri May 12 11:50:33 2023 +0200
+
+    fbdev: stifb: Fix info entry in sti_struct on error path
+    
+    [ Upstream commit 0bdf1ad8d10bd4e50a8b1a2c53d15984165f7fea ]
+    
+    Minor fix to reset the info field to NULL in case of error.
+    
+    Signed-off-by: Helge Deller <deller@gmx.de>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit a7155cc23a70cfb5d1b361eabbb84191048bc4ce
+Author: Helge Deller <deller@gmx.de>
+Date:   Sat Apr 22 23:24:26 2023 +0200
+
+    fbdev: modedb: Add 1920x1080 at 60 Hz video mode
+    
+    [ Upstream commit c8902258b2b8ecaa1b8d88c312853c5b14c2553d ]
+    
+    Add typical resolution for Full-HD monitors.
+    
+    Signed-off-by: Helge Deller <deller@gmx.de>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit e41ecd5f4fbf0b7170238961332dc2761a3ab815
+Author: Haibo Li <haibo.li@mediatek.com>
+Date:   Mon Apr 17 10:17:07 2023 +0100
+
+    ARM: 9295/1: unwind:fix unwind abort for uleb128 case
+    
+    [ Upstream commit fa3eeb638de0c1a9d2d860e5b48259facdd65176 ]
+    
+    When unwind instruction is 0xb2,the subsequent instructions
+    are uleb128 bytes.
+    For now,it uses only the first uleb128 byte in code.
+    
+    For vsp increments of 0x204~0x400,use one uleb128 byte like below:
+    0xc06a00e4 <unwind_test_work>: 0x80b27fac
+      Compact model index: 0
+      0xb2 0x7f vsp = vsp + 1024
+      0xac      pop {r4, r5, r6, r7, r8, r14}
+    
+    For vsp increments larger than 0x400,use two uleb128 bytes like below:
+    0xc06a00e4 <unwind_test_work>: @0xc0cc9e0c
+      Compact model index: 1
+      0xb2 0x81 0x01 vsp = vsp + 1032
+      0xac      pop {r4, r5, r6, r7, r8, r14}
+    The unwind works well since the decoded uleb128 byte is also 0x81.
+    
+    For vsp increments larger than 0x600,use two uleb128 bytes like below:
+    0xc06a00e4 <unwind_test_work>: @0xc0cc9e0c
+      Compact model index: 1
+      0xb2 0x81 0x02 vsp = vsp + 1544
+      0xac      pop {r4, r5, r6, r7, r8, r14}
+    In this case,the decoded uleb128 result is 0x101(vsp=0x204+(0x101<<2)).
+    While the uleb128 used in code is 0x81(vsp=0x204+(0x81<<2)).
+    The unwind aborts at this frame since it gets incorrect vsp.
+    
+    To fix this,add uleb128 decode to cover all the above case.
+    
+    Signed-off-by: Haibo Li <haibo.li@mediatek.com>
+    Reviewed-by: Linus Walleij <linus.walleij@linaro.org>
+    Reviewed-by: Alexandre Mergnat <amergnat@baylibre.com>
+    Reviewed-by: AngeloGioacchino Del Regno <angelogioacchino.delregno@collabora.com>
+    Signed-off-by: Russell King (Oracle) <rmk+kernel@armlinux.org.uk>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit c0b83b5e80dafe1eaadea6ddcd4796c6f1f5e964
+Author: Lee Jones <lee@kernel.org>
+Date:   Thu Apr 20 08:27:18 2023 +0100
+
+    mailbox: mailbox-test: Fix potential double-free in mbox_test_message_write()
+    
+    [ Upstream commit 2d1e952a2b8e5e92d8d55ac88a7cf7ca5ea591ad ]
+    
+    If a user can make copy_from_user() fail, there is a potential for
+    UAF/DF due to a lack of locking around the allocation, use and freeing
+    of the data buffers.
+    
+    This issue is not theoretical.  I managed to author a POC for it:
+    
+        BUG: KASAN: double-free in kfree+0x5c/0xac
+        Free of addr ffff29280be5de00 by task poc/356
+        CPU: 1 PID: 356 Comm: poc Not tainted 6.1.0-00001-g961aa6552c04-dirty #20
+        Hardware name: linux,dummy-virt (DT)
+        Call trace:
+         dump_backtrace.part.0+0xe0/0xf0
+         show_stack+0x18/0x40
+         dump_stack_lvl+0x64/0x80
+         print_report+0x188/0x48c
+         kasan_report_invalid_free+0xa0/0xc0
+         ____kasan_slab_free+0x174/0x1b0
+         __kasan_slab_free+0x18/0x24
+         __kmem_cache_free+0x130/0x2e0
+         kfree+0x5c/0xac
+         mbox_test_message_write+0x208/0x29c
+         full_proxy_write+0x90/0xf0
+         vfs_write+0x154/0x440
+         ksys_write+0xcc/0x180
+         __arm64_sys_write+0x44/0x60
+         invoke_syscall+0x60/0x190
+         el0_svc_common.constprop.0+0x7c/0x160
+         do_el0_svc+0x40/0xf0
+         el0_svc+0x2c/0x6c
+         el0t_64_sync_handler+0xf4/0x120
+         el0t_64_sync+0x18c/0x190
+    
+        Allocated by task 356:
+         kasan_save_stack+0x3c/0x70
+         kasan_set_track+0x2c/0x40
+         kasan_save_alloc_info+0x24/0x34
+         __kasan_kmalloc+0xb8/0xc0
+         kmalloc_trace+0x58/0x70
+         mbox_test_message_write+0x6c/0x29c
+         full_proxy_write+0x90/0xf0
+         vfs_write+0x154/0x440
+         ksys_write+0xcc/0x180
+         __arm64_sys_write+0x44/0x60
+         invoke_syscall+0x60/0x190
+         el0_svc_common.constprop.0+0x7c/0x160
+         do_el0_svc+0x40/0xf0
+         el0_svc+0x2c/0x6c
+         el0t_64_sync_handler+0xf4/0x120
+         el0t_64_sync+0x18c/0x190
+    
+        Freed by task 357:
+         kasan_save_stack+0x3c/0x70
+         kasan_set_track+0x2c/0x40
+         kasan_save_free_info+0x38/0x5c
+         ____kasan_slab_free+0x13c/0x1b0
+         __kasan_slab_free+0x18/0x24
+         __kmem_cache_free+0x130/0x2e0
+         kfree+0x5c/0xac
+         mbox_test_message_write+0x208/0x29c
+         full_proxy_write+0x90/0xf0
+         vfs_write+0x154/0x440
+         ksys_write+0xcc/0x180
+         __arm64_sys_write+0x44/0x60
+         invoke_syscall+0x60/0x190
+         el0_svc_common.constprop.0+0x7c/0x160
+         do_el0_svc+0x40/0xf0
+         el0_svc+0x2c/0x6c
+         el0t_64_sync_handler+0xf4/0x120
+         el0t_64_sync+0x18c/0x190
+    
+    Signed-off-by: Lee Jones <lee@kernel.org>
+    Signed-off-by: Jassi Brar <jaswinder.singh@linaro.org>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit cc84a92ebcca290924c8aa5a49b95548f2a46d5c
+Author: Andreas Svensson <andreas.svensson@axis.com>
+Date:   Tue May 30 16:52:23 2023 +0200
+
+    net: dsa: mv88e6xxx: Increase wait after reset deactivation
+    
+    [ Upstream commit 3c27f3d53d588618d81d30d6712459a3cc9489b8 ]
+    
+    A switch held in reset by default needs to wait longer until we can
+    reliably detect it.
+    
+    An issue was observed when testing on the Marvell 88E6393X (Link Street).
+    The driver failed to detect the switch on some upstarts. Increasing the
+    wait time after reset deactivation solves this issue.
+    
+    The updated wait time is now also the same as the wait time in the
+    mv88e6xxx_hardware_reset function.
+    
+    Fixes: 7b75e49de424 ("net: dsa: mv88e6xxx: wait after reset deactivation")
+    Signed-off-by: Andreas Svensson <andreas.svensson@axis.com>
+    Reviewed-by: Andrew Lunn <andrew@lunn.ch>
+    Link: https://lore.kernel.org/r/20230530145223.1223993-1-andreas.svensson@axis.com
+    Signed-off-by: Paolo Abeni <pabeni@redhat.com>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 67f7c85608fddfe2dac9c41b2e03f3afc2913c61
+Author: Vladislav Efanov <VEfanov@ispras.ru>
+Date:   Tue May 30 14:39:41 2023 +0300
+
+    udp6: Fix race condition in udp6_sendmsg & connect
+    
+    [ Upstream commit 448a5ce1120c5bdbce1f1ccdabcd31c7d029f328 ]
+    
+    Syzkaller got the following report:
+    BUG: KASAN: use-after-free in sk_setup_caps+0x621/0x690 net/core/sock.c:2018
+    Read of size 8 at addr ffff888027f82780 by task syz-executor276/3255
+    
+    The function sk_setup_caps (called by ip6_sk_dst_store_flow->
+    ip6_dst_store) referenced already freed memory as this memory was
+    freed by parallel task in udpv6_sendmsg->ip6_sk_dst_lookup_flow->
+    sk_dst_check.
+    
+              task1 (connect)              task2 (udp6_sendmsg)
+            sk_setup_caps->sk_dst_set |
+                                      |  sk_dst_check->
+                                      |      sk_dst_set
+                                      |      dst_release
+            sk_setup_caps references  |
+            to already freed dst_entry|
+    
+    The reason for this race condition is: sk_setup_caps() keeps using
+    the dst after transferring the ownership to the dst cache.
+    
+    Found by Linux Verification Center (linuxtesting.org) with syzkaller.
+    
+    Fixes: 1da177e4c3f4 ("Linux-2.6.12-rc2")
+    Signed-off-by: Vladislav Efanov <VEfanov@ispras.ru>
+    Signed-off-by: Paolo Abeni <pabeni@redhat.com>
+    Signed-off-by: David S. Miller <davem@davemloft.net>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit f4edd71f4fcbecf0a9bbd1e64fb461ccd5d207f9
+Author: Cambda Zhu <cambda@linux.alibaba.com>
+Date:   Sat May 27 12:03:17 2023 +0800
+
+    tcp: Return user_mss for TCP_MAXSEG in CLOSE/LISTEN state if user_mss set
+    
+    [ Upstream commit 34dfde4ad87b84d21278a7e19d92b5b2c68e6c4d ]
+    
+    This patch replaces the tp->mss_cache check in getting TCP_MAXSEG
+    with tp->rx_opt.user_mss check for CLOSE/LISTEN sock. Since
+    tp->mss_cache is initialized with TCP_MSS_DEFAULT, checking if
+    it's zero is probably a bug.
+    
+    With this change, getting TCP_MAXSEG before connecting will return
+    default MSS normally, and return user_mss if user_mss is set.
+    
+    Fixes: 1da177e4c3f4 ("Linux-2.6.12-rc2")
+    Reported-by: Jack Yang <mingliang@linux.alibaba.com>
+    Suggested-by: Eric Dumazet <edumazet@google.com>
+    Link: https://lore.kernel.org/netdev/CANn89i+3kL9pYtkxkwxwNMzvC_w3LNUum_2=3u+UyLBmGmifHA@mail.gmail.com/#t
+    Signed-off-by: Cambda Zhu <cambda@linux.alibaba.com>
+    Link: https://lore.kernel.org/netdev/14D45862-36EA-4076-974C-EA67513C92F6@linux.alibaba.com/
+    Reviewed-by: Jason Xing <kerneljasonxing@gmail.com>
+    Reviewed-by: Eric Dumazet <edumazet@google.com>
+    Link: https://lore.kernel.org/r/20230527040317.68247-1-cambda@linux.alibaba.com
+    Signed-off-by: Jakub Kicinski <kuba@kernel.org>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit bfe2d3eb92f7d8e3ca50769d5b98a66906ba7cf1
+Author: Eric Dumazet <edumazet@google.com>
+Date:   Fri May 26 15:43:42 2023 +0000
+
+    af_packet: do not use READ_ONCE() in packet_bind()
+    
+    [ Upstream commit 6ffc57ea004234d9373c57b204fd10370a69f392 ]
+    
+    A recent patch added READ_ONCE() in packet_bind() and packet_bind_spkt()
+    
+    This is better handled by reading pkt_sk(sk)->num later
+    in packet_do_bind() while appropriate lock is held.
+    
+    READ_ONCE() in writers are often an evidence of something being wrong.
+    
+    Fixes: 822b5a1c17df ("af_packet: Fix data-races of pkt_sk(sk)->num.")
+    Signed-off-by: Eric Dumazet <edumazet@google.com>
+    Reviewed-by: Willem de Bruijn <willemb@google.com>
+    Reviewed-by: Jiri Pirko <jiri@nvidia.com>
+    Reviewed-by: Kuniyuki Iwashima <kuniyu@amazon.com>
+    Link: https://lore.kernel.org/r/20230526154342.2533026-1-edumazet@google.com
+    Signed-off-by: Jakub Kicinski <kuba@kernel.org>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 41fbdefcc9b57e9ff7e49c6e60ce7a21bec1ccb7
+Author: Kuniyuki Iwashima <kuniyu@amazon.com>
+Date:   Wed May 24 16:29:34 2023 -0700
+
+    af_packet: Fix data-races of pkt_sk(sk)->num.
+    
+    [ Upstream commit 822b5a1c17df7e338b9f05d1cfe5764e37c7f74f ]
+    
+    syzkaller found a data race of pkt_sk(sk)->num.
+    
+    The value is changed under lock_sock() and po->bind_lock, so we
+    need READ_ONCE() to access pkt_sk(sk)->num without these locks in
+    packet_bind_spkt(), packet_bind(), and sk_diag_fill().
+    
+    Note that WRITE_ONCE() is already added by commit c7d2ef5dd4b0
+    ("net/packet: annotate accesses to po->bind").
+    
+    BUG: KCSAN: data-race in packet_bind / packet_do_bind
+    
+    write (marked) to 0xffff88802ffd1cee of 2 bytes by task 7322 on cpu 0:
+     packet_do_bind+0x446/0x640 net/packet/af_packet.c:3236
+     packet_bind+0x99/0xe0 net/packet/af_packet.c:3321
+     __sys_bind+0x19b/0x1e0 net/socket.c:1803
+     __do_sys_bind net/socket.c:1814 [inline]
+     __se_sys_bind net/socket.c:1812 [inline]
+     __x64_sys_bind+0x40/0x50 net/socket.c:1812
+     do_syscall_x64 arch/x86/entry/common.c:50 [inline]
+     do_syscall_64+0x3b/0x90 arch/x86/entry/common.c:80
+     entry_SYSCALL_64_after_hwframe+0x72/0xdc
+    
+    read to 0xffff88802ffd1cee of 2 bytes by task 7318 on cpu 1:
+     packet_bind+0xbf/0xe0 net/packet/af_packet.c:3322
+     __sys_bind+0x19b/0x1e0 net/socket.c:1803
+     __do_sys_bind net/socket.c:1814 [inline]
+     __se_sys_bind net/socket.c:1812 [inline]
+     __x64_sys_bind+0x40/0x50 net/socket.c:1812
+     do_syscall_x64 arch/x86/entry/common.c:50 [inline]
+     do_syscall_64+0x3b/0x90 arch/x86/entry/common.c:80
+     entry_SYSCALL_64_after_hwframe+0x72/0xdc
+    
+    value changed: 0x0300 -> 0x0000
+    
+    Reported by Kernel Concurrency Sanitizer on:
+    CPU: 1 PID: 7318 Comm: syz-executor.4 Not tainted 6.3.0-13380-g7fddb5b5300c #4
+    Hardware name: QEMU Standard PC (i440FX + PIIX, 1996), BIOS rel-1.16.0-0-gd239552ce722-prebuilt.qemu.org 04/01/2014
+    
+    Fixes: 96ec6327144e ("packet: Diag core and basic socket info dumping")
+    Fixes: 1da177e4c3f4 ("Linux-2.6.12-rc2")
+    Reported-by: syzkaller <syzkaller@googlegroups.com>
+    Signed-off-by: Kuniyuki Iwashima <kuniyu@amazon.com>
+    Reviewed-by: Willem de Bruijn <willemb@google.com>
+    Link: https://lore.kernel.org/r/20230524232934.50950-1-kuniyu@amazon.com
+    Signed-off-by: Jakub Kicinski <kuba@kernel.org>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 38836ee24eb9d965e5412945af95ac54e47e0615
+Author: Eric Dumazet <edumazet@google.com>
+Date:   Wed May 24 14:14:56 2023 +0000
+
+    netrom: fix info-leak in nr_write_internal()
+    
+    [ Upstream commit 31642e7089df8fd3f54ca7843f7ee2952978cad1 ]
+    
+    Simon Kapadia reported the following issue:
+    
+    <quote>
+    
+    The Online Amateur Radio Community (OARC) has recently been experimenting
+    with building a nationwide packet network in the UK.
+    As part of our experimentation, we have been testing out packet on 300bps HF,
+    and playing with net/rom.  For HF packet at this baud rate you really need
+    to make sure that your MTU is relatively low; AX.25 suggests a PACLEN of 60,
+    and a net/rom PACLEN of 40 to go with that.
+    However the Linux net/rom support didn't work with a low PACLEN;
+    the mkiss module would truncate packets if you set the PACLEN below about 200 or so, e.g.:
+    
+    Apr 19 14:00:51 radio kernel: [12985.747310] mkiss: ax1: truncating oversized transmit packet!
+    
+    This didn't make any sense to me (if the packets are smaller why would they
+    be truncated?) so I started investigating.
+    I looked at the packets using ethereal, and found that many were just huge
+    compared to what I would expect.
+    A simple net/rom connection request packet had the request and then a bunch
+    of what appeared to be random data following it:
+    
+    </quote>
+    
+    Simon provided a patch that I slightly revised:
+    Not only we must not use skb_tailroom(), we also do
+    not want to count NR_NETWORK_LEN twice.
+    
+    Fixes: 1da177e4c3f4 ("Linux-2.6.12-rc2")
+    Co-Developed-by: Simon Kapadia <szymon@kapadia.pl>
+    Signed-off-by: Simon Kapadia <szymon@kapadia.pl>
+    Signed-off-by: Eric Dumazet <edumazet@google.com>
+    Tested-by: Simon Kapadia <szymon@kapadia.pl>
+    Reviewed-by: Simon Horman <simon.horman@corigine.com>
+    Link: https://lore.kernel.org/r/20230524141456.1045467-1-edumazet@google.com
+    Signed-off-by: Jakub Kicinski <kuba@kernel.org>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 232e04aa3fa502a5b21a436c71d04951ab443f76
+Author: Randy Dunlap <rdunlap@infradead.org>
+Date:   Tue May 23 21:53:10 2023 -0700
+
+    dmaengine: pl330: rename _start to prevent build error
+    
+    [ Upstream commit a1a5f2c887252dec161c1e12e04303ca9ba56fa9 ]
+    
+    "_start" is used in several arches and proably should be reserved
+    for ARCH usage. Using it in a driver for a private symbol can cause
+    a build error when it conflicts with ARCH usage of the same symbol.
+    
+    Therefore rename pl330's "_start" to "pl330_start_thread" so that there
+    is no conflict and no build error.
+    
+    drivers/dma/pl330.c:1053:13: error: '_start' redeclared as different kind of symbol
+     1053 | static bool _start(struct pl330_thread *thrd)
+          |             ^~~~~~
+    In file included from ../include/linux/interrupt.h:21,
+                     from ../drivers/dma/pl330.c:18:
+    arch/riscv/include/asm/sections.h:11:13: note: previous declaration of '_start' with type 'char[]'
+       11 | extern char _start[];
+          |             ^~~~~~
+    
+    Fixes: b7d861d93945 ("DMA: PL330: Merge PL330 driver into drivers/dma/")
+    Fixes: ae43b3289186 ("ARM: 8202/1: dmaengine: pl330: Add runtime Power Management support v12")
+    Signed-off-by: Randy Dunlap <rdunlap@infradead.org>
+    Cc: Jaswinder Singh <jassisinghbrar@gmail.com>
+    Cc: Boojin Kim <boojin.kim@samsung.com>
+    Cc: Krzysztof Kozlowski <krzk@kernel.org>
+    Cc: Russell King <rmk+kernel@arm.linux.org.uk>
+    Cc: Vinod Koul <vkoul@kernel.org>
+    Cc: dmaengine@vger.kernel.org
+    Cc: linux-riscv@lists.infradead.org
+    Link: https://lore.kernel.org/r/20230524045310.27923-1-rdunlap@infradead.org
+    Signed-off-by: Vinod Koul <vkoul@kernel.org>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit a87814e521e33d31354b0b54f1d3ee86e43df241
+Author: Ruihan Li <lrh2000@pku.edu.cn>
+Date:   Sun Apr 16 16:02:51 2023 +0800
+
+    bluetooth: Add cmd validity checks at the start of hci_sock_ioctl()
+    
+    commit 000c2fa2c144c499c881a101819cf1936a1f7cf2 upstream.
+    
+    Previously, channel open messages were always sent to monitors on the first
+    ioctl() call for unbound HCI sockets, even if the command and arguments
+    were completely invalid. This can leave an exploitable hole with the abuse
+    of invalid ioctl calls.
+    
+    This commit hardens the ioctl processing logic by first checking if the
+    command is valid, and immediately returning with an ENOIOCTLCMD error code
+    if it is not. This ensures that ioctl calls with invalid commands are free
+    of side effects, and increases the difficulty of further exploitation by
+    forcing exploitation to find a way to pass a valid command first.
+    
+    Signed-off-by: Ruihan Li <lrh2000@pku.edu.cn>
+    Co-developed-by: Marcel Holtmann <marcel@holtmann.org>
+    Signed-off-by: Marcel Holtmann <marcel@holtmann.org>
+    Signed-off-by: Luiz Augusto von Dentz <luiz.von.dentz@intel.com>
+    Signed-off-by: Dragos-Marian Panait <dragos.panait@windriver.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 2cdbd03e8056e010d064bb98b15ad91d694c88e1
+Author: Cezary Rojewski <cezary.rojewski@intel.com>
+Date:   Fri May 19 22:17:07 2023 +0200
+
+    ASoC: Intel: Skylake: Fix declaration of enum skl_ch_cfg
+    
+    [ Upstream commit 95109657471311601b98e71f03d0244f48dc61bb ]
+    
+    Constant 'C4_CHANNEL' does not exist on the firmware side. Value 0xC is
+    reserved for 'C7_1' instead.
+    
+    Fixes: 04afbbbb1cba ("ASoC: Intel: Skylake: Update the topology interface structure")
+    Signed-off-by: Cezary Rojewski <cezary.rojewski@intel.com>
+    Signed-off-by: Amadeusz Sławiński <amadeuszx.slawinski@linux.intel.com>
+    Link: https://lore.kernel.org/r/20230519201711.4073845-4-amadeuszx.slawinski@linux.intel.com
+    Signed-off-by: Mark Brown <broonie@kernel.org>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit c82539aa3da32141e5d18de8bc00dba5c2ef6b42
+Author: Hans de Goede <hdegoede@redhat.com>
+Date:   Sat Apr 15 20:23:38 2023 +0200
+
+    power: supply: bq27xxx: After charger plug in/out wait 0.5s for things to stabilize
+    
+    [ Upstream commit 59a99cd462fbdf71f4e845e09f37783035088b4f ]
+    
+    bq27xxx_external_power_changed() gets called when the charger is plugged
+    in or out. Rather then immediately scheduling an update wait 0.5 seconds
+    for things to stabilize, so that e.g. the (dis)charge current is stable
+    when bq27xxx_battery_update() runs.
+    
+    Fixes: 740b755a3b34 ("bq27x00: Poll battery state")
+    Signed-off-by: Hans de Goede <hdegoede@redhat.com>
+    Signed-off-by: Sebastian Reichel <sebastian.reichel@collabora.com>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>

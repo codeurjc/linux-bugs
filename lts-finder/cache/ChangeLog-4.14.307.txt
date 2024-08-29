@@ -1,0 +1,261 @@
+commit 7878a41b6cc1ada4bb804eee96beb2c54322806c
+Author: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+Date:   Sat Feb 25 11:50:31 2023 +0100
+
+    Linux 4.14.307
+    
+    Link: https://lore.kernel.org/r/20230223130423.369876969@linuxfoundation.org
+    Tested-by: Guenter Roeck <linux@roeck-us.net>
+    Tested-by: Linux Kernel Functional Testing <lkft@linaro.org>
+    Tested-by: Slade Watkins <srw@sladewatkins.net>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit ab7739734dd192ba0b9c18444ce6e3ecd8c8de1c
+Author: Lukas Wunner <lukas@wunner.de>
+Date:   Fri Jan 27 15:01:00 2023 +0100
+
+    wifi: mwifiex: Add missing compatible string for SD8787
+    
+    commit 36dd7a4c6226133b0b7aa92b8e604e688d958d0c upstream.
+    
+    Commit e3fffc1f0b47 ("devicetree: document new marvell-8xxx and
+    pwrseq-sd8787 options") documented a compatible string for SD8787 in
+    the devicetree bindings, but neglected to add it to the mwifiex driver.
+    
+    Fixes: e3fffc1f0b47 ("devicetree: document new marvell-8xxx and pwrseq-sd8787 options")
+    Signed-off-by: Lukas Wunner <lukas@wunner.de>
+    Cc: stable@vger.kernel.org # v4.11+
+    Cc: Matt Ranostay <mranostay@ti.com>
+    Signed-off-by: Kalle Valo <kvalo@kernel.org>
+    Link: https://lore.kernel.org/r/320de5005ff3b8fd76be2d2b859fd021689c3681.1674827105.git.lukas@wunner.de
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit e0fbff18bbcee4f07d46bee172803fad63f6f4dd
+Author: Dave Hansen <dave.hansen@linux.intel.com>
+Date:   Tue Feb 21 12:30:15 2023 -0800
+
+    uaccess: Add speculation barrier to copy_from_user()
+    
+    commit 74e19ef0ff8061ef55957c3abd71614ef0f42f47 upstream.
+    
+    The results of "access_ok()" can be mis-speculated.  The result is that
+    you can end speculatively:
+    
+            if (access_ok(from, size))
+                    // Right here
+    
+    even for bad from/size combinations.  On first glance, it would be ideal
+    to just add a speculation barrier to "access_ok()" so that its results
+    can never be mis-speculated.
+    
+    But there are lots of system calls just doing access_ok() via
+    "copy_to_user()" and friends (example: fstat() and friends).  Those are
+    generally not problematic because they do not _consume_ data from
+    userspace other than the pointer.  They are also very quick and common
+    system calls that should not be needlessly slowed down.
+    
+    "copy_from_user()" on the other hand uses a user-controller pointer and
+    is frequently followed up with code that might affect caches.  Take
+    something like this:
+    
+            if (!copy_from_user(&kernelvar, uptr, size))
+                    do_something_with(kernelvar);
+    
+    If userspace passes in an evil 'uptr' that *actually* points to a kernel
+    addresses, and then do_something_with() has cache (or other)
+    side-effects, it could allow userspace to infer kernel data values.
+    
+    Add a barrier to the common copy_from_user() code to prevent
+    mis-speculated values which happen after the copy.
+    
+    Also add a stub for architectures that do not define barrier_nospec().
+    This makes the macro usable in generic code.
+    
+    Since the barrier is now usable in generic code, the x86 #ifdef in the
+    BPF code can also go away.
+    
+    Reported-by: Jordy Zomer <jordyzomer@google.com>
+    Suggested-by: Linus Torvalds <torvalds@linuxfoundation.org>
+    Signed-off-by: Dave Hansen <dave.hansen@linux.intel.com>
+    Reviewed-by: Thomas Gleixner <tglx@linutronix.de>
+    Acked-by: Daniel Borkmann <daniel@iogearbox.net>   # BPF bits
+    Signed-off-by: Linus Torvalds <torvalds@linux-foundation.org>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit d21f4dae47b4f79c6932af4aef98de9e7dea9930
+Author: Thomas Gleixner <tglx@linutronix.de>
+Date:   Thu Feb 9 23:25:49 2023 +0100
+
+    alarmtimer: Prevent starvation by small intervals and SIG_IGN
+    
+    commit d125d1349abeb46945dc5e98f7824bf688266f13 upstream.
+    
+    syzbot reported a RCU stall which is caused by setting up an alarmtimer
+    with a very small interval and ignoring the signal. The reproducer arms the
+    alarm timer with a relative expiry of 8ns and an interval of 9ns. Not a
+    problem per se, but that's an issue when the signal is ignored because then
+    the timer is immediately rearmed because there is no way to delay that
+    rearming to the signal delivery path.  See posix_timer_fn() and commit
+    58229a189942 ("posix-timers: Prevent softirq starvation by small intervals
+    and SIG_IGN") for details.
+    
+    The reproducer does not set SIG_IGN explicitely, but it sets up the timers
+    signal with SIGCONT. That has the same effect as explicitely setting
+    SIG_IGN for a signal as SIGCONT is ignored if there is no handler set and
+    the task is not ptraced.
+    
+    The log clearly shows that:
+    
+       [pid  5102] --- SIGCONT {si_signo=SIGCONT, si_code=SI_TIMER, si_timerid=0, si_overrun=316014, si_int=0, si_ptr=NULL} ---
+    
+    It works because the tasks are traced and therefore the signal is queued so
+    the tracer can see it, which delays the restart of the timer to the signal
+    delivery path. But then the tracer is killed:
+    
+       [pid  5087] kill(-5102, SIGKILL <unfinished ...>
+       ...
+       ./strace-static-x86_64: Process 5107 detached
+    
+    and after it's gone the stall can be observed:
+    
+       syzkaller login: [   79.439102][    C0] hrtimer: interrupt took 68471 ns
+       [  184.460538][    C1] rcu: INFO: rcu_preempt detected stalls on CPUs/tasks:
+       ...
+       [  184.658237][    C1] rcu: Stack dump where RCU GP kthread last ran:
+       [  184.664574][    C1] Sending NMI from CPU 1 to CPUs 0:
+       [  184.669821][    C0] NMI backtrace for cpu 0
+       [  184.669831][    C0] CPU: 0 PID: 5108 Comm: syz-executor192 Not tainted 6.2.0-rc6-next-20230203-syzkaller #0
+       ...
+       [  184.670036][    C0] Call Trace:
+       [  184.670041][    C0]  <IRQ>
+       [  184.670045][    C0]  alarmtimer_fired+0x327/0x670
+    
+    posix_timer_fn() prevents that by checking whether the interval for
+    timers which have the signal ignored is smaller than a jiffie and
+    artifically delay it by shifting the next expiry out by a jiffie. That's
+    accurate vs. the overrun accounting, but slightly inaccurate
+    vs. timer_gettimer(2).
+    
+    The comment in that function says what needs to be done and there was a fix
+    available for the regular userspace induced SIG_IGN mechanism, but that did
+    not work due to the implicit ignore for SIGCONT and similar signals. This
+    needs to be worked on, but for now the only available workaround is to do
+    exactly what posix_timer_fn() does:
+    
+    Increase the interval of self-rearming timers, which have their signal
+    ignored, to at least a jiffie.
+    
+    Interestingly this has been fixed before via commit ff86bf0c65f1
+    ("alarmtimer: Rate limit periodic intervals") already, but that fix got
+    lost in a later rework.
+    
+    Reported-by: syzbot+b9564ba6e8e00694511b@syzkaller.appspotmail.com
+    Fixes: f2c45807d399 ("alarmtimer: Switch over to generic set/get/rearm routine")
+    Signed-off-by: Thomas Gleixner <tglx@linutronix.de>
+    Acked-by: John Stultz <jstultz@google.com>
+    Cc: stable@vger.kernel.org
+    Link: https://lore.kernel.org/r/87k00q1no2.ffs@tglx
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 65317563b1a990ce9d412ee5cc15e93ffe77d236
+Author: Sean Anderson <sean.anderson@seco.com>
+Date:   Fri Dec 16 12:29:37 2022 -0500
+
+    powerpc: dts: t208x: Disable 10G on MAC1 and MAC2
+    
+    [ Upstream commit 8d8bee13ae9e316443c6666286360126a19c8d94 ]
+    
+    There aren't enough resources to run these ports at 10G speeds. Disable
+    10G for these ports, reverting to the previous speed.
+    
+    Fixes: 36926a7d70c2 ("powerpc: dts: t208x: Mark MAC1 and MAC2 as 10G")
+    Reported-by: Camelia Alexandra Groza <camelia.groza@nxp.com>
+    Signed-off-by: Sean Anderson <sean.anderson@seco.com>
+    Reviewed-by: Camelia Groza <camelia.groza@nxp.com>
+    Tested-by: Camelia Groza <camelia.groza@nxp.com>
+    Link: https://lore.kernel.org/r/20221216172937.2960054-1-sean.anderson@seco.com
+    Signed-off-by: Jakub Kicinski <kuba@kernel.org>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 7cdfefb6112f7e30a7f4c525b01dba0f6150868b
+Author: Jason A. Donenfeld <Jason@zx2c4.com>
+Date:   Wed Jun 1 22:45:33 2022 +0200
+
+    random: always mix cycle counter in add_latent_entropy()
+    
+    [ Upstream commit d7bf7f3b813e3755226bcb5114ad2ac477514ebf ]
+    
+    add_latent_entropy() is called every time a process forks, in
+    kernel_clone(). This in turn calls add_device_randomness() using the
+    latent entropy global state. add_device_randomness() does two things:
+    
+       2) Mixes into the input pool the latent entropy argument passed; and
+       1) Mixes in a cycle counter, a sort of measurement of when the event
+          took place, the high precision bits of which are presumably
+          difficult to predict.
+    
+    (2) is impossible without CONFIG_GCC_PLUGIN_LATENT_ENTROPY=y. But (1) is
+    always possible. However, currently CONFIG_GCC_PLUGIN_LATENT_ENTROPY=n
+    disables both (1) and (2), instead of just (2).
+    
+    This commit causes the CONFIG_GCC_PLUGIN_LATENT_ENTROPY=n case to still
+    do (1) by passing NULL (len 0) to add_device_randomness() when add_latent_
+    entropy() is called.
+    
+    Cc: Dominik Brodowski <linux@dominikbrodowski.net>
+    Cc: PaX Team <pageexec@freemail.hu>
+    Cc: Emese Revfy <re.emese@gmail.com>
+    Fixes: 38addce8b600 ("gcc-plugins: Add latent_entropy plugin")
+    Signed-off-by: Jason A. Donenfeld <Jason@zx2c4.com>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 2272c78a46b8220ac7f5e367ccbdb57bf39a3eca
+Author: Sean Anderson <sean.anderson@seco.com>
+Date:   Mon Oct 17 16:22:39 2022 -0400
+
+    powerpc: dts: t208x: Mark MAC1 and MAC2 as 10G
+    
+    [ Upstream commit 36926a7d70c2d462fca1ed85bfee000d17fd8662 ]
+    
+    On the T208X SoCs, MAC1 and MAC2 support XGMII. Add some new MAC dtsi
+    fragments, and mark the QMAN ports as 10G.
+    
+    Fixes: da414bb923d9 ("powerpc/mpc85xx: Add FSL QorIQ DPAA FMan support to the SoC device tree(s)")
+    Signed-off-by: Sean Anderson <sean.anderson@seco.com>
+    Signed-off-by: David S. Miller <davem@davemloft.net>
+    Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+commit 0a1de956b1aa717c025e69da8d93be1196c43ffa
+Author: Bitterblue Smith <rtl8821cerfe2@gmail.com>
+Date:   Wed Sep 28 23:36:51 2022 +0300
+
+    wifi: rtl8xxxu: gen2: Turn on the rate control
+    
+    [ Upstream commit 791082ec0ab843e0be07c8ce3678e4c2afd2e33d ]
+    
+    Re-enable the function rtl8xxxu_gen2_report_connect.
+    
+    It informs the firmware when connecting to a network. This makes the
+    firmware enable the rate control, which makes the upload faster.
+    
+    It also informs the firmware when disconnecting from a network. In the
+    past this made reconnecting impossible because it was sending the
+    auth on queue 0x7 (TXDESC_QUEUE_VO) instead of queue 0x12
+    (TXDESC_QUEUE_MGNT):
+    
+    wlp0s20f0u3: send auth to 90:55:de:__:__:__ (try 1/3)
+    wlp0s20f0u3: send auth to 90:55:de:__:__:__ (try 2/3)
+    wlp0s20f0u3: send auth to 90:55:de:__:__:__ (try 3/3)
+    wlp0s20f0u3: authentication with 90:55:de:__:__:__ timed out
+    
+    Probably the firmware disables the unnecessary TX queues when it
+    knows it's disconnected.
+    
+    However, this was fixed in commit edd5747aa12e ("wifi: rtl8xxxu: Fix
+    skb misuse in TX queue selection").
+    
+    Fixes: c59f13bbead4 ("rtl8xxxu: Work around issue with 8192eu and 8723bu devices not reconnecting")
+    Signed-off-by: Bitterblue Smith <rtl8821cerfe2@gmail.com>
+    Signed-off-by: Kalle Valo <kvalo@kernel.org>
+    Link: https://lore.kernel.org/r/43200afc-0c65-ee72-48f8-231edd1df493@gmail.com
+    Signed-off-by: Sasha Levin <sashal@kernel.org>

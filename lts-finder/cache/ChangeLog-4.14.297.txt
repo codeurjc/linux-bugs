@@ -1,0 +1,939 @@
+commit a85772d7ba90b1da9b96451197bae24adce1bb0b
+Author: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+Date:   Tue Nov 1 19:14:46 2022 +0100
+
+    Linux 4.14.297
+    
+    Link: https://lore.kernel.org/r/20221031070140.108124105@linuxfoundation.org
+    Tested-by: Jon Hunter <jonathanh@nvidia.com>
+    Tested-by: Linux Kernel Functional Testing <lkft@linaro.org>
+    Tested-by: Guenter Roeck <linux@roeck-us.net>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 7a4d2cba68731673c3ec89a1a5eee3a9af35ffa7
+Author: Daniel Sneddon <daniel.sneddon@linux.intel.com>
+Date:   Thu Oct 27 13:56:04 2022 -0700
+
+    x86/speculation: Add RSB VM Exit protections
+    
+    commit 2b1299322016731d56807aa49254a5ea3080b6b3 upstream.
+    
+    tl;dr: The Enhanced IBRS mitigation for Spectre v2 does not work as
+    documented for RET instructions after VM exits. Mitigate it with a new
+    one-entry RSB stuffing mechanism and a new LFENCE.
+    
+    == Background ==
+    
+    Indirect Branch Restricted Speculation (IBRS) was designed to help
+    mitigate Branch Target Injection and Speculative Store Bypass, i.e.
+    Spectre, attacks. IBRS prevents software run in less privileged modes
+    from affecting branch prediction in more privileged modes. IBRS requires
+    the MSR to be written on every privilege level change.
+    
+    To overcome some of the performance issues of IBRS, Enhanced IBRS was
+    introduced.  eIBRS is an "always on" IBRS, in other words, just turn
+    it on once instead of writing the MSR on every privilege level change.
+    When eIBRS is enabled, more privileged modes should be protected from
+    less privileged modes, including protecting VMMs from guests.
+    
+    == Problem ==
+    
+    Here's a simplification of how guests are run on Linux' KVM:
+    
+    void run_kvm_guest(void)
+    {
+            // Prepare to run guest
+            VMRESUME();
+            // Clean up after guest runs
+    }
+    
+    The execution flow for that would look something like this to the
+    processor:
+    
+    1. Host-side: call run_kvm_guest()
+    2. Host-side: VMRESUME
+    3. Guest runs, does "CALL guest_function"
+    4. VM exit, host runs again
+    5. Host might make some "cleanup" function calls
+    6. Host-side: RET from run_kvm_guest()
+    
+    Now, when back on the host, there are a couple of possible scenarios of
+    post-guest activity the host needs to do before executing host code:
+    
+    * on pre-eIBRS hardware (legacy IBRS, or nothing at all), the RSB is not
+    touched and Linux has to do a 32-entry stuffing.
+    
+    * on eIBRS hardware, VM exit with IBRS enabled, or restoring the host
+    IBRS=1 shortly after VM exit, has a documented side effect of flushing
+    the RSB except in this PBRSB situation where the software needs to stuff
+    the last RSB entry "by hand".
+    
+    IOW, with eIBRS supported, host RET instructions should no longer be
+    influenced by guest behavior after the host retires a single CALL
+    instruction.
+    
+    However, if the RET instructions are "unbalanced" with CALLs after a VM
+    exit as is the RET in #6, it might speculatively use the address for the
+    instruction after the CALL in #3 as an RSB prediction. This is a problem
+    since the (untrusted) guest controls this address.
+    
+    Balanced CALL/RET instruction pairs such as in step #5 are not affected.
+    
+    == Solution ==
+    
+    The PBRSB issue affects a wide variety of Intel processors which
+    support eIBRS. But not all of them need mitigation. Today,
+    X86_FEATURE_RSB_VMEXIT triggers an RSB filling sequence that mitigates
+    PBRSB. Systems setting RSB_VMEXIT need no further mitigation - i.e.,
+    eIBRS systems which enable legacy IBRS explicitly.
+    
+    However, such systems (X86_FEATURE_IBRS_ENHANCED) do not set RSB_VMEXIT
+    and most of them need a new mitigation.
+    
+    Therefore, introduce a new feature flag X86_FEATURE_RSB_VMEXIT_LITE
+    which triggers a lighter-weight PBRSB mitigation versus RSB_VMEXIT.
+    
+    The lighter-weight mitigation performs a CALL instruction which is
+    immediately followed by a speculative execution barrier (INT3). This
+    steers speculative execution to the barrier -- just like a retpoline
+    -- which ensures that speculation can never reach an unbalanced RET.
+    Then, ensure this CALL is retired before continuing execution with an
+    LFENCE.
+    
+    In other words, the window of exposure is opened at VM exit where RET
+    behavior is troublesome. While the window is open, force RSB predictions
+    sampling for RET targets to a dead end at the INT3. Close the window
+    with the LFENCE.
+    
+    There is a subset of eIBRS systems which are not vulnerable to PBRSB.
+    Add these systems to the cpu_vuln_whitelist[] as NO_EIBRS_PBRSB.
+    Future systems that aren't vulnerable will set ARCH_CAP_PBRSB_NO.
+    
+      [ bp: Massage, incorporate review comments from Andy Cooper. ]
+    
+    Signed-off-by: Daniel Sneddon <daniel.sneddon@linux.intel.com>
+    Co-developed-by: Pawan Gupta <pawan.kumar.gupta@linux.intel.com>
+    Signed-off-by: Pawan Gupta <pawan.kumar.gupta@linux.intel.com>
+    Signed-off-by: Borislav Petkov <bp@suse.de>
+    [ bp: Adjust patch to account for kvm entry being in c ]
+    Signed-off-by: Suraj Jitindar Singh <surajjs@amazon.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 47e5ac730573003f41ff3637884dbf874c89d1d9
+Author: Pawan Gupta <pawan.kumar.gupta@linux.intel.com>
+Date:   Thu Oct 27 13:56:03 2022 -0700
+
+    x86/bugs: Warn when "ibrs" mitigation is selected on Enhanced IBRS parts
+    
+    commit eb23b5ef9131e6d65011de349a4d25ef1b3d4314 upstream.
+    
+    IBRS mitigation for spectre_v2 forces write to MSR_IA32_SPEC_CTRL at
+    every kernel entry/exit. On Enhanced IBRS parts setting
+    MSR_IA32_SPEC_CTRL[IBRS] only once at boot is sufficient. MSR writes at
+    every kernel entry/exit incur unnecessary performance loss.
+    
+    When Enhanced IBRS feature is present, print a warning about this
+    unnecessary performance loss.
+    
+    Signed-off-by: Pawan Gupta <pawan.kumar.gupta@linux.intel.com>
+    Signed-off-by: Peter Zijlstra (Intel) <peterz@infradead.org>
+    Reviewed-by: Thadeu Lima de Souza Cascardo <cascardo@canonical.com>
+    Cc: stable@vger.kernel.org
+    Link: https://lore.kernel.org/r/2a5eaf54583c2bfe0edc4fea64006656256cca17.1657814857.git.pawan.kumar.gupta@linux.intel.com
+    Signed-off-by: Thadeu Lima de Souza Cascardo <cascardo@canonical.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit f39022278a0084e596060c4d1a7282e5510c9d4b
+Author: Nathan Chancellor <nathan@kernel.org>
+Date:   Thu Oct 27 13:55:44 2022 -0700
+
+    x86/speculation: Use DECLARE_PER_CPU for x86_spec_ctrl_current
+    
+    commit db886979683a8360ced9b24ab1125ad0c4d2cf76 upstream.
+    
+    Clang warns:
+    
+      arch/x86/kernel/cpu/bugs.c:58:21: error: section attribute is specified on redeclared variable [-Werror,-Wsection]
+      DEFINE_PER_CPU(u64, x86_spec_ctrl_current);
+                          ^
+      arch/x86/include/asm/nospec-branch.h:283:12: note: previous declaration is here
+      extern u64 x86_spec_ctrl_current;
+                 ^
+      1 error generated.
+    
+    The declaration should be using DECLARE_PER_CPU instead so all
+    attributes stay in sync.
+    
+    Cc: stable@vger.kernel.org
+    Fixes: fc02735b14ff ("KVM: VMX: Prevent guest RSB poisoning attacks with eIBRS")
+    Reported-by: kernel test robot <lkp@intel.com>
+    Signed-off-by: Nathan Chancellor <nathan@kernel.org>
+    Signed-off-by: Linus Torvalds <torvalds@linux-foundation.org>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 738b239a3f6116097ce27a72738e187870b95c81
+Author: Pawan Gupta <pawan.kumar.gupta@linux.intel.com>
+Date:   Thu Oct 27 13:55:43 2022 -0700
+
+    x86/speculation: Disable RRSBA behavior
+    
+    commit 4ad3278df6fe2b0852b00d5757fc2ccd8e92c26e upstream.
+    
+    Some Intel processors may use alternate predictors for RETs on
+    RSB-underflow. This condition may be vulnerable to Branch History
+    Injection (BHI) and intramode-BTI.
+    
+    Kernel earlier added spectre_v2 mitigation modes (eIBRS+Retpolines,
+    eIBRS+LFENCE, Retpolines) which protect indirect CALLs and JMPs against
+    such attacks. However, on RSB-underflow, RET target prediction may
+    fallback to alternate predictors. As a result, RET's predicted target
+    may get influenced by branch history.
+    
+    A new MSR_IA32_SPEC_CTRL bit (RRSBA_DIS_S) controls this fallback
+    behavior when in kernel mode. When set, RETs will not take predictions
+    from alternate predictors, hence mitigating RETs as well. Support for
+    this is enumerated by CPUID.7.2.EDX[RRSBA_CTRL] (bit2).
+    
+    For spectre v2 mitigation, when a user selects a mitigation that
+    protects indirect CALLs and JMPs against BHI and intramode-BTI, set
+    RRSBA_DIS_S also to protect RETs for RSB-underflow case.
+    
+    Signed-off-by: Pawan Gupta <pawan.kumar.gupta@linux.intel.com>
+    Signed-off-by: Borislav Petkov <bp@suse.de>
+    [bwh: Backported to 5.15: adjust context in scattered.c]
+    Signed-off-by: Ben Hutchings <ben@decadent.org.uk>
+    [sam: Fixed for missing X86_FEATURE_ENTRY_IBPB context]
+    Signed-off-by: Samuel Mendoza-Jonas <samjonas@amazon.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 93c878b2c1d5f8e6956050abe9b2a36d75bb60e6
+Author: Pawan Gupta <pawan.kumar.gupta@linux.intel.com>
+Date:   Thu Oct 27 13:55:42 2022 -0700
+
+    x86/bugs: Add Cannon lake to RETBleed affected CPU list
+    
+    commit f54d45372c6ac9c993451de5e51312485f7d10bc upstream.
+    
+    Cannon lake is also affected by RETBleed, add it to the list.
+    
+    Fixes: 6ad0ad2bf8a6 ("x86/bugs: Report Intel retbleed vulnerability")
+    Signed-off-by: Pawan Gupta <pawan.kumar.gupta@linux.intel.com>
+    Signed-off-by: Borislav Petkov <bp@suse.de>
+    Signed-off-by: Thadeu Lima de Souza Cascardo <cascardo@canonical.com>
+    [ bp: Adjust cpu model name CANNONLAKE_L -> CANNONLAKE_MOBILE ]
+    Signed-off-by: Suraj Jitindar Singh <surajjs@amazon.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 2ec38cb7455b6a8755afea28de2e0121dee9677d
+Author: Andrew Cooper <andrew.cooper3@citrix.com>
+Date:   Thu Oct 27 13:55:41 2022 -0700
+
+    x86/cpu/amd: Enumerate BTC_NO
+    
+    commit 26aae8ccbc1972233afd08fb3f368947c0314265 upstream.
+    
+    BTC_NO indicates that hardware is not susceptible to Branch Type Confusion.
+    
+    Zen3 CPUs don't suffer BTC.
+    
+    Hypervisors are expected to synthesise BTC_NO when it is appropriate
+    given the migration pool, to prevent kernels using heuristics.
+    
+    Signed-off-by: Andrew Cooper <andrew.cooper3@citrix.com>
+    Signed-off-by: Borislav Petkov <bp@suse.de>
+    Signed-off-by: Thadeu Lima de Souza Cascardo <cascardo@canonical.com>
+    [ bp: Adjust context ]
+    Signed-off-by: Suraj Jitindar Singh <surajjs@amazon.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 0325254900f834619275f61b0f0eae3f06797795
+Author: Peter Zijlstra <peterz@infradead.org>
+Date:   Thu Oct 27 13:55:33 2022 -0700
+
+    x86/common: Stamp out the stepping madness
+    
+    commit 7a05bc95ed1c5a59e47aaade9fb4083c27de9e62 upstream.
+    
+    The whole MMIO/RETBLEED enumeration went overboard on steppings. Get
+    rid of all that and simply use ANY.
+    
+    If a future stepping of these models would not be affected, it had
+    better set the relevant ARCH_CAP_$FOO_NO bit in
+    IA32_ARCH_CAPABILITIES.
+    
+    Signed-off-by: Peter Zijlstra (Intel) <peterz@infradead.org>
+    Signed-off-by: Borislav Petkov <bp@suse.de>
+    Acked-by: Dave Hansen <dave.hansen@linux.intel.com>
+    Signed-off-by: Borislav Petkov <bp@suse.de>
+    Signed-off-by: Thadeu Lima de Souza Cascardo <cascardo@canonical.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 3d323b99ff5c8c57005184056d65f6af5b0479d8
+Author: Josh Poimboeuf <jpoimboe@kernel.org>
+Date:   Thu Oct 27 13:55:32 2022 -0700
+
+    x86/speculation: Fill RSB on vmexit for IBRS
+    
+    commit 9756bba28470722dacb79ffce554336dd1f6a6cd upstream.
+    
+    Prevent RSB underflow/poisoning attacks with RSB.  While at it, add a
+    bunch of comments to attempt to document the current state of tribal
+    knowledge about RSB attacks and what exactly is being mitigated.
+    
+    Signed-off-by: Josh Poimboeuf <jpoimboe@kernel.org>
+    Signed-off-by: Peter Zijlstra (Intel) <peterz@infradead.org>
+    Signed-off-by: Borislav Petkov <bp@suse.de>
+    Signed-off-by: Thadeu Lima de Souza Cascardo <cascardo@canonical.com>
+    [ bp: Adjust for the fact that vmexit is in inline assembly ]
+    Signed-off-by: Suraj Jitindar Singh <surajjs@amazon.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 647457858c548364f482676d8b4abddd1c9255b2
+Author: Josh Poimboeuf <jpoimboe@kernel.org>
+Date:   Thu Oct 27 13:55:31 2022 -0700
+
+    KVM: VMX: Fix IBRS handling after vmexit
+    
+    commit bea7e31a5caccb6fe8ed989c065072354f0ecb52 upstream.
+    
+    For legacy IBRS to work, the IBRS bit needs to be always re-written
+    after vmexit, even if it's already on.
+    
+    Signed-off-by: Josh Poimboeuf <jpoimboe@kernel.org>
+    Signed-off-by: Peter Zijlstra (Intel) <peterz@infradead.org>
+    Signed-off-by: Borislav Petkov <bp@suse.de>
+    Signed-off-by: Thadeu Lima de Souza Cascardo <cascardo@canonical.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit ace9857c7c4144b59a5843812a6d55762d304605
+Author: Josh Poimboeuf <jpoimboe@kernel.org>
+Date:   Thu Oct 27 13:55:30 2022 -0700
+
+    KVM: VMX: Prevent guest RSB poisoning attacks with eIBRS
+    
+    commit fc02735b14fff8c6678b521d324ade27b1a3d4cf upstream.
+    
+    On eIBRS systems, the returns in the vmexit return path from
+    __vmx_vcpu_run() to vmx_vcpu_run() are exposed to RSB poisoning attacks.
+    
+    Fix that by moving the post-vmexit spec_ctrl handling to immediately
+    after the vmexit.
+    
+    Signed-off-by: Josh Poimboeuf <jpoimboe@kernel.org>
+    Signed-off-by: Peter Zijlstra (Intel) <peterz@infradead.org>
+    Signed-off-by: Borislav Petkov <bp@suse.de>
+    Signed-off-by: Thadeu Lima de Souza Cascardo <cascardo@canonical.com>
+    [ bp: Adjust for the fact that vmexit is in inline assembly ]
+    Signed-off-by: Suraj Jitindar Singh <surajjs@amazon.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 3e3402bca06cd68860f21ccc46ee53cacc5fde95
+Author: Josh Poimboeuf <jpoimboe@kernel.org>
+Date:   Thu Oct 27 13:55:23 2022 -0700
+
+    x86/speculation: Remove x86_spec_ctrl_mask
+    
+    commit acac5e98ef8d638a411cfa2ee676c87e1973f126 upstream.
+    
+    This mask has been made redundant by kvm_spec_ctrl_test_value().  And it
+    doesn't even work when MSR interception is disabled, as the guest can
+    just write to SPEC_CTRL directly.
+    
+    Signed-off-by: Josh Poimboeuf <jpoimboe@kernel.org>
+    Signed-off-by: Borislav Petkov <bp@suse.de>
+    Reviewed-by: Paolo Bonzini <pbonzini@redhat.com>
+    Signed-off-by: Borislav Petkov <bp@suse.de>
+    Signed-off-by: Thadeu Lima de Souza Cascardo <cascardo@canonical.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 5cbe1ba4ca9795c522526e82186adc90b45c95d5
+Author: Josh Poimboeuf <jpoimboe@kernel.org>
+Date:   Thu Oct 27 13:55:22 2022 -0700
+
+    x86/speculation: Use cached host SPEC_CTRL value for guest entry/exit
+    
+    commit bbb69e8bee1bd882784947095ffb2bfe0f7c9470 upstream.
+    
+    There's no need to recalculate the host value for every entry/exit.
+    Just use the cached value in spec_ctrl_current().
+    
+    Signed-off-by: Josh Poimboeuf <jpoimboe@kernel.org>
+    Signed-off-by: Peter Zijlstra (Intel) <peterz@infradead.org>
+    Signed-off-by: Borislav Petkov <bp@suse.de>
+    Signed-off-by: Thadeu Lima de Souza Cascardo <cascardo@canonical.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 80d8560386c4de9276004ac77590d9da829b4769
+Author: Josh Poimboeuf <jpoimboe@kernel.org>
+Date:   Thu Oct 27 13:55:21 2022 -0700
+
+    x86/speculation: Fix SPEC_CTRL write on SMT state change
+    
+    commit 56aa4d221f1ee2c3a49b45b800778ec6e0ab73c5 upstream.
+    
+    If the SMT state changes, SSBD might get accidentally disabled.  Fix
+    that.
+    
+    Signed-off-by: Josh Poimboeuf <jpoimboe@kernel.org>
+    Signed-off-by: Peter Zijlstra (Intel) <peterz@infradead.org>
+    Signed-off-by: Borislav Petkov <bp@suse.de>
+    Signed-off-by: Thadeu Lima de Souza Cascardo <cascardo@canonical.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 9356fb0d346c36d1f30f331528c33b4fee22873c
+Author: Josh Poimboeuf <jpoimboe@kernel.org>
+Date:   Thu Oct 27 13:55:20 2022 -0700
+
+    x86/speculation: Fix firmware entry SPEC_CTRL handling
+    
+    commit e6aa13622ea8283cc699cac5d018cc40a2ba2010 upstream.
+    
+    The firmware entry code may accidentally clear STIBP or SSBD. Fix that.
+    
+    Signed-off-by: Josh Poimboeuf <jpoimboe@kernel.org>
+    Signed-off-by: Peter Zijlstra (Intel) <peterz@infradead.org>
+    Signed-off-by: Borislav Petkov <bp@suse.de>
+    Signed-off-by: Thadeu Lima de Souza Cascardo <cascardo@canonical.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit c34ffb2a83b9bf4724515a944583f931973a80f6
+Author: Josh Poimboeuf <jpoimboe@kernel.org>
+Date:   Thu Oct 27 13:55:12 2022 -0700
+
+    x86/speculation: Fix RSB filling with CONFIG_RETPOLINE=n
+    
+    commit b2620facef4889fefcbf2e87284f34dcd4189bce upstream.
+    
+    If a kernel is built with CONFIG_RETPOLINE=n, but the user still wants
+    to mitigate Spectre v2 using IBRS or eIBRS, the RSB filling will be
+    silently disabled.
+    
+    There's nothing retpoline-specific about RSB buffer filling.  Remove the
+    CONFIG_RETPOLINE guards around it.
+    
+    Signed-off-by: Josh Poimboeuf <jpoimboe@kernel.org>
+    Signed-off-by: Peter Zijlstra (Intel) <peterz@infradead.org>
+    Signed-off-by: Borislav Petkov <bp@suse.de>
+    Signed-off-by: Thadeu Lima de Souza Cascardo <cascardo@canonical.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 48bfe6ca381525bd3b7e4d360a4695792ace4c55
+Author: Pawan Gupta <pawan.kumar.gupta@linux.intel.com>
+Date:   Thu Oct 27 13:55:11 2022 -0700
+
+    x86/speculation: Add LFENCE to RSB fill sequence
+    
+    commit ba6e31af2be96c4d0536f2152ed6f7b6c11bca47 upstream.
+    
+    RSB fill sequence does not have any protection for miss-prediction of
+    conditional branch at the end of the sequence. CPU can speculatively
+    execute code immediately after the sequence, while RSB filling hasn't
+    completed yet.
+    
+      #define __FILL_RETURN_BUFFER(reg, nr, sp)       \
+              mov     $(nr/2), reg;                   \
+      771:                                            \
+              ANNOTATE_INTRA_FUNCTION_CALL;           \
+              call    772f;                           \
+      773:    /* speculation trap */                  \
+              UNWIND_HINT_EMPTY;                      \
+              pause;                                  \
+              lfence;                                 \
+              jmp     773b;                           \
+      772:                                            \
+              ANNOTATE_INTRA_FUNCTION_CALL;           \
+              call    774f;                           \
+      775:    /* speculation trap */                  \
+              UNWIND_HINT_EMPTY;                      \
+              pause;                                  \
+              lfence;                                 \
+              jmp     775b;                           \
+      774:                                            \
+              add     $(BITS_PER_LONG/8) * 2, sp;     \
+              dec     reg;                            \
+              jnz     771b;        <----- CPU can miss-predict here.
+    
+    Before RSB is filled, RETs that come in program order after this macro
+    can be executed speculatively, making them vulnerable to RSB-based
+    attacks.
+    
+    Mitigate it by adding an LFENCE after the conditional branch to prevent
+    speculation while RSB is being filled.
+    
+    Suggested-by: Andrew Cooper <andrew.cooper3@citrix.com>
+    Signed-off-by: Pawan Gupta <pawan.kumar.gupta@linux.intel.com>
+    Signed-off-by: Borislav Petkov <bp@suse.de>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit c95afe5bcad40e1f0292bfc0a625c4aa080cc971
+Author: Peter Zijlstra <peterz@infradead.org>
+Date:   Thu Oct 27 13:55:10 2022 -0700
+
+    x86/speculation: Change FILL_RETURN_BUFFER to work with objtool
+    
+    commit 089dd8e53126ebaf506e2dc0bf89d652c36bfc12 upstream.
+    
+    Change FILL_RETURN_BUFFER so that objtool groks it and can generate
+    correct ORC unwind information.
+    
+     - Since ORC is alternative invariant; that is, all alternatives
+       should have the same ORC entries, the __FILL_RETURN_BUFFER body
+       can not be part of an alternative.
+    
+       Therefore, move it out of the alternative and keep the alternative
+       as a sort of jump_label around it.
+    
+     - Use the ANNOTATE_INTRA_FUNCTION_CALL annotation to white-list
+       these 'funny' call instructions to nowhere.
+    
+     - Use UNWIND_HINT_EMPTY to 'fill' the speculation traps, otherwise
+       objtool will consider them unreachable.
+    
+     - Move the RSP adjustment into the loop, such that the loop has a
+       deterministic stack layout.
+    
+    Signed-off-by: Peter Zijlstra (Intel) <peterz@infradead.org>
+    Reviewed-by: Alexandre Chartre <alexandre.chartre@oracle.com>
+    Acked-by: Josh Poimboeuf <jpoimboe@redhat.com>
+    Link: https://lkml.kernel.org/r/20200428191700.032079304@infradead.org
+    [ bp: no intra-function call validation support ]
+    Signed-off-by: Suraj Jitindar Singh <surajjs@amazon.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 893b2aa03a00fe72b434024655d32eacb01ef5d4
+Author: Peter Zijlstra <peterz@infradead.org>
+Date:   Thu Oct 27 13:55:09 2022 -0700
+
+    entel_idle: Disable IBRS during long idle
+    
+    commit bf5835bcdb9635c97f85120dba9bfa21e111130f upstream.
+    
+    Having IBRS enabled while the SMT sibling is idle unnecessarily slows
+    down the running sibling. OTOH, disabling IBRS around idle takes two
+    MSR writes, which will increase the idle latency.
+    
+    Therefore, only disable IBRS around deeper idle states. Shallow idle
+    states are bounded by the tick in duration, since NOHZ is not allowed
+    for them by virtue of their short target residency.
+    
+    Only do this for mwait-driven idle, since that keeps interrupts disabled
+    across idle, which makes disabling IBRS vs IRQ-entry a non-issue.
+    
+    Note: C6 is a random threshold, most importantly C1 probably shouldn't
+    disable IBRS, benchmarking needed.
+    
+    Suggested-by: Tim Chen <tim.c.chen@linux.intel.com>
+    Signed-off-by: Peter Zijlstra (Intel) <peterz@infradead.org>
+    Signed-off-by: Borislav Petkov <bp@suse.de>
+    Reviewed-by: Josh Poimboeuf <jpoimboe@kernel.org>
+    Signed-off-by: Borislav Petkov <bp@suse.de>
+    [cascardo: no CPUIDLE_FLAG_IRQ_ENABLE]
+    Signed-off-by: Thadeu Lima de Souza Cascardo <cascardo@canonical.com>
+    [ bp: Adjust context ]
+    Signed-off-by: Suraj Jitindar Singh <surajjs@amazon.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 4b9a6e97a32af3f2372f5d9016d9610fd9e94233
+Author: Peter Zijlstra <peterz@infradead.org>
+Date:   Thu Oct 27 13:55:02 2022 -0700
+
+    x86/bugs: Report Intel retbleed vulnerability
+    
+    commit 6ad0ad2bf8a67e27d1f9d006a1dabb0e1c360cc3 upstream.
+    
+    Skylake suffers from RSB underflow speculation issues; report this
+    vulnerability and it's mitigation (spectre_v2=ibrs).
+    
+      [jpoimboe: cleanups, eibrs]
+    
+    Signed-off-by: Peter Zijlstra (Intel) <peterz@infradead.org>
+    Signed-off-by: Borislav Petkov <bp@suse.de>
+    Reviewed-by: Josh Poimboeuf <jpoimboe@kernel.org>
+    Signed-off-by: Borislav Petkov <bp@suse.de>
+    Signed-off-by: Thadeu Lima de Souza Cascardo <cascardo@canonical.com>
+    [ bp: Adjust to different processor family names ]
+    Signed-off-by: Suraj Jitindar Singh <surajjs@amazon.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 40e02f3a0f317eb81ebaa5ee6cc0321c67820ddd
+Author: Peter Zijlstra <peterz@infradead.org>
+Date:   Thu Oct 27 13:55:01 2022 -0700
+
+    x86/bugs: Split spectre_v2_select_mitigation() and spectre_v2_user_select_mitigation()
+    
+    commit 166115c08a9b0b846b783088808a27d739be6e8d upstream.
+    
+    retbleed will depend on spectre_v2, while spectre_v2_user depends on
+    retbleed. Break this cycle.
+    
+    Signed-off-by: Peter Zijlstra (Intel) <peterz@infradead.org>
+    Signed-off-by: Borislav Petkov <bp@suse.de>
+    Reviewed-by: Josh Poimboeuf <jpoimboe@kernel.org>
+    Signed-off-by: Borislav Petkov <bp@suse.de>
+    Signed-off-by: Thadeu Lima de Souza Cascardo <cascardo@canonical.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit b57fd0a7dd80d9f3a864cfa96c640d7f9e6d617c
+Author: Pawan Gupta <pawan.kumar.gupta@linux.intel.com>
+Date:   Thu Oct 27 13:55:00 2022 -0700
+
+    x86/speculation: Add spectre_v2=ibrs option to support Kernel IBRS
+    
+    commit 7c693f54c873691a4b7da05c7e0f74e67745d144 upstream.
+    
+    Extend spectre_v2= boot option with Kernel IBRS.
+    
+      [jpoimboe: no STIBP with IBRS]
+    
+    Signed-off-by: Pawan Gupta <pawan.kumar.gupta@linux.intel.com>
+    Signed-off-by: Peter Zijlstra (Intel) <peterz@infradead.org>
+    Signed-off-by: Borislav Petkov <bp@suse.de>
+    Reviewed-by: Josh Poimboeuf <jpoimboe@kernel.org>
+    Signed-off-by: Borislav Petkov <bp@suse.de>
+    Signed-off-by: Thadeu Lima de Souza Cascardo <cascardo@canonical.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit d9dff84df890c67804a3c0dede4c2f2b95151e92
+Author: Peter Zijlstra <peterz@infradead.org>
+Date:   Thu Oct 27 13:54:59 2022 -0700
+
+    x86/bugs: Optimize SPEC_CTRL MSR writes
+    
+    commit c779bc1a9002fa474175b80e72b85c9bf628abb0 upstream.
+    
+    When changing SPEC_CTRL for user control, the WRMSR can be delayed
+    until return-to-user when KERNEL_IBRS has been enabled.
+    
+    This avoids an MSR write during context switch.
+    
+    Signed-off-by: Peter Zijlstra (Intel) <peterz@infradead.org>
+    Signed-off-by: Borislav Petkov <bp@suse.de>
+    Reviewed-by: Josh Poimboeuf <jpoimboe@kernel.org>
+    Signed-off-by: Borislav Petkov <bp@suse.de>
+    Signed-off-by: Thadeu Lima de Souza Cascardo <cascardo@canonical.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 6a0fee43eac02bbb6419e0c4f6bf4bbcf6378cb4
+Author: Thadeu Lima de Souza Cascardo <cascardo@canonical.com>
+Date:   Thu Oct 27 13:54:52 2022 -0700
+
+    x86/entry: Add kernel IBRS implementation
+    
+    commit 2dbb887e875b1de3ca8f40ddf26bcfe55798c609 upstream.
+    
+    Implement Kernel IBRS - currently the only known option to mitigate RSB
+    underflow speculation issues on Skylake hardware.
+    
+    Note: since IBRS_ENTER requires fuller context established than
+    UNTRAIN_RET, it must be placed after it. However, since UNTRAIN_RET
+    itself implies a RET, it must come after IBRS_ENTER. This means
+    IBRS_ENTER needs to also move UNTRAIN_RET.
+    
+    Note 2: KERNEL_IBRS is sub-optimal for XenPV.
+    
+    Signed-off-by: Peter Zijlstra (Intel) <peterz@infradead.org>
+    Signed-off-by: Borislav Petkov <bp@suse.de>
+    Reviewed-by: Josh Poimboeuf <jpoimboe@kernel.org>
+    Signed-off-by: Borislav Petkov <bp@suse.de>
+    [cascardo: conflict at arch/x86/entry/entry_64_compat.S]
+    [cascardo: conflict fixups, no ANNOTATE_NOENDBR]
+    Signed-off-by: Thadeu Lima de Souza Cascardo <cascardo@canonical.com>
+    [ bp: Adjust context ]
+    Signed-off-by: Suraj Jitindar Singh <surajjs@amazon.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 3d18a2ddde03f0be33611a95ab9d73dff03ed2bc
+Author: Peter Zijlstra <peterz@infradead.org>
+Date:   Thu Oct 27 13:54:51 2022 -0700
+
+    x86/bugs: Keep a per-CPU IA32_SPEC_CTRL value
+    
+    commit caa0ff24d5d0e02abce5e65c3d2b7f20a6617be5 upstream.
+    
+    Due to TIF_SSBD and TIF_SPEC_IB the actual IA32_SPEC_CTRL value can
+    differ from x86_spec_ctrl_base. As such, keep a per-CPU value
+    reflecting the current task's MSR content.
+    
+      [jpoimboe: rename]
+    
+    Signed-off-by: Peter Zijlstra (Intel) <peterz@infradead.org>
+    Signed-off-by: Borislav Petkov <bp@suse.de>
+    Reviewed-by: Josh Poimboeuf <jpoimboe@kernel.org>
+    Signed-off-by: Borislav Petkov <bp@suse.de>
+    Signed-off-by: Thadeu Lima de Souza Cascardo <cascardo@canonical.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 1bd2d85aa082009472249475e2a6a949e823c2fc
+Author: Alexandre Chartre <alexandre.chartre@oracle.com>
+Date:   Thu Oct 27 13:54:50 2022 -0700
+
+    x86/bugs: Add AMD retbleed= boot parameter
+    
+    commit 7fbf47c7ce50b38a64576b150e7011ae73d54669 upstream.
+    
+    Add the "retbleed=<value>" boot parameter to select a mitigation for
+    RETBleed. Possible values are "off", "auto" and "unret"
+    (JMP2RET mitigation). The default value is "auto".
+    
+    Currently, "retbleed=auto" will select the unret mitigation on
+    AMD and Hygon and no mitigation on Intel (JMP2RET is not effective on
+    Intel).
+    
+      [peterz: rebase; add hygon]
+      [jpoimboe: cleanups]
+    
+    Signed-off-by: Alexandre Chartre <alexandre.chartre@oracle.com>
+    Signed-off-by: Peter Zijlstra (Intel) <peterz@infradead.org>
+    Signed-off-by: Borislav Petkov <bp@suse.de>
+    Reviewed-by: Josh Poimboeuf <jpoimboe@kernel.org>
+    Signed-off-by: Borislav Petkov <bp@suse.de>
+    Signed-off-by: Thadeu Lima de Souza Cascardo <cascardo@canonical.com>
+    [ bp: Adjust context - no jmp2ret mitigation exists ]
+    Signed-off-by: Suraj Jitindar Singh <surajjs@amazon.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit f8fcd872ae668dd38fcb77dd86a1746046ac2daf
+Author: Alexandre Chartre <alexandre.chartre@oracle.com>
+Date:   Thu Oct 27 13:54:49 2022 -0700
+
+    x86/bugs: Report AMD retbleed vulnerability
+    
+    commit 6b80b59b3555706508008f1f127b5412c89c7fd8 upstream.
+    
+    Report that AMD x86 CPUs are vulnerable to the RETBleed (Arbitrary
+    Speculative Code Execution with Return Instructions) attack.
+    
+      [peterz: add hygon]
+      [kim: invert parity; fam15h]
+    
+    Co-developed-by: Kim Phillips <kim.phillips@amd.com>
+    Signed-off-by: Kim Phillips <kim.phillips@amd.com>
+    Signed-off-by: Alexandre Chartre <alexandre.chartre@oracle.com>
+    Signed-off-by: Peter Zijlstra (Intel) <peterz@infradead.org>
+    Signed-off-by: Borislav Petkov <bp@suse.de>
+    Reviewed-by: Josh Poimboeuf <jpoimboe@kernel.org>
+    Signed-off-by: Borislav Petkov <bp@suse.de>
+    Signed-off-by: Thadeu Lima de Souza Cascardo <cascardo@canonical.com>
+    [ bp: Adjust context ]
+    Signed-off-by: Suraj Jitindar Singh <surajjs@amazon.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 37b4aee162fc06b5197ab418c3ca886c94bcd76d
+Author: Peter Zijlstra <peterz@infradead.org>
+Date:   Thu Oct 27 13:54:42 2022 -0700
+
+    x86/cpufeatures: Move RETPOLINE flags to word 11
+    
+    commit a883d624aed463c84c22596006e5a96f5b44db31 upstream.
+    
+    In order to extend the RETPOLINE features to 4, move them to word 11
+    where there is still room. This mostly keeps DISABLE_RETPOLINE
+    simple.
+    
+    Signed-off-by: Peter Zijlstra (Intel) <peterz@infradead.org>
+    Signed-off-by: Borislav Petkov <bp@suse.de>
+    Reviewed-by: Josh Poimboeuf <jpoimboe@kernel.org>
+    Signed-off-by: Borislav Petkov <bp@suse.de>
+    Signed-off-by: Thadeu Lima de Souza Cascardo <cascardo@canonical.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 2d939788f32ed539f2745f5b203b30de9e4a30ac
+Author: Peter Zijlstra <peterz@infradead.org>
+Date:   Thu Oct 27 13:54:41 2022 -0700
+
+    x86/entry: Remove skip_r11rcx
+    
+    commit 1b331eeea7b8676fc5dbdf80d0a07e41be226177 upstream.
+    
+    Yes, r11 and rcx have been restored previously, but since they're being
+    popped anyway (into rsi) might as well pop them into their own regs --
+    setting them to the value they already are.
+    
+    Less magical code.
+    
+    Signed-off-by: Peter Zijlstra (Intel) <peterz@infradead.org>
+    Signed-off-by: Borislav Petkov <bp@suse.de>
+    Link: https://lore.kernel.org/r/20220506121631.365070674@infradead.org
+    Signed-off-by: Thadeu Lima de Souza Cascardo <cascardo@canonical.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 01ffba9ebe49e25a6106afe4c7655c11c90f6bdc
+Author: Mark Gross <mgross@linux.intel.com>
+Date:   Thu Oct 27 13:54:40 2022 -0700
+
+    x86/cpu: Add a steppings field to struct x86_cpu_id
+    
+    commit e9d7144597b10ff13ff2264c059f7d4a7fbc89ac upstream
+    
+    Intel uses the same family/model for several CPUs. Sometimes the
+    stepping must be checked to tell them apart.
+    
+    On x86 there can be at most 16 steppings. Add a steppings bitmask to
+    x86_cpu_id and a X86_MATCH_VENDOR_FAMILY_MODEL_STEPPING_FEATURE macro
+    and support for matching against family/model/stepping.
+    
+     [ bp: Massage.
+       tglx: Lightweight variant for backporting ]
+    
+    Signed-off-by: Mark Gross <mgross@linux.intel.com>
+    Signed-off-by: Borislav Petkov <bp@suse.de>
+    Signed-off-by: Thomas Gleixner <tglx@linutronix.de>
+    Reviewed-by: Tony Luck <tony.luck@intel.com>
+    Reviewed-by: Josh Poimboeuf <jpoimboe@redhat.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit c4fc5dae0045471494516b7ff1744b438e44719a
+Author: Thomas Gleixner <tglx@linutronix.de>
+Date:   Thu Oct 27 13:54:39 2022 -0700
+
+    x86/cpu: Add consistent CPU match macros
+    
+    commit 20d437447c0089cda46c683db219d3b4e2cde40e upstream
+    
+    Finding all places which build x86_cpu_id match tables is tedious and the
+    logic is hidden in lots of differently named macro wrappers.
+    
+    Most of these initializer macros use plain C89 initializers which rely on
+    the ordering of the struct members. So new members could only be added at
+    the end of the struct, but that's ugly as hell and C99 initializers are
+    really the right thing to use.
+    
+    Provide a set of macros which:
+    
+      - Have a proper naming scheme, starting with X86_MATCH_
+    
+      - Use C99 initializers
+    
+    The set of provided macros are all subsets of the base macro
+    
+        X86_MATCH_VENDOR_FAM_MODEL_FEATURE()
+    
+    which allows to supply all possible selection criteria:
+    
+          vendor, family, model, feature
+    
+    The other macros shorten this to avoid typing all arguments when they are
+    not needed and would require one of the _ANY constants. They have been
+    created due to the requirements of the existing usage sites.
+    
+    Also add a few model constants for Centaur CPUs and QUARK.
+    
+    Signed-off-by: Thomas Gleixner <tglx@linutronix.de>
+    Signed-off-by: Borislav Petkov <bp@suse.de>
+    Reviewed-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+    Link: https://lkml.kernel.org/r/20200320131508.826011988@linutronix.de
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 4b18dc820f8cb8a5e062afbc073738e81efe55d0
+Author: Thomas Gleixner <tglx@linutronix.de>
+Date:   Thu Oct 27 13:54:30 2022 -0700
+
+    x86/devicetable: Move x86 specific macro out of generic code
+    
+    commit ba5bade4cc0d2013cdf5634dae554693c968a090 upstream
+    
+    There is no reason that this gunk is in a generic header file. The wildcard
+    defines need to stay as they are required by file2alias.
+    
+    Signed-off-by: Thomas Gleixner <tglx@linutronix.de>
+    Signed-off-by: Borislav Petkov <bp@suse.de>
+    Reviewed-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+    Link: https://lkml.kernel.org/r/20200320131508.736205164@linutronix.de
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit fe33a42c04f63896c776a3a66db735a97c0ca7ab
+Author: Ingo Molnar <mingo@kernel.org>
+Date:   Thu Oct 27 13:54:29 2022 -0700
+
+    x86/cpufeature: Fix various quality problems in the <asm/cpu_device_hd.h> header
+    
+    commit 266d63a7d9d48c6d5dee486378ec0e8c86c4d74a upstream
+    
+    Thomas noticed that the new arch/x86/include/asm/cpu_device_id.h header is
+    a train-wreck that didn't incorporate review feedback like not using __u8
+    in kernel-only headers.
+    
+    While at it also fix all the *other* problems this header has:
+    
+     - Use canonical names for the header guards. It's inexplicable why a non-standard
+       guard was used.
+    
+     - Don't define the header guard to 1. Plus annotate the closing #endif as done
+       absolutely every other header. Again, an inexplicable source of noise.
+    
+     - Move the kernel API calls provided by this header next to each other, there's
+       absolutely no reason to have them spread apart in the header.
+    
+     - Align the INTEL_CPU_DESC() macro initializations vertically, this is easier to
+       read and it's also the canonical style.
+    
+     - Actually name the macro arguments properly: instead of 'mod, step, rev',
+       spell out 'model, stepping, revision' - it's not like we have a lack of
+       characters in this header.
+    
+     - Actually make arguments macro-safe - again it's inexplicable why it wasn't
+       done properly to begin with.
+    
+    Quite amazing how many problems a 41 lines header can contain.
+    
+    This kind of code quality is unacceptable, and it slipped through the
+    review net of 2 developers and 2 maintainers, including myself, until
+    Thomas noticed it. :-/
+    
+    Reported-by: Thomas Gleixner <tglx@linutronix.de>
+    Cc: Andi Kleen <ak@linux.intel.com>
+    Cc: Kan Liang <kan.liang@linux.intel.com>
+    Cc: Peter Zijlstra (Intel) <peterz@infradead.org>
+    Cc: Borislav Petkov <bp@alien8.de>
+    Cc: Linus Torvalds <torvalds@linux-foundation.org>
+    Cc: linux-kernel@vger.kernel.org
+    Signed-off-by: Ingo Molnar <mingo@kernel.org>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 9b7a673e246d11c2257941d69f28da61e6254d55
+Author: Kan Liang <kan.liang@linux.intel.com>
+Date:   Thu Oct 27 13:54:28 2022 -0700
+
+    x86/cpufeature: Add facility to check for min microcode revisions
+    
+    commit 0f42b790c9ba5ec2f25b7da8b0b6d361082d67b0 upstream
+    
+    For bug workarounds or checks, it is useful to check for specific
+    microcode revisions.
+    
+    Add a new generic function to match the CPU with stepping.
+    Add the other function to check the min microcode revisions for
+    the matched CPU.
+    
+    A new table format is introduced to facilitate the quirk to
+    fill the related information.
+    
+    This does not change the existing x86_cpu_id because it's an ABI
+    shared with modules, and also has quite different requirements,
+    as in no wildcards, but everything has to be matched exactly.
+    
+    Originally-by: Andi Kleen <ak@linux.intel.com>
+    Suggested-by: Thomas Gleixner <tglx@linutronix.de>
+    Signed-off-by: Kan Liang <kan.liang@linux.intel.com>
+    Signed-off-by: Peter Zijlstra (Intel) <peterz@infradead.org>
+    Acked-by: Borislav Petkov <bp@alien8.de>
+    Cc: Linus Torvalds <torvalds@linux-foundation.org>
+    Cc: Peter Zijlstra <peterz@infradead.org>
+    Cc: eranian@google.com
+    Link: https://lkml.kernel.org/r/1549319013-4522-1-git-send-email-kan.liang@linux.intel.com
+    Signed-off-by: Ingo Molnar <mingo@kernel.org>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+commit 6fde716d079f1291103ebe220bff9ed51b05ad5f
+Author: Suraj Jitindar Singh <surajjs@amazon.com>
+Date:   Thu Oct 27 13:54:27 2022 -0700
+
+    Revert "x86/cpu: Add a steppings field to struct x86_cpu_id"
+    
+    This reverts commit ae585de4296413ae4bbb8f2ac09faa38ff78f4cd.
+    
+    This is commit e9d7144597b10ff13ff2264c059f7d4a7fbc89ac upstream. Reverting this
+    commit makes the following patches apply cleanly. This patch is then reapplied.
+    
+    Signed-off-by: Suraj Jitindar Singh <surajjs@amazon.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
