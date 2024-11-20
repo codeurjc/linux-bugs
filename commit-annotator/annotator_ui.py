@@ -74,6 +74,10 @@ with (gr.Blocks() as demo):
             # Filter for commits
             filter_dd = gr.Radio(label="Show",
                                     choices=["All", "Annotated", "Not Annotated"], value="All")
+
+            searchbox = gr.Textbox(label="Search by Hash", placeholder="Enter hash...")
+
+
             # Commits
             bfcs_df = gr.Dataframe(value=commits_s,
                                    height=600, datatype=['number', 'str'],
@@ -81,15 +85,23 @@ with (gr.Blocks() as demo):
             )
 
             @filter_dd.change(inputs=[filter_dd], outputs=[bfcs_df])
-            def filter_commits(choice):
+            def filter_commits(choice, search_query):
                 if choice == "All":
                     df = commits.asDataFrame()
                 elif choice == "Annotated":
                     df = commits.asDataFrame()[commits.asDataFrame()['annotated'] == True]
                 elif choice == "Not Annotated":
                     df = commits.asDataFrame()[commits.asDataFrame()['annotated'] == False]
+
+                # hash filter
+                if search_query:
+                    df = df[df['hash'].str.contains(search_query, case=False, na=False)]
+
                 commits_s = df[['id', 'hash']].style.apply(color_commits, axis=1)
                 return commits_s
+
+            searchbox.submit(filter_commits, inputs=[filter_dd, searchbox], outputs=[bfcs_df])
+
             
         # Commit info
         with gr.Column(scale=6):
